@@ -1,0 +1,30 @@
+---
+# Showroom role defaults
+masworld_showroom_enabled: true
+
+# Showroom Helm chart version
+masworld_showroom_chart_version: "v2.1.8"
+
+# Showroom content repository — must be set before use
+masworld_showroom_content_repo: ""
+
+# Content branch or tag
+masworld_showroom_content_ref: "main"
+
+# Deployment namespace
+masworld_showroom_namespace: "showroom"
+
+# Helm chart repository
+masworld_showroom_chart_repo: "https://rhpds.github.io/showroom"
+masworld_showroom_chart_name: "showroom"
+
+# Seat number and username — set by playbook
+masworld_seat_number: "{{ seat_number | default(1) }}"
+masworld_student_username: "user{{ seat_number | default(1) | masworld.automation.pad(2) }}"
+
+# MAS instance ID for URL resolution
+masworld_mas_instance_id: "inst1"
+
+# Showroom readiness polling
+masworld_showroom_ready_retries: 20
+masworld_showroom_ready_delay: 15

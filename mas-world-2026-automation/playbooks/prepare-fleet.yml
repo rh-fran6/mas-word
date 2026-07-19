@@ -1,0 +1,66 @@
+---
+- name: Prepare fleet for MAS World 2026
+  hosts: localhost
+  gather_facts: false
+  vars:
+    masworld_config_dir: "{{ config_dir | default('config') }}"
+    masworld_environment: "{{ env | default('development') }}"
+    masworld_max_concurrent: "{{ max_concurrent | default(5) }}"
+    masworld_fleet_results: []
+
+  tasks:
+    - name: Load fleet configuration
+      ansible.builtin.include_vars:
+        file: "{{ masworld_config_dir }}/clusters.yaml"
+        name: masworld_clusters_config
+
+    - name: Load environment configuration
+      ansible.builtin.include_vars:
+        file: "{{ masworld_config_dir }}/environments/{{ masworld_environment }}.yaml"
+        name: masworld_env_config
+
+    - name: Identify enabled clusters
+      ansible.builtin.set_fact:
+        masworld_enabled_clusters: >-
+          {{ masworld_clusters_config.clusters | default([])
+             | selectattr('enabled', 'defined')
+             | selectattr('enabled', 'equalto', true)
+             | list }}
+
+    - name: Display fleet preparation plan
+      ansible.builtin.debug:
+        msg: >-
+          Fleet preparation: {{ masworld_enabled_clusters | length }} clusters,
+          max concurrency: {{ masworld_max_concurrent }},
+          environment: {{ masworld_environment }}
+
+    - name: Validate fleet configuration
+      ansible.builtin.include_role:
+        name: config_validation
+      vars:
+        masworld_config_validation_strict: true
+
+    - name: Prepare each cluster
+      ansible.builtin.include_tasks: ../playbooks/_prepare-single-cluster.yml
+      loop: "{{ masworld_enabled_clusters }}"
+      loop_control:
+        loop_var: cluster
+        label: "{{ cluster.id }}"
+      vars:
+        cluster_id: "{{ cluster.id }}"
+        seat_number: "{{ cluster.seat_number | default('') }}"
+        cluster_purpose: "{{ cluster.purpose | default('attendee') }}"
+
+    - name: Generate fleet summary
+      ansible.builtin.debug:
+        msg: "Fleet preparation complete. Results: {{ masworld_fleet_results | length }} clusters processed."
+
+- name: Prepare individual clusters
+  hosts: localhost
+  gather_facts: false
+  serial: "{{ masworld_max_concurrent | default(5) }}"
+  strategy: free
+  tasks:
+    - name: Placeholder for serial cluster preparation
+      ansible.builtin.debug:
+        msg: "Use prepare-cluster.yml for individual cluster preparation"

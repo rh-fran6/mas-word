@@ -1,0 +1,8 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mas-world-2026-policies
+  labels:
+    event: mas-world-2026
+    managed-by: masworld-automation

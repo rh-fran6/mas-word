@@ -1,0 +1,19 @@
+---
+# MAS Edge role defaults — disabled by default
+masworld_mas_edge_enabled: false
+
+# Docker host for edge deployment — must be set when enabled
+masworld_mas_edge_docker_host: ""
+
+# Whether GPU is required for edge workloads
+masworld_mas_edge_gpu_required: true
+
+# MAS instance ID (should match mas_core)
+masworld_mas_instance_id: "inst1"
+
+# Edge connection timeout
+masworld_mas_edge_connect_timeout: 30
+
+# Edge readiness polling
+masworld_mas_edge_ready_retries: 20
+masworld_mas_edge_ready_delay: 15

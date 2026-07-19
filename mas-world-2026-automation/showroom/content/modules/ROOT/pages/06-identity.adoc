@@ -1,0 +1,236 @@
+= Identity Provider Integration
+:navtitle: Identity Provider Integration
+:duration: 40 minutes (shared segment)
+
+Understand how Maximo Application Suite integrates with external identity providers through OpenShift OAuth, and observe LDAP user synchronization with Keycloak.
+
+== Introduction
+
+Enterprise MAS deployments typically use an external identity provider (IdP) rather than local authentication. In this section, you will:
+
+* Understand OpenShift OAuth and identity provider configuration
+* Explore a Keycloak instance deployed on your cluster
+* Observe LDAP user federation and group sync in Keycloak
+* See how Keycloak integrates with OpenShift as an OIDC provider
+* Understand how MAS delegates authentication through the identity chain
+
+== Exercise: Explore Current Authentication
+
+. Check your current OAuth configuration:
++
+[source,role="execute"]
+----
+oc get oauth cluster -o jsonpath='{range .spec.identityProviders[*]}{.name}{" ("}{.type}{")\n"}{end}'
+----
++
+You should see both `htpasswd` (your workshop login) and `masworld-keycloak` (the OIDC provider wired to Keycloak).
++
+. View the identity provider details:
++
+[source,role="execute"]
+----
+oc get oauth cluster -o yaml | grep -A10 identityProviders
+----
+
+== Exercise: Explore Keycloak
+
+A Keycloak instance is deployed on your cluster as the identity provider for this exercise.
+
+. Check the Keycloak deployment:
++
+[source,role="execute"]
+----
+oc get keycloak -n masworld-keycloak -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}'
+----
++
+. Get the Keycloak admin console URL:
++
+[source,role="execute"]
+----
+oc get route -n masworld-keycloak -o jsonpath='https://{.items[0].spec.host}'
+----
++
+. View the demo realm:
++
+[source,role="execute"]
+----
+oc get keycloakrealmimport -n masworld-keycloak -o jsonpath='{.items[0].spec.realm.realm}'
+----
+
+== Exercise: Observe LDAP User Federation
+
+Your cluster includes an OpenLDAP directory pre-populated with demo users. Keycloak is configured to sync users and groups from this directory.
+
+. Verify the OpenLDAP server is running:
++
+[source,role="execute"]
+----
+oc get pod openldap -n masworld-keycloak -o jsonpath='{.status.phase}'
+----
++
+.Expected output
+[source,text]
+----
+Running
+----
++
+. Query the LDAP directory to see the pre-populated users:
++
+[source,role="execute"]
+----
+oc exec openldap -n masworld-keycloak -- ldapsearch -x -H ldap://localhost:1389 -b "ou=users,dc=masworld,dc=example,dc=com" -D "cn=admin,dc=masworld,dc=example,dc=com" -w "$(oc get secret openldap-admin-secret -n masworld-keycloak -o jsonpath='{.data.password}' | base64 -d)" "(objectClass=inetOrgPerson)" uid cn mail departmentNumber
+----
++
+You should see four users: `alice.engineer`, `bob.technician`, `carol.planner`, and `dave.supervisor`.
++
+. Query the LDAP groups:
++
+[source,role="execute"]
+----
+oc exec openldap -n masworld-keycloak -- ldapsearch -x -H ldap://localhost:1389 -b "ou=groups,dc=masworld,dc=example,dc=com" -D "cn=admin,dc=masworld,dc=example,dc=com" -w "$(oc get secret openldap-admin-secret -n masworld-keycloak -o jsonpath='{.data.password}' | base64 -d)" "(objectClass=groupOfNames)" cn member
+----
++
+You should see two groups: `mas-admins` (alice, dave) and `mas-users` (bob, carol).
++
+. View the LDAP user federation configuration in the Keycloak realm import:
++
+[source,role="execute"]
+----
+oc get keycloakrealmimport masworld-realm -n masworld-keycloak -o jsonpath='{.spec.realm.components.org\.keycloak\.storage\.UserStorageProvider[0].name}'
+----
++
+.Expected output
+[source,text]
+----
+ldap-masworld
+----
+
+== Exercise: Understand the OIDC Integration
+
+Your cluster's OpenShift OAuth is configured with Keycloak as an OpenID Connect identity provider. This creates the full identity chain: LDAP -> Keycloak -> OpenShift OAuth -> MAS.
+
+. View the OIDC provider configuration:
++
+[source,role="execute"]
+----
+oc get oauth cluster -o jsonpath='{range .spec.identityProviders[?(@.type=="OpenID")]}{.name}{": "}{.openID.issuer}{"\n"}{end}'
+----
++
+. Verify the OIDC client secret exists in openshift-config:
++
+[source,role="execute"]
+----
+oc get secret keycloak-oidc-client-secret -n openshift-config -o jsonpath='{.metadata.labels.masworld\.redhat\.com/component}'
+----
++
+.Expected output
+[source,text]
+----
+identity-demo
+----
+
+== Exercise: Trace the Identity Flow
+
+The authentication flow in your workshop environment:
+
+. User accesses MAS or OpenShift Console
+. OpenShift OAuth presents configured identity providers (htpasswd and Keycloak)
+. If Keycloak is selected, Keycloak presents its login page
+. Keycloak authenticates against its user database (local users + LDAP-synced users)
+. Keycloak issues an OIDC token to OpenShift OAuth
+. OpenShift creates an identity mapping for the user
+. MAS validates the OpenShift token and maps the user to MAS roles
+
+Verify the current identity mappings:
+
+[source,role="execute"]
+----
+oc get users --no-headers | head -10
+----
+
+[source,role="execute"]
+----
+oc get identities --no-headers | head -10
+----
+
+== Exercise: Explore RBAC
+
+. Check your current roles:
++
+[source,role="execute"]
+----
+oc auth can-i --list | head -20
+----
++
+. Verify you do *not* have cluster-admin:
++
+[source,role="execute"]
+----
+oc auth can-i create clusterrole
+----
++
+.Expected output
+[source,text]
+----
+no
+----
++
+. Verify you can access your namespace:
++
+[source,role="execute"]
+----
+oc auth can-i create pod -n student-{seat_number}
+----
++
+.Expected output
+[source,text]
+----
+yes
+----
+
+== Production Considerations
+
+[cols="1,2"]
+|===
+| Aspect | Production Guidance
+
+| Identity Provider
+| SAML 2.0 or OIDC with enterprise IdP (Azure AD, Okta, RHSSO/Keycloak)
+
+| LDAP Sync
+| Configure Keycloak User Federation with production LDAP/AD; schedule periodic sync
+
+| Group Mapping
+| Map LDAP groups to Keycloak roles, then to OpenShift groups for RBAC
+
+| MFA
+| Required for administrative access — configure in Keycloak authentication flows
+
+| Service Accounts
+| Use dedicated service accounts for automation, not user credentials
+
+| Token Lifetime
+| Configure appropriate expiration and refresh policies in Keycloak realm settings
+
+| MAS User Sync
+| Configure MAS to sync users from the IdP automatically via SCIM or OIDC claims
+|===
+
+WARNING: This workshop uses a lightweight OpenLDAP instance for demonstration. Production deployments should use Active Directory, Red Hat Directory Server, or a managed directory service with HA.
+
+=== Verify
+
+[%collapsible]
+====
+You have completed this section when:
+
+* You can see both htpasswd and Keycloak OIDC identity providers in the OAuth configuration
+* You can access the Keycloak admin console URL
+* You can query the OpenLDAP directory and see the 4 demo users and 2 groups
+* You found the LDAP user federation (`ldap-masworld`) in the Keycloak realm import
+* You verified the OIDC client secret exists in openshift-config
+* You understand the full identity chain: LDAP -> Keycloak -> OpenShift OAuth -> MAS
+* You confirmed your RBAC is correctly scoped (no cluster-admin)
+====
+
+Click *Next* to learn about Production Architecture.

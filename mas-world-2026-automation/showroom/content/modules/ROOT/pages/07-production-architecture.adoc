@@ -1,0 +1,78 @@
+= Production Architecture
+:navtitle: Production Architecture
+
+Understand how the workshop environment maps to a production Maximo on OpenShift deployment.
+
+== Workshop vs. Production
+
+This workshop demonstrates concepts at conference scale. A production deployment differs in several key areas:
+
+[cols="1,2,2"]
+|===
+| Area | Workshop | Production
+
+| Cluster sizing
+| Minimal (workshop workload)
+| Sized for peak asset management load
+
+| High availability
+| Single availability zone
+| Multi-AZ with disaster recovery
+
+| Database
+| Db2 inside cluster
+| Managed database service or dedicated HA Db2
+
+| Identity
+| htpasswd + Keycloak demo
+| Enterprise IdP (SAML/OIDC) with MFA
+
+| Logging retention
+| Hours (event duration)
+| 30-90+ days per compliance policy
+
+| Storage
+| Default StorageClass
+| Production-grade storage with backup
+
+| Updates
+| Pinned for stability
+| Scheduled maintenance windows with rollback
+
+| ACM
+| Fleet demonstration
+| Production governance and compliance
+|===
+
+== Production Sizing Guidelines
+
+The following are reference guidelines. Actual sizing depends on your workload.
+
+=== OpenShift Cluster
+
+* *Workers*: minimum 3 (HA), recommended 5+ for MAS
+* *CPU per worker*: 16+ vCPUs
+* *Memory per worker*: 64+ GiB
+* *Storage*: 500+ GiB persistent storage per worker
+
+=== Maximo Application Suite
+
+* *MAS Core*: 8 vCPU, 32 GiB RAM minimum
+* *Maximo Manage*: 16 vCPU, 64 GiB RAM minimum (depends on modules)
+* *Database*: separate compute or managed service
+* *Object Storage*: S3 or compatible for attachments and logs
+
+== Key Takeaways
+
+. MAS on OpenShift provides a consistent platform for enterprise asset management
+. RHACM enables fleet-wide governance and visibility
+. OpenShift Logging with Loki provides scalable observability
+. Identity integration connects MAS to enterprise directories
+. Automation (Ansible, operators) ensures consistent, repeatable deployments
+
+== Additional Resources
+
+* https://www.ibm.com/docs/en/mas-cd/maximo-manage/continuous-delivery[IBM Maximo Manage Documentation]
+* https://docs.openshift.com/container-platform/{ocp_version}/welcome/index.html[OpenShift {ocp_version} Documentation]
+* https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.16[RHACM 2.16 Documentation]
+* https://docs.openshift.com/container-platform/{ocp_version}/observability/logging/logging-6.6/log6x-about.html[OpenShift Logging 6.6 Documentation]

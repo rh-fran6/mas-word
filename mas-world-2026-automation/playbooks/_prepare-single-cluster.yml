@@ -1,0 +1,42 @@
+---
+- name: "Prepare cluster {{ cluster.id }}"
+  block:
+    - name: Run prepare-cluster playbook for {{ cluster.id }}
+      ansible.builtin.include_role:
+        name: "{{ item }}"
+      loop:
+        - config_validation
+        - cluster_preflight
+        - event_metadata
+        - acm_registration
+        - mas_prerequisites
+        - mas_core
+        - maximo_manage
+        - logging_operator
+        - loki_stack
+        - log_forwarding
+        - identity_demo
+        - student_accounts
+        - sample_workloads
+        - showroom
+        - event_readiness
+        - environment_report
+      vars:
+        masworld_cluster_id: "{{ cluster.id }}"
+        masworld_seat_number: "{{ cluster.seat_number | default('') }}"
+        masworld_cluster_purpose: "{{ cluster.purpose | default('attendee') }}"
+
+    - name: Record success for {{ cluster.id }}
+      ansible.builtin.set_fact:
+        masworld_fleet_results: >-
+          {{ masworld_fleet_results | default([]) + [{'cluster_id': cluster.id, 'result': 'success', 'readiness': readiness_result | default('UNKNOWN')}] }}
+
+  rescue:
+    - name: Record failure for {{ cluster.id }}
+      ansible.builtin.set_fact:
+        masworld_fleet_results: >-
+          {{ masworld_fleet_results | default([]) + [{'cluster_id': cluster.id, 'result': 'failed', 'error': ansible_failed_result.msg | default('unknown error')}] }}
+
+    - name: Log failure for {{ cluster.id }}
+      ansible.builtin.debug:
+        msg: "FAILED: Cluster {{ cluster.id }} preparation failed. Continuing with next cluster."

@@ -1,0 +1,95 @@
+---
+- name: Prepare a single cluster for MAS World 2026
+  hosts: "{{ target_cluster | default('localhost') }}"
+  gather_facts: false
+  vars:
+    masworld_cluster_id: "{{ cluster_id | mandatory }}"
+    masworld_seat_number: "{{ seat_number | default('') }}"
+    masworld_cluster_purpose: "{{ cluster_purpose | default('attendee') }}"
+    masworld_preparation_stage: ""
+    masworld_preparation_results: {}
+
+  pre_tasks:
+    - name: Record preparation start
+      ansible.builtin.set_fact:
+        masworld_preparation_start: "{{ now(utc=true) }}"
+
+    - name: Display cluster preparation target
+      ansible.builtin.debug:
+        msg: "Preparing cluster {{ masworld_cluster_id }} (purpose: {{ masworld_cluster_purpose }}, seat: {{ masworld_seat_number | default('unassigned') }})"
+
+  roles:
+    - role: config_validation
+      tags: [config, validate]
+
+    - role: cluster_preflight
+      tags: [preflight]
+
+    - role: event_metadata
+      tags: [metadata]
+
+    - role: acm_registration
+      tags: [acm]
+      when: masworld_acm_enabled | default(true) | bool
+
+    - role: mas_prerequisites
+      tags: [mas, prerequisites]
+      when: masworld_mas_prerequisites_enabled | default(true) | bool
+
+    - role: mas_core
+      tags: [mas, core]
+      when: masworld_mas_core_enabled | default(true) | bool
+
+    - role: maximo_manage
+      tags: [mas, manage]
+      when: masworld_manage_enabled | default(true) | bool
+
+    - role: logging_operator
+      tags: [logging, operators]
+      when: masworld_logging_enabled | default(true) | bool
+
+    - role: loki_stack
+      tags: [logging, loki]
+      when: masworld_loki_enabled | default(true) | bool
+
+    - role: log_forwarding
+      tags: [logging, forwarding]
+      when: masworld_log_forwarding_enabled | default(true) | bool
+
+    - role: identity_demo
+      tags: [identity]
+      when: masworld_identity_enabled | default(true) | bool
+
+    - role: mas_edge
+      tags: [edge]
+      when: masworld_mas_edge_enabled | default(false) | bool
+
+    - role: student_accounts
+      tags: [students]
+      when: masworld_student_accounts_enabled | default(true) | bool
+
+    - role: sample_workloads
+      tags: [exercises, samples]
+      when: masworld_sample_workloads_enabled | default(true) | bool
+
+    - role: showroom
+      tags: [showroom]
+      when: masworld_showroom_enabled | default(true) | bool
+
+    - role: event_readiness
+      tags: [readiness, validate]
+
+    - role: environment_report
+      tags: [report]
+
+  post_tasks:
+    - name: Record preparation end
+      ansible.builtin.set_fact:
+        masworld_preparation_end: "{{ now(utc=true) }}"
+
+    - name: Display preparation summary
+      ansible.builtin.debug:
+        msg: >-
+          Cluster {{ masworld_cluster_id }} preparation complete.
+          Result: {{ readiness_result | default('UNKNOWN') }}.
+          Duration: {{ masworld_preparation_start }} to {{ masworld_preparation_end }}.

@@ -1,0 +1,59 @@
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: Policy
+metadata:
+  name: policy-demo-drift
+  namespace: mas-world-2026-policies
+  labels:
+    event: mas-world-2026
+    purpose: demonstration
+    managed-by: masworld-automation
+  annotations:
+    policy.open-cluster-management.io/standards: MAS World 2026
+    policy.open-cluster-management.io/categories: ACM Demonstration
+    policy.open-cluster-management.io/controls: Drift Detection
+    masworld.io/description: >-
+      Deliberately noncompliant policy for the ACM demonstration.
+      Applied only to the facilitator cluster.
+      The presenter will show drift detection and remediation.
+spec:
+  disabled: false
+  remediationAction: inform
+  policy-templates:
+    - objectDefinition:
+        apiVersion: policy.open-cluster-management.io/v1
+        kind: ConfigurationPolicy
+        metadata:
+          name: verify-demo-configmap
+        spec:
+          remediationAction: enforce
+          severity: low
+          object-templates:
+            - complianceType: musthave
+              objectDefinition:
+                apiVersion: v1
+                kind: ConfigMap
+                metadata:
+                  name: masworld-demo-compliance
+                  namespace: masworld-system
+                data:
+                  compliance-status: compliant
+                  last-checked: "{{ '{{' }} fromSecret \"masworld-system\" \"masworld-event-marker\" \"date\" {{ '}}' }}"
+                  fleet-standard: baseline-v1
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: PlacementBinding
+metadata:
+  name: binding-policy-demo-drift
+  namespace: mas-world-2026-policies
+  labels:
+    event: mas-world-2026
+    purpose: demonstration
+placementRef:
+  name: mas-world-2026-facilitator
+  apiGroup: cluster.open-cluster-management.io
+  kind: Placement
+subjects:
+  - name: policy-demo-drift
+    apiGroup: policy.open-cluster-management.io
+    kind: Policy

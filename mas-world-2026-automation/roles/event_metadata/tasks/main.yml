@@ -1,0 +1,113 @@
+---
+# event_metadata/tasks/main.yml
+# Applies event labels and metadata to the cluster.
+# Sets fact: event_metadata_applied (true/false)
+
+- name: Create event namespace
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ masworld_event_namespace }}"
+        labels:
+          masworld.ibm.com/event-id: "{{ masworld_event_id }}"
+          masworld.ibm.com/component: "system"
+          app.kubernetes.io/managed-by: "ansible"
+
+- name: Build event metadata dict
+  ansible.builtin.set_fact:
+    _event_metadata:
+      event_id: "{{ masworld_event_id }}"
+      event_date: "{{ masworld_event_date }}"
+      event_timezone: "{{ masworld_event_timezone }}"
+      cluster_purpose: "{{ masworld_cluster_purpose }}"
+      cluster_seat_number: "{{ masworld_cluster_seat_number }}"
+      provisioned_at: "{{ ansible_date_time.iso8601 }}"
+      provisioned_by: "masworld-automation"
+
+- name: Create event metadata ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: masworld-event-metadata
+        namespace: "{{ masworld_event_namespace }}"
+        labels:
+          masworld.ibm.com/event-id: "{{ masworld_event_id }}"
+          masworld.ibm.com/component: "metadata"
+          app.kubernetes.io/managed-by: "ansible"
+      data:
+        event-id: "{{ masworld_event_id }}"
+        event-date: "{{ masworld_event_date }}"
+        event-timezone: "{{ masworld_event_timezone }}"
+        cluster-purpose: "{{ masworld_cluster_purpose }}"
+        cluster-seat-number: "{{ masworld_cluster_seat_number | default('', true) }}"
+        provisioned-at: "{{ ansible_date_time.iso8601 }}"
+        provisioned-by: "masworld-automation"
+
+- name: Gather worker nodes for labeling
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Node
+    label_selectors:
+      - "node-role.kubernetes.io/worker"
+  register: _event_worker_nodes
+
+- name: Label worker nodes with event metadata
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Node
+      metadata:
+        name: "{{ item.metadata.name }}"
+        labels:
+          masworld.ibm.com/event-id: "{{ masworld_event_id }}"
+          masworld.ibm.com/event-date: "{{ masworld_event_date }}"
+          masworld.ibm.com/cluster-purpose: "{{ masworld_cluster_purpose }}"
+  loop: "{{ _event_worker_nodes.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+- name: Label control plane nodes with event metadata
+  block:
+    - name: Gather control plane nodes
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+        label_selectors:
+          - "node-role.kubernetes.io/master"
+      register: _event_control_plane_nodes
+
+    - name: Apply event labels to control plane nodes
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Node
+          metadata:
+            name: "{{ item.metadata.name }}"
+            labels:
+              masworld.ibm.com/event-id: "{{ masworld_event_id }}"
+              masworld.ibm.com/event-date: "{{ masworld_event_date }}"
+              masworld.ibm.com/cluster-purpose: "{{ masworld_cluster_purpose }}"
+      loop: "{{ _event_control_plane_nodes.resources }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+
+- name: Set event_metadata_applied fact
+  ansible.builtin.set_fact:
+    event_metadata_applied: true
+    event_metadata: "{{ _event_metadata }}"
+
+- name: Report event metadata applied
+  ansible.builtin.debug:
+    msg: >-
+      Event metadata applied: event={{ masworld_event_id }},
+      purpose={{ masworld_cluster_purpose }},
+      seat={{ masworld_cluster_seat_number | default('N/A', true) }},
+      nodes labeled={{ _event_worker_nodes.resources | length }}

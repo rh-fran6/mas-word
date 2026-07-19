@@ -1,0 +1,15 @@
+---
+# environment_report defaults
+# Configuration for post-preparation environment report generation.
+
+# Directory to write report files
+masworld_report_output_dir: "/tmp/masworld-reports"
+
+# Report format: json, markdown, or both
+masworld_report_format: "both"
+
+# Include timestamps in report filenames
+masworld_report_timestamp_filenames: true
+
+# Report filename prefix
+masworld_report_filename_prefix: "masworld-report"

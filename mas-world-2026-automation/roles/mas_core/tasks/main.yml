@@ -1,0 +1,87 @@
+---
+# MAS Core installation
+- name: Skip MAS Core when disabled
+  when: not (masworld_mas_core_enabled | bool)
+  block:
+    - name: Report MAS Core skipped
+      ansible.builtin.debug:
+        msg: "MAS Core installation is disabled — skipping."
+
+    - name: Set MAS Core skipped facts
+      ansible.builtin.set_fact:
+        mas_core_ready: false
+        mas_url: ""
+
+    - name: End role early
+      ansible.builtin.meta: end_role
+
+- name: Install MAS Core
+  block:
+    # ── Configure IBM Operator Catalogs ─────────────────────────────────
+    - name: Configure IBM Operator Catalog source
+      ansible.builtin.include_role:
+        name: ibm.mas_devops.ibm_catalogs
+      vars:
+        mas_catalog_version: "{{ masworld_mas_catalog_source }}"
+
+    # ── Install MAS Core ────────────────────────────────────────────────
+    - name: Install MAS Core via ibm.mas_devops
+      ansible.builtin.include_role:
+        name: ibm.mas_devops.suite_install
+      vars:
+        mas_instance_id: "{{ masworld_mas_instance_id }}"
+        mas_channel: "{{ masworld_mas_channel }}"
+        mas_domain: "{{ masworld_mas_domain | default(omit, true) }}"
+
+    # ── Configure MAS Workspace ─────────────────────────────────────────
+    - name: Configure MAS workspace
+      ansible.builtin.include_role:
+        name: ibm.mas_devops.suite_config
+      vars:
+        mas_instance_id: "{{ masworld_mas_instance_id }}"
+        mas_workspace_id: "{{ masworld_mas_workspace_id }}"
+
+    # ── Wait for Suite CR Ready ─────────────────────────────────────────
+    - name: Wait for Suite CR to report Ready
+      kubernetes.core.k8s_info:
+        api_version: core.mas.ibm.com/v1
+        kind: Suite
+        name: "{{ masworld_mas_instance_id }}"
+        namespace: "mas-{{ masworld_mas_instance_id }}-core"
+      register: _masworld_suite_cr
+      until:
+        - _masworld_suite_cr.resources | length > 0
+        - _masworld_suite_cr.resources[0].status.conditions | default([])
+          | selectattr('type', 'equalto', 'Ready')
+          | selectattr('status', 'equalto', 'True')
+          | list | length > 0
+      retries: "{{ masworld_mas_core_ready_retries }}"
+      delay: "{{ masworld_mas_core_ready_delay }}"
+
+    # ── Collect MAS URL ─────────────────────────────────────────────────
+    - name: Collect MAS URL from Suite CR status
+      ansible.builtin.set_fact:
+        mas_url: >-
+          {{ _masworld_suite_cr.resources[0].status.adminUrl
+             | default(_masworld_suite_cr.resources[0].status.url | default('')) }}
+
+    # ── Set Success Facts ───────────────────────────────────────────────
+    - name: Set MAS Core ready facts
+      ansible.builtin.set_fact:
+        mas_core_ready: true
+
+    - name: Report MAS Core installation success
+      ansible.builtin.debug:
+        msg: "MAS Core installed successfully. URL: {{ mas_url }}"
+
+  rescue:
+    - name: Set MAS Core failed facts
+      ansible.builtin.set_fact:
+        mas_core_ready: false
+        mas_url: ""
+
+    - name: Report MAS Core failure
+      ansible.builtin.fail:
+        msg: >-
+          MAS Core installation failed: {{ ansible_failed_result.msg | default('unknown error') }}.
+          Check Suite CR status in namespace mas-{{ masworld_mas_instance_id }}-core.

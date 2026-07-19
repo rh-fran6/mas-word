@@ -1,0 +1,123 @@
+---
+# MAS Prerequisites: Certificate Manager, MongoDB, SLS
+- name: Skip MAS prerequisites when disabled
+  when: not (masworld_mas_prerequisites_enabled | bool)
+  block:
+    - name: Report MAS prerequisites skipped
+      ansible.builtin.debug:
+        msg: "MAS prerequisites installation is disabled — skipping."
+
+    - name: Set prerequisites skipped fact
+      ansible.builtin.set_fact:
+        mas_prerequisites_ready: false
+
+    - name: End role early
+      ansible.builtin.meta: end_role
+
+- name: Install MAS prerequisites
+  block:
+    # ── Retrieve IBM Entitlement Key ────────────────────────────────────
+    - name: Retrieve IBM entitlement key from secret provider
+      ansible.builtin.set_fact:
+        _masworld_ibm_entitlement_key: >-
+          {{ lookup('ansible.builtin.env', 'IBM_ENTITLEMENT_KEY')
+             | default(lookup('ansible.builtin.env', 'MAS_IBM_ENTITLEMENT_KEY'), true) }}
+      no_log: true
+
+    - name: Validate IBM entitlement key is present
+      ansible.builtin.assert:
+        that:
+          - _masworld_ibm_entitlement_key | length > 0
+        fail_msg: >-
+          IBM entitlement key not found. Set IBM_ENTITLEMENT_KEY environment
+          variable or configure masworld_ibm_entitlement_key_ref.
+        quiet: true
+      no_log: true
+
+    # ── Ensure Namespace ────────────────────────────────────────────────
+    - name: Ensure ibm-common-services namespace exists
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ masworld_ibm_common_services_namespace }}"
+        state: present
+
+    # ── Create Entitlement Key Secret ───────────────────────────────────
+    - name: Create IBM entitlement key Secret
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: ibm-entitlement-key
+            namespace: "{{ masworld_ibm_common_services_namespace }}"
+          type: kubernetes.io/dockerconfigjson
+          stringData:
+            .dockerconfigjson: |
+              {
+                "auths": {
+                  "cp.icr.io": {
+                    "username": "cp",
+                    "password": "{{ _masworld_ibm_entitlement_key }}"
+                  }
+                }
+              }
+      no_log: true
+
+    # ── Install IBM Cert Manager ────────────────────────────────────────
+    - name: Install IBM Certificate Manager via ibm.mas_devops
+      ansible.builtin.include_role:
+        name: ibm.mas_devops.cert_manager
+      vars:
+        cert_manager_version: "{{ masworld_cert_manager_version | default(omit, true) }}"
+
+    # ── Install MongoDB ─────────────────────────────────────────────────
+    - name: Install MongoDB via ibm.mas_devops
+      ansible.builtin.include_role:
+        name: ibm.mas_devops.mongodb
+      vars:
+        mongodb_version: "{{ masworld_mongodb_version }}"
+
+    # ── Install SLS ─────────────────────────────────────────────────────
+    - name: Install Suite License Service via ibm.mas_devops
+      ansible.builtin.include_role:
+        name: ibm.mas_devops.sls
+      vars:
+        sls_version: "{{ masworld_sls_version | default(omit, true) }}"
+
+    # ── Wait for Prerequisite CRDs ──────────────────────────────────────
+    - name: Wait for prerequisite CRDs to be available
+      kubernetes.core.k8s_info:
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: "{{ item }}"
+      register: _masworld_crd_check
+      until:
+        - _masworld_crd_check.resources | length > 0
+        - _masworld_crd_check.resources[0].status.conditions | default([])
+          | selectattr('type', 'equalto', 'Established')
+          | selectattr('status', 'equalto', 'True')
+          | list | length > 0
+      retries: "{{ masworld_prerequisites_crd_retries }}"
+      delay: "{{ masworld_prerequisites_crd_delay }}"
+      loop:
+        - certmanagers.operator.ibm.com
+        - mongodbcommunity.mongodbcommunity.mongodb.com
+        - licenseservices.sls.ibm.com
+
+    # ── Set Success Fact ────────────────────────────────────────────────
+    - name: Set MAS prerequisites ready fact
+      ansible.builtin.set_fact:
+        mas_prerequisites_ready: true
+
+  rescue:
+    - name: Set MAS prerequisites failed fact
+      ansible.builtin.set_fact:
+        mas_prerequisites_ready: false
+
+    - name: Report MAS prerequisites failure
+      ansible.builtin.fail:
+        msg: >-
+          MAS prerequisites installation failed: {{ ansible_failed_result.msg | default('unknown error') }}.
+          Review the error above and retry.

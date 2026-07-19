@@ -1,0 +1,16 @@
+---
+fleet:
+  attendee_cluster_count: 5
+  spare_cluster_count: 1
+  facilitator_cluster_count: 1
+  require_exact_cluster_counts: true
+  preparation:
+    max_concurrent_clusters: 3
+
+secrets:
+  provider: aws-sm
+  config:
+    aws_region: us-east-2
+
+logging_config:
+  log_level: info

@@ -1,0 +1,33 @@
+---
+# log_forwarding defaults
+# Configuration for ClusterLogForwarder to send logs to LokiStack.
+
+# Whether log forwarding is enabled
+masworld_log_forwarding_enabled: true
+
+# Collect application container logs
+masworld_log_forwarding_collect_application: true
+
+# Collect infrastructure logs (openshift-*, kube-* namespaces)
+masworld_log_forwarding_collect_infrastructure: true
+
+# Collect audit logs (API server, OAuth, OVN)
+masworld_log_forwarding_collect_audit: true
+
+# ClusterLogForwarder resource name
+masworld_log_forwarding_clf_name: "instance"
+
+# Namespace for ClusterLogForwarder
+masworld_log_forwarding_namespace: "openshift-logging"
+
+# LokiStack target name (must match the deployed LokiStack)
+masworld_log_forwarding_loki_target: "logging-loki"
+
+# ServiceAccount name for the collector
+masworld_log_forwarding_service_account: "cluster-logging-collector"
+
+# Timeout for CLF readiness (number of retries)
+masworld_log_forwarding_readiness_retries: 30
+
+# Delay between CLF readiness checks in seconds
+masworld_log_forwarding_readiness_delay: 10

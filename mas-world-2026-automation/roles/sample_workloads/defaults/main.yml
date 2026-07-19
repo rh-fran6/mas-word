@@ -1,0 +1,21 @@
+---
+# Sample Workloads role defaults
+masworld_sample_workloads_enabled: true
+
+# Namespace for exercise workloads
+masworld_sample_namespace: "masworld-exercises"
+
+# Logging exercise container image
+masworld_logging_exercise_image: "registry.access.redhat.com/ubi9/ubi-minimal:9.4"
+
+# Run identifier for logging exercise — empty means auto-generated
+masworld_logging_exercise_run_id: ""
+
+# Seat number — set by playbook
+masworld_seat_number: "{{ seat_number | default(1) }}"
+
+# Log generation interval in seconds
+masworld_logging_exercise_interval: 5
+
+# Navigation exercise labels
+masworld_navigation_exercise_app_label: "masworld-nav-exercise"

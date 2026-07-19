@@ -1,0 +1,39 @@
+---
+# Event Readiness role defaults
+masworld_readiness_enabled: true
+
+# Checks to run — remove entries to skip specific checks
+masworld_readiness_checks:
+  - api
+  - mas
+  - manage
+  - logging
+  - loki
+  - showroom
+  - student_access
+  - exercise_data
+
+# MAS instance and workspace (should match other roles)
+masworld_mas_instance_id: "inst1"
+masworld_mas_workspace_id: "masworld"
+
+# Namespaces to check
+masworld_sample_namespace: "masworld-exercises"
+masworld_showroom_namespace: "showroom"
+
+# Readiness check timeouts
+masworld_readiness_check_timeout: 30
+masworld_readiness_check_retries: 3
+masworld_readiness_check_delay: 10
+
+# Report output directory
+masworld_readiness_report_dir: "/tmp/masworld-readiness"
+
+# Logging API version (observability.openshift.io/v1)
+masworld_logging_api_version: "observability.openshift.io/v1"
+
+# LokiStack API version
+masworld_loki_api_version: "loki.grafana.com/v1"
+
+# Seat number for student access check
+masworld_seat_number: "{{ seat_number | default(1) }}"

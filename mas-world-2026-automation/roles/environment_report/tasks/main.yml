@@ -1,0 +1,177 @@
+---
+# environment_report/tasks/main.yml
+# Generates a post-preparation environment report.
+# Sets fact: environment_report_path (path to JSON report)
+
+# --- Ensure Output Directory ---
+- name: Ensure report output directory exists
+  ansible.builtin.file:
+    path: "{{ masworld_report_output_dir }}"
+    state: directory
+    mode: "0755"
+
+# --- Build Report Timestamp ---
+- name: Generate report timestamp
+  ansible.builtin.set_fact:
+    _report_timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+    _report_iso_timestamp: "{{ ansible_date_time.iso8601 }}"
+
+- name: Build report filename base
+  ansible.builtin.set_fact:
+    _report_file_base: >-
+      {{ masworld_report_filename_prefix }}{{ '-' + _report_timestamp if masworld_report_timestamp_filenames | bool else '' }}
+
+# --- Gather All Facts from Previous Roles ---
+- name: Build environment report data
+  ansible.builtin.set_fact:
+    _environment_report:
+      report_metadata:
+        generated_at: "{{ _report_iso_timestamp }}"
+        generated_by: "masworld-automation"
+        format_version: "1.0"
+      config_validation:
+        result: "{{ config_validation_result | default('not_run') }}"
+        errors: "{{ config_validation_errors | default([]) }}"
+        warnings: "{{ config_validation_warnings | default([]) }}"
+      cluster_preflight:
+        result: "{{ preflight_result | default('not_run') }}"
+        report: "{{ preflight_report | default({}) }}"
+      event_metadata:
+        applied: "{{ event_metadata_applied | default(false) }}"
+        metadata: "{{ event_metadata | default({}) }}"
+      acm_registration:
+        result: "{{ acm_registration_result | default('not_run') }}"
+        managed_cluster_name: "{{ acm_managed_cluster_name | default('') }}"
+        cluster_set: "{{ acm_cluster_set | default('') }}"
+      logging_operators:
+        ready: "{{ logging_operators_ready | default(false) }}"
+        status: "{{ logging_operators_status | default('not_run') }}"
+        versions: "{{ logging_operator_versions | default({}) }}"
+      loki_stack:
+        ready: "{{ loki_stack_ready | default(false) }}"
+        status: "{{ loki_stack_status | default('not_run') }}"
+        info: "{{ loki_stack_info | default({}) }}"
+      log_forwarding:
+        ready: "{{ log_forwarding_ready | default(false) }}"
+        status: "{{ log_forwarding_status | default('not_run') }}"
+        info: "{{ log_forwarding_info | default({}) }}"
+
+# --- Compute Overall Status ---
+- name: Determine overall preparation status
+  ansible.builtin.set_fact:
+    _overall_status: >-
+      {{ 'pass' if (
+        (config_validation_result | default('not_run') in ['pass', 'not_run']) and
+        (preflight_result | default('not_run') in ['pass', 'not_run']) and
+        (event_metadata_applied | default(false) | bool or event_metadata_applied is not defined) and
+        (acm_registration_result | default('not_run') in ['registered', 'skipped', 'not_run']) and
+        (logging_operators_ready | default(false) | bool or logging_operators_status | default('not_run') in ['skipped', 'not_run']) and
+        (loki_stack_ready | default(false) | bool or loki_stack_status | default('not_run') in ['skipped', 'not_run']) and
+        (log_forwarding_ready | default(false) | bool or log_forwarding_status | default('not_run') in ['skipped', 'not_run'])
+      ) else 'fail' }}
+
+- name: Add overall status to report
+  ansible.builtin.set_fact:
+    _environment_report: >-
+      {{ _environment_report | combine({'overall_status': _overall_status}) }}
+
+# --- Write JSON Report ---
+- name: Write JSON environment report
+  ansible.builtin.copy:
+    content: "{{ _environment_report | to_nice_json }}"
+    dest: "{{ masworld_report_output_dir }}/{{ _report_file_base }}.json"
+    mode: "0644"
+  register: _json_report_written
+  when: masworld_report_format in ['json', 'both']
+
+# --- Generate Markdown Summary ---
+- name: Write Markdown environment report
+  ansible.builtin.copy:
+    content: |
+      # MAS World 2026 — Environment Report
+
+      **Generated:** {{ _report_iso_timestamp }}
+      **Overall Status:** {{ _overall_status | upper }}
+
+      ## Configuration Validation
+
+      - **Result:** {{ config_validation_result | default('not_run') }}
+      - **Errors:** {{ (config_validation_errors | default([])) | length }}
+      - **Warnings:** {{ (config_validation_warnings | default([])) | length }}
+
+      ## Cluster Preflight
+
+      - **Result:** {{ preflight_result | default('not_run') }}
+      {% if preflight_report is defined and preflight_report.cluster_version is defined %}
+      - **Cluster Version:** {{ preflight_report.cluster_version }}
+      - **Workers:** {{ preflight_report.checks.worker_count | default('N/A') }}
+      - **CPU:** {{ preflight_report.checks.total_cpu | default('N/A') }} cores
+      - **Memory:** {{ preflight_report.checks.total_memory_gi | default('N/A') }} GiB
+      {% endif %}
+
+      ## Event Metadata
+
+      - **Applied:** {{ event_metadata_applied | default(false) }}
+      {% if event_metadata is defined %}
+      - **Event ID:** {{ event_metadata.event_id | default('N/A') }}
+      - **Purpose:** {{ event_metadata.cluster_purpose | default('N/A') }}
+      {% endif %}
+
+      ## ACM Registration
+
+      - **Result:** {{ acm_registration_result | default('not_run') }}
+      {% if acm_managed_cluster_name is defined and acm_managed_cluster_name | length > 0 %}
+      - **Managed Cluster:** {{ acm_managed_cluster_name }}
+      - **Cluster Set:** {{ acm_cluster_set | default('N/A') }}
+      {% endif %}
+
+      ## Logging Operators
+
+      - **Ready:** {{ logging_operators_ready | default(false) }}
+      - **Status:** {{ logging_operators_status | default('not_run') }}
+      {% if logging_operator_versions is defined %}
+      - **Cluster Logging:** {{ logging_operator_versions.cluster_logging | default('N/A') }}
+      - **COO:** {{ logging_operator_versions.cluster_observability | default('N/A') }}
+      - **Loki Operator:** {{ logging_operator_versions.loki | default('N/A') }}
+      {% endif %}
+
+      ## LokiStack
+
+      - **Ready:** {{ loki_stack_ready | default(false) }}
+      - **Status:** {{ loki_stack_status | default('not_run') }}
+      {% if loki_stack_info is defined and loki_stack_info.name is defined %}
+      - **Name:** {{ loki_stack_info.name }}
+      - **Size:** {{ loki_stack_info.size | default('N/A') }}
+      - **S3 Bucket:** {{ loki_stack_info.s3_bucket | default('N/A') }}
+      {% endif %}
+
+      ## Log Forwarding
+
+      - **Ready:** {{ log_forwarding_ready | default(false) }}
+      - **Status:** {{ log_forwarding_status | default('not_run') }}
+      {% if log_forwarding_info is defined and log_forwarding_info.log_types is defined %}
+      - **Log Types:** {{ log_forwarding_info.log_types | join(', ') }}
+      - **Target:** {{ log_forwarding_info.loki_target | default('N/A') }}
+      {% endif %}
+
+      ---
+      *Report generated by MAS World 2026 automation*
+    dest: "{{ masworld_report_output_dir }}/{{ _report_file_base }}.md"
+    mode: "0644"
+  register: _md_report_written
+  when: masworld_report_format in ['markdown', 'both']
+
+# --- Set Output Facts ---
+- name: Set environment_report_path fact
+  ansible.builtin.set_fact:
+    environment_report_path: "{{ masworld_report_output_dir }}/{{ _report_file_base }}.json"
+    environment_report_markdown_path: "{{ masworld_report_output_dir }}/{{ _report_file_base }}.md"
+    environment_report: "{{ _environment_report }}"
+
+- name: Report generation complete
+  ansible.builtin.debug:
+    msg: |
+      === Environment Report Generated ===
+      Overall Status: {{ _overall_status | upper }}
+      JSON Report: {{ masworld_report_output_dir }}/{{ _report_file_base }}.json
+      Markdown Report: {{ masworld_report_output_dir }}/{{ _report_file_base }}.md

@@ -1,0 +1,70 @@
+= Navigation and Search
+:navtitle: Navigation and Search
+:duration: 10 minutes
+
+Explore the Maximo Application Suite interface and understand how it runs on OpenShift.
+
+== Introduction
+
+IBM Maximo Application Suite ({mas_version}) provides enterprise asset management capabilities. In this section, you will:
+
+* Navigate the Maximo Suite Navigator
+* Explore Maximo Manage
+* Understand the relationship between MAS and OpenShift
+
+== Exercise: Explore the MAS Navigator
+
+. Open the *Maximo* tab on the right.
+. In the Suite Navigator, locate the following applications:
++
+* *Manage* — Enterprise Asset Management
+* *Administration* — Suite configuration
+. Click on *Manage* to open it.
+
+== Exercise: Explore Maximo on OpenShift
+
+MAS runs as a set of operators and custom resources on OpenShift.
+
+. Switch to the *Terminal* tab.
+. List the MAS namespaces:
++
+[source,role="execute"]
+----
+oc get namespaces | grep mas
+----
++
+. View the MAS Suite custom resource:
++
+[source,role="execute"]
+----
+oc get suite -n mas-inst1-core -o yaml | head -30
+----
++
+. Check the MAS operators:
++
+[source,role="execute"]
+----
+oc get csv -n mas-inst1-core --no-headers
+----
+
+== Exercise: Explore OpenShift Resources
+
+. In the *OpenShift Console* tab, navigate to *Workloads > Pods*.
+. Select the `mas-inst1-core` project from the dropdown.
+. Observe the MAS core pods running.
+. Navigate to *Operators > Installed Operators*.
+. Note the IBM operators managing MAS.
+
+=== Verify
+
+[%collapsible]
+====
+You have completed this section when:
+
+* You can access the MAS Navigator
+* You can list MAS namespaces from the terminal
+* You can see MAS pods in the OpenShift Console
+* You understand that MAS runs as operators on OpenShift
+====
+
+Click *Next* to explore Advanced Cluster Management.

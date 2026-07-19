@@ -1,0 +1,11 @@
+name: mas-world-2026
+version: main
+title: MAS World 2026
+start_page: index.adoc
+asciidoc:
+  attributes:
+    ocp_version: "4.21"
+    mas_version: "9.1"
+    manage_version: "9.1"
+nav:
+  - modules/ROOT/nav.adoc

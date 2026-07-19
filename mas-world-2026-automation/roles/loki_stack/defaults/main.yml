@@ -1,0 +1,42 @@
+---
+# loki_stack defaults
+# Configuration for deploying LokiStack CR with S3 backend.
+
+# Whether LokiStack deployment is enabled
+masworld_loki_enabled: true
+
+# LokiStack sizing (1x.extra-small, 1x.small, 1x.medium, etc.)
+masworld_loki_size: "1x.extra-small"
+
+# S3 bucket name for log storage
+masworld_loki_s3_bucket_name: ""
+
+# S3 region
+masworld_loki_s3_region: "us-east-2"
+
+# S3 endpoint URL
+masworld_loki_s3_endpoint: "https://s3.us-east-2.amazonaws.com"
+
+# Name of the Kubernetes Secret containing S3 credentials
+masworld_loki_s3_secret_name: "loki-s3-credentials"
+
+# StorageClass for LokiStack PVCs
+masworld_loki_storage_class: "gp3-csi"
+
+# S3 access key ID (should use secret:// reference)
+masworld_loki_s3_access_key_id: ""
+
+# S3 secret access key (should use secret:// reference)
+masworld_loki_s3_access_key_secret: ""
+
+# Namespace for LokiStack deployment
+masworld_loki_namespace: "openshift-logging"
+
+# Timeout for LokiStack readiness (number of retries)
+masworld_loki_readiness_retries: 60
+
+# Delay between LokiStack readiness checks in seconds
+masworld_loki_readiness_delay: 15
+
+# LokiStack resource name
+masworld_loki_stack_name: "logging-loki"

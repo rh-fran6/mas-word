@@ -1,0 +1,60 @@
+---
+- name: Reset workshop exercises on a cluster
+  hosts: "{{ target_cluster | default('localhost') }}"
+  gather_facts: false
+  vars:
+    masworld_cluster_id: "{{ cluster_id | mandatory }}"
+    masworld_reset_module: "{{ module | default('all') }}"
+    masworld_seat_number: "{{ seat_number | default('') }}"
+
+  tasks:
+    - name: Display reset target
+      ansible.builtin.debug:
+        msg: "Resetting exercises on {{ masworld_cluster_id }}, module: {{ masworld_reset_module }}, seat: {{ masworld_seat_number | default('all') }}"
+
+    - name: Reset logging exercise
+      when: masworld_reset_module in ['all', 'observability', 'logging']
+      block:
+        - name: Delete logging exercise pods
+          kubernetes.core.k8s:
+            state: absent
+            kind: Pod
+            namespace: masworld-exercises
+            label_selectors:
+              - "masworld.io/exercise=logging"
+
+        - name: Recreate logging exercise workload
+          ansible.builtin.include_role:
+            name: sample_workloads
+          vars:
+            masworld_sample_workloads_logging_only: true
+
+    - name: Reset identity exercise
+      when: masworld_reset_module in ['all', 'identity']
+      block:
+        - name: Reset Keycloak demo realm users
+          ansible.builtin.include_role:
+            name: identity_demo
+          vars:
+            masworld_identity_reset_only: true
+
+    - name: Reset navigation exercise
+      when: masworld_reset_module in ['all', 'navigation']
+      block:
+        - name: Reset navigation exercise state
+          kubernetes.core.k8s:
+            state: absent
+            kind: ConfigMap
+            namespace: masworld-exercises
+            name: "navigation-exercise-state-{{ masworld_seat_number | default('all') }}"
+
+    - name: Re-validate exercise data
+      ansible.builtin.include_role:
+        name: event_readiness
+      vars:
+        masworld_readiness_checks:
+          - exercise_data
+
+    - name: Display reset result
+      ansible.builtin.debug:
+        msg: "Exercise reset complete for {{ masworld_cluster_id }}, module: {{ masworld_reset_module }}"

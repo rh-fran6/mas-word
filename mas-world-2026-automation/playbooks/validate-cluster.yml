@@ -1,0 +1,23 @@
+---
+- name: Validate a single cluster for MAS World 2026
+  hosts: "{{ target_cluster | default('localhost') }}"
+  gather_facts: false
+  vars:
+    masworld_cluster_id: "{{ cluster_id | mandatory }}"
+
+  roles:
+    - role: config_validation
+      tags: [config]
+
+    - role: event_readiness
+      tags: [readiness]
+
+    - role: environment_report
+      tags: [report]
+
+  post_tasks:
+    - name: Display validation result
+      ansible.builtin.debug:
+        msg: >-
+          Cluster {{ masworld_cluster_id }} validation: {{ readiness_result | default('UNKNOWN') }}.
+          Report: {{ readiness_report_path | default('not generated') }}.

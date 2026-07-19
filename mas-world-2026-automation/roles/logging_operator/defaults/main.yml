@@ -1,0 +1,30 @@
+---
+# logging_operator defaults
+# Configuration for installing OpenShift Logging-related operators.
+
+# Whether logging operator installation is enabled
+masworld_logging_enabled: true
+
+# Cluster Logging Operator (observability.openshift.io) subscription channel
+masworld_logging_operator_channel: "stable-6.6"
+
+# CatalogSource for the Logging operator
+masworld_logging_operator_source: "redhat-operators"
+
+# Cluster Observability Operator subscription channel
+masworld_coo_operator_channel: "stable"
+
+# Loki Operator subscription channel
+masworld_loki_operator_channel: "stable-6.6"
+
+# CatalogSource namespace
+masworld_logging_catalog_source_namespace: "openshift-marketplace"
+
+# Timeout for CSV readiness (number of retries)
+masworld_logging_csv_retries: 60
+
+# Delay between CSV readiness checks in seconds
+masworld_logging_csv_delay: 10
+
+# Install plan approval strategy
+masworld_logging_install_plan_approval: "Automatic"

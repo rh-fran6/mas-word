@@ -1,0 +1,27 @@
+---
+# event_metadata defaults
+# Event-level labels and metadata applied to the cluster.
+
+# Unique event identifier
+masworld_event_id: "mas-world-2026"
+
+# Event date (ISO 8601)
+masworld_event_date: "2026-08-17"
+
+# Event timezone
+masworld_event_timezone: "America/Chicago"
+
+# Purpose of this cluster (attendee, facilitator, reference)
+masworld_cluster_purpose: "attendee"
+
+# Seat number for attendee clusters (empty string for non-attendee)
+masworld_cluster_seat_number: ""
+
+# Namespace for event system resources
+masworld_event_namespace: "masworld-system"
+
+# Labels applied to cluster nodes
+masworld_event_node_labels:
+  masworld.ibm.com/event-id: "{{ masworld_event_id }}"
+  masworld.ibm.com/event-date: "{{ masworld_event_date }}"
+  masworld.ibm.com/cluster-purpose: "{{ masworld_cluster_purpose }}"

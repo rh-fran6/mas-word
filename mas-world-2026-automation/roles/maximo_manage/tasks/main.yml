@@ -1,0 +1,100 @@
+---
+# Maximo Manage installation and activation
+- name: Skip Manage when disabled
+  when: not (masworld_manage_enabled | bool)
+  block:
+    - name: Report Manage skipped
+      ansible.builtin.debug:
+        msg: "Maximo Manage installation is disabled — skipping."
+
+    - name: Set Manage skipped facts
+      ansible.builtin.set_fact:
+        manage_ready: false
+        manage_url: ""
+
+    - name: End role early
+      ansible.builtin.meta: end_role
+
+- name: Install and activate Maximo Manage
+  block:
+    # ── Install Db2 (in-cluster database) ───────────────────────────────
+    - name: Install Db2 database via ibm.mas_devops
+      ansible.builtin.include_role:
+        name: ibm.mas_devops.db2
+      vars:
+        mas_instance_id: "{{ masworld_mas_instance_id }}"
+      when: masworld_manage_db_type == 'db2'
+
+    # ── Configure JDBC for Manage ───────────────────────────────────────
+    - name: Configure JDBC connection for Manage
+      ansible.builtin.include_role:
+        name: ibm.mas_devops.suite_db2_setup_for_manage
+      vars:
+        mas_instance_id: "{{ masworld_mas_instance_id }}"
+        mas_workspace_id: "{{ masworld_mas_workspace_id }}"
+      when: masworld_manage_db_type == 'db2'
+
+    # ── Install Manage Application ──────────────────────────────────────
+    - name: Install Manage application via ibm.mas_devops
+      ansible.builtin.include_role:
+        name: ibm.mas_devops.suite_app_install
+      vars:
+        mas_instance_id: "{{ masworld_mas_instance_id }}"
+        mas_app_id: manage
+        mas_app_channel: "{{ masworld_manage_channel }}"
+
+    # ── Activate Manage Workspace ───────────────────────────────────────
+    - name: Activate Manage workspace via ibm.mas_devops
+      ansible.builtin.include_role:
+        name: ibm.mas_devops.suite_app_configure
+      vars:
+        mas_instance_id: "{{ masworld_mas_instance_id }}"
+        mas_workspace_id: "{{ masworld_mas_workspace_id }}"
+        mas_app_id: manage
+        mas_appws_components: "{{ masworld_manage_components | join(',') }}"
+
+    # ── Wait for ManageWorkspace Ready ──────────────────────────────────
+    - name: Wait for ManageWorkspace to be Ready
+      kubernetes.core.k8s_info:
+        api_version: apps.mas.ibm.com/v1
+        kind: ManageWorkspace
+        name: "{{ masworld_mas_instance_id }}-{{ masworld_mas_workspace_id }}"
+        namespace: "mas-{{ masworld_mas_instance_id }}-manage"
+      register: _masworld_manage_ws
+      until:
+        - _masworld_manage_ws.resources | length > 0
+        - _masworld_manage_ws.resources[0].status.conditions | default([])
+          | selectattr('type', 'equalto', 'Ready')
+          | selectattr('status', 'equalto', 'True')
+          | list | length > 0
+      retries: "{{ masworld_manage_ready_retries }}"
+      delay: "{{ masworld_manage_ready_delay }}"
+
+    # ── Collect Manage URL ──────────────────────────────────────────────
+    - name: Collect Manage URL from ManageWorkspace status
+      ansible.builtin.set_fact:
+        manage_url: >-
+          {{ _masworld_manage_ws.resources[0].status.url
+             | default('') }}
+
+    # ── Set Success Facts ───────────────────────────────────────────────
+    - name: Set Manage ready facts
+      ansible.builtin.set_fact:
+        manage_ready: true
+
+    - name: Report Manage installation success
+      ansible.builtin.debug:
+        msg: "Maximo Manage installed and activated. URL: {{ manage_url }}"
+
+  rescue:
+    - name: Set Manage failed facts
+      ansible.builtin.set_fact:
+        manage_ready: false
+        manage_url: ""
+
+    - name: Report Manage failure
+      ansible.builtin.fail:
+        msg: >-
+          Maximo Manage installation failed: {{ ansible_failed_result.msg | default('unknown error') }}.
+          Manage activation typically takes 60-90 minutes — check ManageWorkspace CR
+          in namespace mas-{{ masworld_mas_instance_id }}-manage.

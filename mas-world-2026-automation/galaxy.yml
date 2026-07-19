@@ -1,0 +1,23 @@
+namespace: masworld
+name: automation
+version: 0.1.0
+readme: README.md
+authors:
+  - Francis Anyaegbu <fanyaegb@redhat.com>
+description: MAS World 2026 fleet configuration and management automation
+license:
+  - Apache-2.0
+tags:
+  - maximo
+  - openshift
+  - acm
+  - logging
+  - loki
+  - workshop
+dependencies:
+  kubernetes.core: ">=3.0.0,<4.0.0"
+  redhat.openshift: ">=2.3.0,<3.0.0"
+  amazon.aws: ">=7.0.0,<8.0.0"
+  community.crypto: ">=2.18.0,<3.0.0"
+  community.general: ">=8.0.0,<9.0.0"
+repository: https://github.com/rhpds/mas-world-2026

@@ -1,0 +1,25 @@
+---
+# config_validation defaults
+# Controls strictness and failure behavior of configuration validation.
+
+# When true, all required config keys must be present and correctly typed
+masworld_config_validation_strict: true
+
+# When true, warnings (non-critical issues) are treated as failures
+masworld_config_validation_fail_on_warning: false
+
+# Required top-level configuration keys that must be defined
+masworld_config_required_keys:
+  - masworld_event_id
+  - masworld_cluster_name
+  - masworld_base_domain
+
+# Required credential keys (must use secret:// format references)
+masworld_config_credential_keys:
+  - masworld_ibm_entitlement_key
+  - masworld_mas_license_file
+
+# Required component flags
+masworld_config_component_flags:
+  - masworld_mas_core_enabled
+  - masworld_manage_enabled

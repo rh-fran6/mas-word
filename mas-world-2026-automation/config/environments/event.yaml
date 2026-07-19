@@ -1,0 +1,20 @@
+---
+fleet:
+  attendee_cluster_count: 50
+  spare_cluster_count: 5
+  facilitator_cluster_count: 1
+  require_exact_cluster_counts: true
+  preparation:
+    max_concurrent_clusters: 5
+
+student_credentials:
+  allow_shared_password: false
+
+secrets:
+  provider: aws-sm
+  config:
+    aws_region: us-east-2
+
+logging_config:
+  log_level: info
+  structured: true

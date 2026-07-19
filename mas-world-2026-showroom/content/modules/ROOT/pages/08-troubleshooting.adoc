@@ -1,0 +1,115 @@
+= Troubleshooting
+:navtitle: Troubleshooting
+
+Common issues and resolution steps for the workshop environment.
+
+== OpenShift Console Not Loading
+
+. Verify the console route:
++
+[source,role="execute"]
+----
+oc get route console -n openshift-console -o jsonpath='{.spec.host}'
+----
++
+. Check console pod health:
++
+[source,role="execute"]
+----
+oc get pods -n openshift-console --no-headers
+----
++
+. If pods are not Running, check events:
++
+[source,role="execute"]
+----
+oc get events -n openshift-console --sort-by=.lastTimestamp | tail -10
+----
+
+== Cannot Log In
+
+. Verify the OAuth configuration includes htpasswd:
++
+[source,role="execute"]
+----
+oc get oauth cluster -o jsonpath='{.spec.identityProviders[*].name}'
+----
++
+. Check the OAuth pod status:
++
+[source,role="execute"]
+----
+oc get pods -n openshift-authentication --no-headers
+----
++
+. If authentication fails, ask your facilitator to verify your credentials.
+
+== Maximo Not Accessible
+
+. Check the MAS Suite status:
++
+[source,role="execute"]
+----
+oc get suite -n mas-inst1-core -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}'
+----
++
+. Check Manage workspace status:
++
+[source,role="execute"]
+----
+oc get manageworkspace -n mas-inst1-manage --no-headers
+----
++
+. If Manage is not Ready, check the pods:
++
+[source,role="execute"]
+----
+oc get pods -n mas-inst1-manage --no-headers | grep -v Running
+----
+
+== Logging Queries Return No Results
+
+. Verify the ClusterLogForwarder is healthy:
++
+[source,role="execute"]
+----
+oc get clusterlogforwarder -n openshift-logging -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}'
+----
++
+. Check the Vector collector pods:
++
+[source,role="execute"]
+----
+oc get pods -n openshift-logging -l app.kubernetes.io/component=collector --no-headers | head -5
+----
++
+. Verify LokiStack is healthy:
++
+[source,role="execute"]
+----
+oc get lokistack -n openshift-logging -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}'
+----
++
+. If logs are missing, wait 2-3 minutes for log ingestion and retry.
+
+== Keycloak Not Accessible
+
+. Check Keycloak pod status:
++
+[source,role="execute"]
+----
+oc get pods -n masworld-keycloak --no-headers
+----
++
+. Check the Keycloak route:
++
+[source,role="execute"]
+----
+oc get route -n masworld-keycloak --no-headers
+----
+
+== Getting Help
+
+* Raise your hand or use the event chat to reach a facilitator
+* Francis Anyaegbu (Red Hat) — environment support
+* Myles Vivian (Cohesive) — observability support

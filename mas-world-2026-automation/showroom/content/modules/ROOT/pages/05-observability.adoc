@@ -1,0 +1,187 @@
+= Observability and Logging
+:navtitle: Observability and Logging
+:duration: 40 minutes (shared segment)
+
+Configure and use OpenShift Logging with Loki to observe your Maximo environment.
+
+== Introduction
+
+Observability is critical for operating Maximo in production. In this section, you will:
+
+* Understand the OpenShift Logging stack (Logging Operator + Loki + Vector)
+* Explore how logs flow from applications to Loki via S3 storage
+* Generate identifiable log messages
+* Query historical logs using LogQL
+* Understand production logging architecture considerations
+
+== Architecture Overview
+
+Your environment uses the following stack:
+
+[cols="1,2"]
+|===
+| Component | Purpose
+
+| OpenShift Logging Operator 6.6
+| Manages the log collection pipeline
+
+| Loki Operator 6.6
+| Manages the LokiStack deployment
+
+| LokiStack
+| Stores and indexes logs with S3 backend
+
+| Vector
+| Collects and forwards logs from all pods
+
+| ClusterLogForwarder
+| Routes application, infrastructure, and audit logs to LokiStack
+
+| AWS S3
+| Object storage for Loki log data
+|===
+
+== Exercise: Explore the Logging Stack
+
+. Verify the logging operators are installed:
++
+[source,role="execute"]
+----
+oc get csv -n openshift-logging --no-headers
+----
++
+. Check the LokiStack status:
++
+[source,role="execute"]
+----
+oc get lokistack -n openshift-logging -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}'
+----
++
+.Expected output
+[source,text]
+----
+True
+----
++
+. View the ClusterLogForwarder configuration:
++
+[source,role="execute"]
+----
+oc get clusterlogforwarder -n openshift-logging -o yaml | head -40
+----
+
+== Exercise: Generate and Query Logs
+
+. Create a log-generating workload in your namespace:
++
+[source,role="execute"]
+----
+oc run log-test-{seat_number} \
+  --image=registry.access.redhat.com/ubi9/ubi-minimal:9.4 \
+  -n student-{seat_number} \
+  --restart=Never \
+  -- /bin/bash -c 'for i in $(seq 1 10); do echo "{\"msg\":\"MAS World log test\",\"seat\":\"{seat_number}\",\"iteration\":$i,\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"; sleep 2; done'
+----
++
+. Wait for the pod to complete:
++
+[source,role="execute"]
+----
+oc wait pod/log-test-{seat_number} -n student-{seat_number} --for=condition=Ready --timeout=30s 2>/dev/null; sleep 25
+----
++
+. Verify the logs were generated:
++
+[source,role="execute"]
+----
+oc logs log-test-{seat_number} -n student-{seat_number}
+----
+
+== Exercise: Query Loki
+
+. Open the *Grafana* tab on the right.
+. Navigate to *Explore*.
+. Select *Loki* as the data source.
+. Enter this LogQL query:
++
+[source,text]
+----
+{kubernetes_namespace_name="student-{seat_number}"} |= "MAS World log test"
+----
++
+. Verify you can see your log messages.
+. Try filtering by seat number:
++
+[source,text]
+----
+{kubernetes_namespace_name="student-{seat_number}"} | json | seat="{seat_number}"
+----
+
+== Exercise: Explore Infrastructure Logs
+
+. Query infrastructure logs from your terminal:
++
+[source,role="execute"]
+----
+oc logs -n openshift-logging -l app.kubernetes.io/component=distributor --tail=5
+----
++
+. Verify the S3 storage secret exists:
++
+[source,role="execute"]
+----
+oc get secret -n openshift-logging -l masworld.io/component=loki-s3 --no-headers
+----
+
+== Exercise: Clean Up
+
+. Delete your test pod:
++
+[source,role="execute"]
+----
+oc delete pod log-test-{seat_number} -n student-{seat_number}
+----
++
+. Verify the logs *persist* in Loki after the pod is deleted (query Grafana again — the historical logs remain).
+
+== Production Considerations
+
+[cols="1,1,2"]
+|===
+| Aspect | Workshop | Production
+
+| Loki size
+| `1x.extra-small`
+| `1x.medium` or larger
+
+| S3 storage
+| Single bucket per cluster
+| Dedicated bucket with lifecycle policies
+
+| Retention
+| Short-term (event duration)
+| 30-90 days or longer per compliance
+
+| SIEM integration
+| Not configured
+| Forward to Splunk, CloudWatch, or similar
+
+| Log types
+| Application + Infrastructure + Audit
+| Same, plus custom forwarding rules
+|===
+
+=== Verify
+
+[%collapsible]
+====
+You have completed this section when:
+
+* You can see the logging operators are installed
+* LokiStack reports Ready
+* You generated test logs and found them in Grafana
+* You understand that logs persist after pod deletion
+* You cleaned up your test pod
+====
+
+Click *Next* to explore Identity Provider Integration.

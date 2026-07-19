@@ -1,0 +1,25 @@
+---
+# MAS Prerequisites role defaults
+masworld_mas_prerequisites_enabled: true
+
+# IBM entitlement key — secret reference, never plain text
+masworld_ibm_entitlement_key_ref: "secret://mas-world/ibm/entitlement-key"
+
+# IBM Operator Catalog source tag
+masworld_mas_catalog_source: "v9-260625-amd64"
+
+# Cert Manager version — empty string means use collection default
+masworld_cert_manager_version: ""
+
+# MongoDB version
+masworld_mongodb_version: "7.0"
+
+# SLS version — empty string means use collection default
+masworld_sls_version: ""
+
+# Namespace for IBM entitlement key secret
+masworld_ibm_common_services_namespace: "ibm-common-services"
+
+# Timeout for CRD readiness
+masworld_prerequisites_crd_retries: 30
+masworld_prerequisites_crd_delay: 30

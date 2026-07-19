@@ -1,0 +1,6 @@
+---
+aws:
+  default_region: us-east-2
+  s3_bucket_prefix: "mas-world-2026"
+  s3_encryption: AES256
+  s3_lifecycle_expiration_days: 30

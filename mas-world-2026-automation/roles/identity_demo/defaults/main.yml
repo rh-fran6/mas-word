@@ -1,0 +1,84 @@
+---
+# Identity Demo role defaults
+masworld_identity_enabled: true
+
+# Keycloak deployment namespace
+masworld_keycloak_namespace: "masworld-keycloak"
+
+# Keycloak admin credentials — secret reference, never plain text
+masworld_keycloak_admin_secret_ref: "secret://mas-world/keycloak/admin"
+
+# Demo realm and client configuration
+masworld_identity_demo_realm: "masworld"
+masworld_identity_demo_client_id: "masworld-demo"
+
+# Keycloak operator channel
+masworld_keycloak_operator_channel: "fast"
+
+# Keycloak readiness polling
+masworld_keycloak_ready_retries: 30
+masworld_keycloak_ready_delay: 20
+
+# OpenLDAP configuration for LDAP sync demo
+masworld_ldap_enabled: true
+masworld_ldap_namespace: "masworld-keycloak"
+masworld_ldap_image: "registry.access.redhat.com/ubi9/openldap:latest"
+masworld_ldap_base_dn: "dc=masworld,dc=example,dc=com"
+masworld_ldap_admin_dn: "cn=admin,dc=masworld,dc=example,dc=com"
+masworld_ldap_users_ou: "ou=users,dc=masworld,dc=example,dc=com"
+masworld_ldap_groups_ou: "ou=groups,dc=masworld,dc=example,dc=com"
+
+# Pre-populated LDAP demo users for sync demonstration
+masworld_ldap_demo_users:
+  - uid: alice.engineer
+    cn: Alice Engineer
+    sn: Engineer
+    mail: alice.engineer@masworld.example.com
+    department: Operations
+  - uid: bob.technician
+    cn: Bob Technician
+    sn: Technician
+    mail: bob.technician@masworld.example.com
+    department: Maintenance
+  - uid: carol.planner
+    cn: Carol Planner
+    sn: Planner
+    mail: carol.planner@masworld.example.com
+    department: Planning
+  - uid: dave.supervisor
+    cn: Dave Supervisor
+    sn: Supervisor
+    mail: dave.supervisor@masworld.example.com
+    department: Management
+
+# LDAP groups for role mapping
+masworld_ldap_demo_groups:
+  - cn: mas-admins
+    description: MAS Administrators
+    members:
+      - alice.engineer
+      - dave.supervisor
+  - cn: mas-users
+    description: MAS Standard Users
+    members:
+      - bob.technician
+      - carol.planner
+
+# Keycloak OIDC integration with OpenShift OAuth
+masworld_keycloak_oidc_enabled: true
+masworld_keycloak_oidc_provider_name: "masworld-keycloak"
+
+# Demo users (local Keycloak, in addition to LDAP-synced users)
+masworld_identity_demo_users:
+  - username: facilitator
+    firstName: Workshop
+    lastName: Facilitator
+    email: facilitator@masworld.example.com
+    roles:
+      - admin
+  - username: demo-user
+    firstName: Demo
+    lastName: User
+    email: demo-user@masworld.example.com
+    roles:
+      - user

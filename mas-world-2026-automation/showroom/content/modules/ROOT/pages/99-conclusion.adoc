@@ -1,0 +1,46 @@
+= Conclusion
+:navtitle: Conclusion
+
+Congratulations on completing MAS World 2026!
+
+== What You Accomplished
+
+In this workshop, you:
+
+* [x] Verified access to your dedicated OpenShift cluster with MAS
+* [x] Navigated Maximo Application Suite and explored its OpenShift foundation
+* [x] Observed fleet management with Red Hat Advanced Cluster Management
+* [x] Explored OpenShift and MAS update mechanisms
+* [x] Configured and queried logs with OpenShift Logging and Loki
+* [x] Explored identity provider integration with Keycloak
+* [x] Understood production architecture considerations
+
+== Key Takeaways
+
+. *MAS on OpenShift* provides a consistent, scalable platform for enterprise asset management
+. *RHACM* enables centralized governance and visibility across your MAS fleet
+. *OpenShift Logging + Loki* delivers scalable, queryable observability with S3 backend
+. *Identity integration* connects MAS to your enterprise directory
+. *Automation* (Ansible, operators, GitOps) ensures repeatable, auditable deployments
+
+== Next Steps
+
+* Review the production architecture guidance from this workshop
+* Explore the additional resources linked in each section
+* Connect with the presenters for questions:
+** *Ernie Steagall* (ONEOK) — MAS operations perspective
+** *Francis Anyaegbu* (Red Hat) — OpenShift platform
+** *Myles Vivian* (Cohesive) — Observability
+
+== Resources
+
+* IBM Maximo Application Suite documentation
+* Red Hat OpenShift documentation
+* Red Hat Advanced Cluster Management documentation
+* OpenShift Logging documentation
+
+== Feedback
+
+Your feedback helps us improve future workshops. Please share your thoughts with the facilitators or through the event feedback form.
+
+Thank you for attending MAS World 2026!

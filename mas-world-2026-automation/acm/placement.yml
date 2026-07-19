@@ -1,0 +1,51 @@
+---
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: Placement
+metadata:
+  name: mas-world-2026-attendee-clusters
+  namespace: mas-world-2026-policies
+  labels:
+    event: mas-world-2026
+spec:
+  clusterSets:
+    - mas-world-2026
+  predicates:
+    - requiredClusterSelector:
+        labelSelector:
+          matchLabels:
+            event: mas-world-2026
+            purpose: attendee
+            readiness: ready
+---
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: Placement
+metadata:
+  name: mas-world-2026-all-clusters
+  namespace: mas-world-2026-policies
+  labels:
+    event: mas-world-2026
+spec:
+  clusterSets:
+    - mas-world-2026
+  predicates:
+    - requiredClusterSelector:
+        labelSelector:
+          matchLabels:
+            event: mas-world-2026
+---
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: Placement
+metadata:
+  name: mas-world-2026-facilitator
+  namespace: mas-world-2026-policies
+  labels:
+    event: mas-world-2026
+spec:
+  clusterSets:
+    - mas-world-2026
+  predicates:
+    - requiredClusterSelector:
+        labelSelector:
+          matchLabels:
+            event: mas-world-2026
+            purpose: facilitator

@@ -1,0 +1,32 @@
+---
+# Template for ManagedCluster labels applied during ACM registration.
+# The acm_registration role applies these labels dynamically per cluster.
+# This file documents the label schema for reference.
+
+# Attendee cluster labels:
+#   event: mas-world-2026
+#   workload: maximo
+#   environment: workshop
+#   purpose: attendee
+#   seat: "01"  # zero-padded seat number
+#   logging: enabled
+#   idp: preconfigured
+#   readiness: ready  # or warning, failed, pending
+
+# Spare cluster labels:
+#   event: mas-world-2026
+#   workload: maximo
+#   environment: workshop
+#   purpose: spare
+#   logging: enabled
+#   readiness: ready
+
+# Facilitator cluster labels:
+#   event: mas-world-2026
+#   workload: maximo
+#   environment: workshop
+#   purpose: facilitator
+#   logging: enabled
+#   idp: preconfigured
+#   readiness: ready
+#   demo-drift: staged  # only on facilitator, for ACM demo
