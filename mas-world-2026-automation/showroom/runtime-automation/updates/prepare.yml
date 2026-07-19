@@ -1,0 +1,88 @@
+---
+# Updates exercise pre-check — verifies cluster version, subscriptions, and package manifests
+- name: Prepare updates exercise
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    seat: "{{ '%02d' | format(seat_number | int) }}"
+    mas_core_ns: mas-inst1-core
+    ready: true
+    issues: []
+
+  tasks:
+    # ------------------------------------------------------------------
+    # 1. ClusterVersion accessible
+    # ------------------------------------------------------------------
+    - name: Check ClusterVersion resource
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: ClusterVersion
+        name: version
+      register: cluster_version
+      failed_when: false
+
+    - name: Mark not ready — ClusterVersion unavailable
+      ansible.builtin.set_fact:
+        ready: false
+        issues: "{{ issues + ['ClusterVersion resource is not accessible'] }}"
+      when: (cluster_version.resources | default([]) | length) == 0
+
+    # ------------------------------------------------------------------
+    # 2. MAS Subscriptions exist in mas-inst1-core
+    # ------------------------------------------------------------------
+    - name: Check MAS Subscriptions
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        namespace: "{{ mas_core_ns }}"
+      register: mas_subs
+      failed_when: false
+
+    - name: Mark not ready — no Subscriptions found
+      ansible.builtin.set_fact:
+        ready: false
+        issues: "{{ issues + ['No Subscriptions found in ' + mas_core_ns] }}"
+      when: (mas_subs.resources | default([]) | length) == 0
+
+    # ------------------------------------------------------------------
+    # 3. PackageManifest ibm-mas available
+    # ------------------------------------------------------------------
+    - name: Check PackageManifest for ibm-mas
+      kubernetes.core.k8s_info:
+        api_version: packages.operators.coreos.com/v1
+        kind: PackageManifest
+        name: ibm-mas
+        namespace: "{{ mas_core_ns }}"
+      register: ibm_mas_pm
+      failed_when: false
+
+    - name: Mark not ready — ibm-mas PackageManifest missing
+      ansible.builtin.set_fact:
+        ready: false
+        issues: "{{ issues + ['PackageManifest ibm-mas not found'] }}"
+      when: (ibm_mas_pm.resources | default([]) | length) == 0
+
+    # ------------------------------------------------------------------
+    # Result
+    # ------------------------------------------------------------------
+    - name: Report readiness
+      ansible.builtin.debug:
+        msg: |
+          ============================================================
+           Updates Exercise — Readiness Check
+           Seat: {{ seat }}
+          ============================================================
+          {% if ready | bool %}
+           Status: READY
+           ClusterVersion, MAS Subscriptions, and ibm-mas PackageManifest
+           are all accessible. The updates exercise can proceed.
+          {% else %}
+           Status: NOT READY
+           Issues found:
+          {% for issue in issues %}
+            - {{ issue }}
+          {% endfor %}
+          {% endif %}
+          ============================================================

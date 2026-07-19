@@ -1,0 +1,189 @@
+---
+# Identity exercise – prepare
+# Verifies that identity infrastructure is ready for the student exercise.
+- name: Prepare identity exercise
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    seat_padded: "{{ '%02d' | format(seat_number | int) }}"
+    student_ns: "student-{{ seat_padded }}"
+    student_user: "user{{ seat_padded }}"
+    keycloak_ns: masworld-keycloak
+
+  tasks:
+    # ------------------------------------------------------------------
+    # 1. Check Keycloak CR readiness
+    # ------------------------------------------------------------------
+    - name: Check Keycloak CR in {{ keycloak_ns }}
+      kubernetes.core.k8s_info:
+        api_version: k8s.keycloak.org/v2alpha1
+        kind: Keycloak
+        namespace: "{{ keycloak_ns }}"
+      register: keycloak_result
+      failed_when: false
+
+    - name: Evaluate Keycloak status
+      ansible.builtin.set_fact:
+        keycloak_ready: >-
+          {{ keycloak_result.resources | default([])
+             | selectattr('status.conditions', 'defined')
+             | map(attribute='status.conditions') | flatten
+             | selectattr('type', 'equalto', 'Ready')
+             | selectattr('status', 'equalto', 'True')
+             | list | length > 0 }}
+
+    - name: Report Keycloak status
+      ansible.builtin.debug:
+        msg: >-
+          Keycloak CR: {{ 'READY' if keycloak_ready | bool else 'NOT READY' }}
+
+    # ------------------------------------------------------------------
+    # 2. Check OpenLDAP pod
+    # ------------------------------------------------------------------
+    - name: Check OpenLDAP pod in {{ keycloak_ns }}
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ keycloak_ns }}"
+        label_selectors:
+          - app=openldap
+      register: ldap_pod_result
+      failed_when: false
+
+    - name: Evaluate OpenLDAP status
+      ansible.builtin.set_fact:
+        ldap_running: >-
+          {{ ldap_pod_result.resources | default([])
+             | selectattr('status.phase', 'defined')
+             | selectattr('status.phase', 'equalto', 'Running')
+             | list | length > 0 }}
+
+    - name: Report OpenLDAP status
+      ansible.builtin.debug:
+        msg: >-
+          OpenLDAP pod: {{ 'RUNNING' if ldap_running | bool else 'NOT RUNNING' }}
+
+    # ------------------------------------------------------------------
+    # 3. Check OpenLDAP service
+    # ------------------------------------------------------------------
+    - name: Check OpenLDAP service in {{ keycloak_ns }}
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Service
+        namespace: "{{ keycloak_ns }}"
+        label_selectors:
+          - app=openldap
+      register: ldap_svc_result
+      failed_when: false
+
+    - name: Evaluate OpenLDAP service status
+      ansible.builtin.set_fact:
+        ldap_svc_exists: "{{ ldap_svc_result.resources | default([]) | length > 0 }}"
+
+    - name: Report OpenLDAP service status
+      ansible.builtin.debug:
+        msg: >-
+          OpenLDAP service: {{ 'EXISTS' if ldap_svc_exists | bool else 'NOT FOUND' }}
+
+    # ------------------------------------------------------------------
+    # 4. Check OAuth CR for masworld-keycloak identity provider
+    # ------------------------------------------------------------------
+    - name: Check OAuth CR
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: OAuth
+        name: cluster
+      register: oauth_result
+      failed_when: false
+
+    - name: Evaluate OAuth identity providers
+      ansible.builtin.set_fact:
+        oauth_has_keycloak: >-
+          {{ oauth_result.resources | default([])
+             | map(attribute='spec.identityProviders', default=[]) | flatten
+             | selectattr('name', 'equalto', 'masworld-keycloak')
+             | list | length > 0 }}
+
+    - name: Report OAuth status
+      ansible.builtin.debug:
+        msg: >-
+          OAuth masworld-keycloak provider: {{ 'CONFIGURED' if oauth_has_keycloak | bool else 'NOT FOUND' }}
+
+    # ------------------------------------------------------------------
+    # 5. Check OIDC client secret in openshift-config
+    # ------------------------------------------------------------------
+    - name: Check OIDC client secret
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: keycloak-oidc-client-secret
+        namespace: openshift-config
+      register: oidc_secret_result
+      failed_when: false
+
+    - name: Evaluate OIDC secret status
+      ansible.builtin.set_fact:
+        oidc_secret_exists: "{{ oidc_secret_result.resources | default([]) | length > 0 }}"
+
+    - name: Report OIDC secret status
+      ansible.builtin.debug:
+        msg: >-
+          OIDC client secret: {{ 'EXISTS' if oidc_secret_exists | bool else 'NOT FOUND' }}
+
+    # ------------------------------------------------------------------
+    # 6. Check student namespace and RoleBinding
+    # ------------------------------------------------------------------
+    - name: Check student namespace
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "{{ student_ns }}"
+      register: student_ns_result
+      failed_when: false
+
+    - name: Evaluate student namespace
+      ansible.builtin.set_fact:
+        student_ns_exists: "{{ student_ns_result.resources | default([]) | length > 0 }}"
+
+    - name: Check student RoleBinding
+      kubernetes.core.k8s_info:
+        api_version: rbac.authorization.k8s.io/v1
+        kind: RoleBinding
+        namespace: "{{ student_ns }}"
+      register: rb_result
+      failed_when: false
+
+    - name: Evaluate student RoleBinding
+      ansible.builtin.set_fact:
+        student_rb_exists: >-
+          {{ rb_result.resources | default([])
+             | selectattr('subjects', 'defined')
+             | map(attribute='subjects') | flatten
+             | selectattr('name', 'equalto', student_user)
+             | list | length > 0 }}
+
+    - name: Report student namespace and RBAC
+      ansible.builtin.debug:
+        msg: >-
+          Student namespace {{ student_ns }}: {{ 'EXISTS' if student_ns_exists | bool else 'NOT FOUND' }},
+          RoleBinding for {{ student_user }}: {{ 'EXISTS' if student_rb_exists | bool else 'NOT FOUND' }}
+
+    # ------------------------------------------------------------------
+    # 7. Summary
+    # ------------------------------------------------------------------
+    - name: Readiness summary
+      ansible.builtin.debug:
+        msg: |
+          ============================================================
+          IDENTITY EXERCISE – READINESS STATUS (seat {{ seat_padded }})
+          ============================================================
+          Keycloak CR           : {{ 'READY' if keycloak_ready | bool else 'NOT READY' }}
+          OpenLDAP pod          : {{ 'RUNNING' if ldap_running | bool else 'NOT RUNNING' }}
+          OpenLDAP service      : {{ 'EXISTS' if ldap_svc_exists | bool else 'NOT FOUND' }}
+          OAuth provider        : {{ 'CONFIGURED' if oauth_has_keycloak | bool else 'NOT FOUND' }}
+          OIDC client secret    : {{ 'EXISTS' if oidc_secret_exists | bool else 'NOT FOUND' }}
+          Student namespace     : {{ 'EXISTS' if student_ns_exists | bool else 'NOT FOUND' }}
+          Student RoleBinding   : {{ 'EXISTS' if student_rb_exists | bool else 'NOT FOUND' }}
+          ============================================================
