@@ -2,6 +2,16 @@
 
 Tracks completion status of each implementation phase and deliverable.
 
+# Implementation Status
+
+Use these status values:
+
+- IMPLEMENTED_AND_TESTED
+- IMPLEMENTED_NOT_TESTED
+- SCAFFOLDED
+- BLOCKED_EXTERNAL_DEPENDENCY
+- NOT_IMPLEMENTED
+
 ## Phase Overview
 
 | Phase | Name | Status | Deliverables |
@@ -54,7 +64,8 @@ Tracks completion status of each implementation phase and deliverable.
 | Playbooks | `playbooks/*.yml` | Done (8 main + 2 helpers) |
 | Showroom content | `showroom/` | Done (site.yml, ui-config.yml, antora.yml, nav.adoc, 9 pages) |
 | ACM manifests | `acm/` | Done (5 manifests + label schema doc) |
-| Makefile | `Makefile` | Done |
+| Makefile | `Makefile` | SCAFFOLDED |
+| .gitignore | `.gitignore` | IMPLEMENTED_NOT_TESTED |
 
 ## Phase 2: Showroom Content — COMPLETE
 
@@ -92,7 +103,7 @@ Tracks completion status of each implementation phase and deliverable.
 | mas_prerequisites | `roles/mas_prerequisites/` | Done |
 | mas_core | `roles/mas_core/` | Done |
 | maximo_manage | `roles/maximo_manage/` | Done |
-| identity_demo | `roles/identity_demo/` | Done |
+| identity_demo | `roles/identity_demo/` | SCAFFOLDED (Keycloak + OpenLDAP + LDAP federation + OIDC → OAuth) |
 | mas_edge | `roles/mas_edge/` | Done |
 | student_accounts | `roles/student_accounts/` | Done |
 | sample_workloads | `roles/sample_workloads/` | Done |

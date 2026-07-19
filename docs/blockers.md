@@ -2,6 +2,11 @@
 
 Tracks external dependencies and internal decisions that block implementation progress.
 
+# External Blockers
+
+Record missing credentials, capacity, approvals, product access, unsupported
+versions, external dependencies, and other issues that block implementation.
+
 ## External Blockers
 
 | ID | Blocker | Owner | Status | Impact | Workaround |

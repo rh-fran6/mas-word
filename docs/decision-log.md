@@ -2,6 +2,20 @@
 
 Records architectural and implementation decisions with rationale.
 
+# Architecture and Implementation Decisions
+
+## Decision format
+
+### ADR-NNN — Title
+
+- Status: proposed | accepted | superseded
+- Date:
+- Context:
+- Decision:
+- Alternatives considered:
+- Consequences:
+- Related requirements:
+
 ## Format
 
 Each entry: decision, date, options considered, chosen option, rationale, consequences.

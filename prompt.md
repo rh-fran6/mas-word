@@ -10,6 +10,32 @@ Do not merely create a design proposal or scaffolding. Implement the repositorie
 
 ---
 
+# Living specification governance
+
+This file is the authoritative, current specification for the entire project.
+
+Every new user instruction must be evaluated before implementation begins.
+
+When a new instruction changes the project:
+
+1. Integrate it into the relevant section of this file.
+2. Update or supersede conflicting requirements.
+3. Do not merely append contradictory instructions.
+4. Record the change in `docs/change-log.md`.
+5. Record architecture decisions in `docs/decision-log.md`.
+6. Record implementation workarounds in `docs/workarounds.md`.
+7. Update `docs/current-state.md` after implementation.
+8. Never include raw credentials or secret values.
+
+When the requested approach cannot be implemented exactly:
+
+1. Record the original requirement.
+2. Record why it cannot be implemented.
+3. Record the selected workaround and its implications.
+4. Update this specification to describe the effective solution.
+5. Obtain user approval when the workaround materially changes security,
+   architecture, cost, supportability, or workshop functionality.
+
 # 1. Event context
 
 ## Event details
@@ -529,6 +555,26 @@ mas-world-2026-operations/
 ```
 
 Document why the final repository model was selected.
+
+## 5.0 Git ignore rules
+
+The monorepo root must contain a `.gitignore` covering:
+
+* Python build and cache artifacts
+* Virtual environments
+* Test caches and coverage files
+* IDE project files
+* OS metadata files
+* Ansible retry files
+* Credential material: private keys, certificates, keystores, kubeconfigs,
+  `.env` files, `credentials.json`, entitlement keys, pull secrets
+* Ansible Vault files (except `.example` templates)
+* Generated readiness reports
+* Molecule transient state
+* Claude Code session state
+
+Credential patterns must be blocked by `.gitignore` as a defence-in-depth
+layer. This does not replace pre-commit secret scanning.
 
 ## 5.1 `mas-world-2026-automation`
 
