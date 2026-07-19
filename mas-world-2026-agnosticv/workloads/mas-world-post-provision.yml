@@ -1,0 +1,156 @@
+---
+# MAS World 2026 -- Post-Provision Workload
+#
+# This workload configures an already-provisioned OpenShift cluster
+# for the MAS World 2026 workshop. It references Ansible roles from
+# the masworld.automation collection in mas-world-2026-automation/.
+#
+# Execution order matters -- roles are listed in dependency order.
+# Each role is idempotent and safe to rerun.
+#
+# This workload does NOT provision the OpenShift cluster.
+
+workload:
+  name: mas-world-post-provision
+  display_name: "MAS World 2026 Post-Provision"
+  description: >-
+    Complete post-provisioning configuration for a MAS World 2026
+    attendee cluster. Includes preflight validation, MAS installation,
+    logging stack, identity provider, student accounts, and readiness
+    checks.
+  version: "1.0.0"
+  idempotent: true
+  resume_on_failure: true
+
+  # Ansible collection containing the roles
+  collection:
+    namespace: masworld
+    name: automation
+    version: "0.1.0"
+    source: "https://github.com/rhpds/mas-world-2026.git"
+    requirements_file: requirements.yml
+
+  # Roles executed in order -- each role corresponds to a directory
+  # in mas-world-2026-automation/roles/
+  roles:
+    - name: config_validation
+      description: "Validate configuration schema and variable consistency"
+      required: true
+      skip_on_rerun: false
+
+    - name: cluster_preflight
+      description: "Verify cluster compatibility, capacity, and health"
+      required: true
+      skip_on_rerun: false
+
+    - name: event_metadata
+      description: "Apply event labels, annotations, and namespace markers"
+      required: true
+      skip_on_rerun: true
+
+    - name: acm_registration
+      description: "Register cluster with ACM hub and apply ManagedClusterSet"
+      required: true
+      skip_on_rerun: true
+      when: "{{ acm_registration_enabled | default(true) }}"
+
+    - name: mas_prerequisites
+      description: "Install IBM operator catalog, cert-manager, MongoDB, SLS"
+      required: true
+      skip_on_rerun: true
+
+    - name: mas_core
+      description: "Install and configure MAS Core operator and Suite CR"
+      required: true
+      skip_on_rerun: true
+      timeout_minutes: 90
+
+    - name: maximo_manage
+      description: "Install and activate Maximo Manage with database"
+      required: true
+      skip_on_rerun: true
+      timeout_minutes: 60
+
+    - name: logging_operator
+      description: "Install Red Hat OpenShift Logging Operator"
+      required: true
+      skip_on_rerun: true
+      when: "{{ logging_collect_application | default(true) }}"
+
+    - name: loki_stack
+      description: "Install Loki Operator and LokiStack with S3 backend"
+      required: true
+      skip_on_rerun: true
+      when: "{{ logging_collect_application | default(true) }}"
+
+    - name: log_forwarding
+      description: "Configure ClusterLogForwarder for app/infra/audit logs"
+      required: true
+      skip_on_rerun: true
+      when: "{{ logging_collect_application | default(true) }}"
+
+    - name: identity_demo
+      description: "Deploy and configure Keycloak, OIDC, LDAP group sync"
+      required: true
+      skip_on_rerun: true
+      when: "{{ keycloak_deployment_mode != 'disabled' }}"
+
+    - name: student_accounts
+      description: "Create student user, htpasswd identity, namespace, RBAC"
+      required: true
+      skip_on_rerun: false
+
+    - name: sample_workloads
+      description: "Deploy sample logging workload and exercise data"
+      required: true
+      skip_on_rerun: true
+
+    - name: event_readiness
+      description: "Run all readiness checks and produce readiness report"
+      required: true
+      skip_on_rerun: false
+
+  # Variables consumed by the workload roles
+  # These are resolved from vars/common.yml + environment overrides
+  # + per-cluster inventory + command-line overrides
+  required_variables:
+    - event_id
+    - event_name
+    - event_date
+    - seat_number
+    - cluster_api_url
+    - cluster_admin_secret_ref
+    - mas_version
+    - mas_channel
+    - mas_catalog_image
+    - logging_channel
+    - loki_channel
+    - loki_size
+    - loki_object_storage_mode
+    - aws_default_region
+    - aws_s3_bucket_prefix
+    - student_credential_profile
+    - student_username_template
+    - student_password_mode
+    - ibm_entitlement_key_ref
+    - ibm_license_ref
+    - aws_credentials_ref
+    - container_registry_pull_secret_ref
+
+  optional_variables:
+    - acm_hub_kubeconfig_ref
+    - keycloak_deployment_mode
+    - keycloak_realm_name
+    - mas_edge_enabled
+    - student_allow_shared_password
+    - fleet_max_concurrent_clusters
+
+  # Tags for selective execution
+  tags:
+    full: "Run all roles"
+    preflight: "Run config_validation and cluster_preflight only"
+    mas: "Run MAS prerequisite, core, and manage roles only"
+    logging: "Run logging_operator, loki_stack, and log_forwarding only"
+    identity: "Run identity_demo only"
+    student: "Run student_accounts only"
+    validate: "Run event_readiness only"

@@ -1,0 +1,142 @@
+---
+# Observability exercise – prepare
+# Verifies that logging infrastructure is ready for the student exercise.
+- name: Prepare observability exercise
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    seat_padded: "{{ '%02d' | format(seat_number | int) }}"
+    student_ns: "student-{{ seat_padded }}"
+    logging_ns: openshift-logging
+
+  tasks:
+    # ------------------------------------------------------------------
+    # 1. Check logging operator CSVs
+    # ------------------------------------------------------------------
+    - name: Check logging operator CSVs in {{ logging_ns }}
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        namespace: "{{ logging_ns }}"
+      register: csv_result
+      failed_when: false
+
+    - name: Evaluate CSV status
+      ansible.builtin.set_fact:
+        csv_ready: >-
+          {{ csv_result.resources | default([])
+             | selectattr('status.phase', 'defined')
+             | selectattr('status.phase', 'equalto', 'Succeeded')
+             | list | length > 0 }}
+
+    - name: Report CSV status
+      ansible.builtin.debug:
+        msg: >-
+          Logging operator CSVs: {{ 'READY' if csv_ready | bool else 'NOT READY – no Succeeded CSVs found in ' + logging_ns }}
+
+    # ------------------------------------------------------------------
+    # 2. Check LokiStack readiness
+    # ------------------------------------------------------------------
+    - name: Check LokiStack CR
+      kubernetes.core.k8s_info:
+        api_version: loki.grafana.com/v1
+        kind: LokiStack
+        namespace: "{{ logging_ns }}"
+      register: lokistack_result
+      failed_when: false
+
+    - name: Evaluate LokiStack status
+      ansible.builtin.set_fact:
+        lokistack_ready: >-
+          {{ lokistack_result.resources | default([])
+             | selectattr('status.conditions', 'defined')
+             | map(attribute='status.conditions') | flatten
+             | selectattr('type', 'equalto', 'Ready')
+             | selectattr('status', 'equalto', 'True')
+             | list | length > 0 }}
+
+    - name: Report LokiStack status
+      ansible.builtin.debug:
+        msg: >-
+          LokiStack: {{ 'READY' if lokistack_ready | bool else 'NOT READY' }}
+
+    # ------------------------------------------------------------------
+    # 3. Check ClusterLogForwarder readiness
+    # ------------------------------------------------------------------
+    - name: Check ClusterLogForwarder CR
+      kubernetes.core.k8s_info:
+        api_version: observability.openshift.io/v1
+        kind: ClusterLogForwarder
+        namespace: "{{ logging_ns }}"
+      register: clf_result
+      failed_when: false
+
+    - name: Evaluate ClusterLogForwarder status
+      ansible.builtin.set_fact:
+        clf_ready: >-
+          {{ clf_result.resources | default([])
+             | selectattr('status.conditions', 'defined')
+             | map(attribute='status.conditions') | flatten
+             | selectattr('type', 'equalto', 'Ready')
+             | selectattr('status', 'equalto', 'True')
+             | list | length > 0 }}
+
+    - name: Report ClusterLogForwarder status
+      ansible.builtin.debug:
+        msg: >-
+          ClusterLogForwarder: {{ 'READY' if clf_ready | bool else 'NOT READY' }}
+
+    # ------------------------------------------------------------------
+    # 4. Ensure student namespace exists
+    # ------------------------------------------------------------------
+    - name: Ensure student namespace exists
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ student_ns }}"
+        state: present
+      register: ns_result
+      failed_when: false
+
+    - name: Report namespace status
+      ansible.builtin.debug:
+        msg: >-
+          Student namespace {{ student_ns }}:
+          {{ 'EXISTS' if ns_result is not failed else 'FAILED TO CREATE – ' + (ns_result.msg | default('unknown error')) }}
+
+    # ------------------------------------------------------------------
+    # 5. Delete leftover test pod
+    # ------------------------------------------------------------------
+    - name: Delete leftover log-test pod if present
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Pod
+        name: "log-test-{{ seat_padded }}"
+        namespace: "{{ student_ns }}"
+        state: absent
+      register: pod_cleanup
+      failed_when: false
+
+    - name: Report pod cleanup
+      ansible.builtin.debug:
+        msg: >-
+          Leftover log-test-{{ seat_padded }} pod:
+          {{ 'cleaned up' if pod_cleanup.changed | default(false) else 'none found (clean)' }}
+
+    # ------------------------------------------------------------------
+    # 6. Summary
+    # ------------------------------------------------------------------
+    - name: Readiness summary
+      ansible.builtin.debug:
+        msg: |
+          ============================================================
+          OBSERVABILITY EXERCISE – READINESS STATUS (seat {{ seat_padded }})
+          ============================================================
+          Logging operator CSVs : {{ 'READY' if csv_ready | bool else 'NOT READY' }}
+          LokiStack             : {{ 'READY' if lokistack_ready | bool else 'NOT READY' }}
+          ClusterLogForwarder   : {{ 'READY' if clf_ready | bool else 'NOT READY' }}
+          Student namespace     : {{ student_ns }}
+          Leftover test pod     : {{ 'cleaned up' if pod_cleanup.changed | default(false) else 'none (clean)' }}
+          ============================================================

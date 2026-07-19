@@ -1,0 +1,36 @@
+---
+# MAS World 2026 -- Event Environment Overrides
+#
+# Full production configuration for the live event on 2026-08-17.
+# All security controls enforced. No shared passwords. No relaxed counts.
+
+# ---------------------------------------------------------------------------
+# Fleet sizing -- 50 attendee + 5 spare + 1 facilitator
+# ---------------------------------------------------------------------------
+fleet_attendee_count: 50
+fleet_spare_count: 5
+fleet_facilitator_count: 1
+fleet_require_exact_counts: true
+
+# Orchestration -- controlled concurrency to avoid API saturation
+fleet_max_concurrent_clusters: 5
+
+# ---------------------------------------------------------------------------
+# Student credentials -- strict security
+# ---------------------------------------------------------------------------
+student_allow_shared_password: false
+student_rotate_before_event: true
+student_expire_after_event: true
+
+# ---------------------------------------------------------------------------
+# Secret provider -- AWS Secrets Manager
+# ---------------------------------------------------------------------------
+secret_provider: aws-sm
+secret_provider_config:
+  aws_region: us-east-2
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logging_log_level: info
+logging_structured: true

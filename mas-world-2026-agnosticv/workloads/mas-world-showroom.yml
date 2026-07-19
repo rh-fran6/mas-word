@@ -1,0 +1,87 @@
+---
+# MAS World 2026 -- Showroom Deployment Workload
+#
+# Deploys and parameterizes the Showroom workshop interface for a
+# single attendee cluster. This workload runs after the main
+# post-provision workload has completed.
+#
+# Showroom is deployed using the RHDP Showroom Helm chart.
+# All URLs and credentials are parameterized per seat.
+
+workload:
+  name: mas-world-showroom
+  display_name: "MAS World 2026 Showroom"
+  description: >-
+    Deploy and configure the Showroom workshop interface for a
+    single attendee seat. Populates all tabs, terminal credentials,
+    and environment-specific URLs.
+  version: "1.0.0"
+  idempotent: true
+  resume_on_failure: true
+
+  collection:
+    namespace: masworld
+    name: automation
+    version: "0.1.0"
+    source: "https://github.com/rhpds/mas-world-2026.git"
+    requirements_file: requirements.yml
+
+  roles:
+    - name: showroom
+      description: "Deploy Showroom via Helm and configure per-seat parameters"
+      required: true
+      skip_on_rerun: false
+      timeout_minutes: 15
+
+  required_variables:
+    - seat_number
+    - cluster_api_url
+    - student_username_template
+    - student_password_secret_ref_template
+    - showroom_template
+    - showroom_theme_version
+    - showroom_title
+    - showroom_content_repo
+    - showroom_content_ref
+
+  optional_variables:
+    - showroom_enabled
+
+  # Showroom-specific parameters passed to the Helm chart
+  showroom_parameters:
+    # Content source
+    content_repo: "{{ showroom_content_repo }}"
+    content_ref: "{{ showroom_content_ref }}"
+
+    # Display
+    title: "{{ showroom_title }}"
+    template: "{{ showroom_template }}"
+
+    # Per-seat environment variables injected into Showroom
+    # These populate %variable% references in AsciiDoc content
+    user_data:
+      seat_number: "{{ seat_number }}"
+      student_username: "{{ _student_username }}"
+      student_password: "{{ _student_password_ref }}"
+      openshift_console_url: "{{ _cluster_console_url }}"
+      openshift_api_url: "{{ cluster_api_url }}"
+      mas_url: "{{ _cluster_mas_url }}"
+      logging_url: "{{ _cluster_logging_url }}"
+      event_id: "{{ event_id }}"
+      event_name: "{{ event_name }}"
+
+    # Tab configuration
+    tabs:
+      - title: Workshop
+        type: showroom
+      - title: Terminal
+        type: terminal
+      - title: OpenShift Console
+        type: url
+        url: "{{ _cluster_console_url }}"
+      - title: Maximo
+        type: url
+        url: "{{ _cluster_mas_url }}"
+      - title: Reference
+        type: url
+        url: "https://github.com/rhpds/mas-world-2026-public-content"

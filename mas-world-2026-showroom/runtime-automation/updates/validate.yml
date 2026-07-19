@@ -1,0 +1,95 @@
+---
+# Updates exercise validation — checks cluster version, CSVs, subscriptions, history
+- name: Validate updates exercise
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    seat: "{{ '%02d' | format(seat_number | int) }}"
+    mas_core_ns: mas-inst1-core
+    results: []
+
+  tasks:
+    # ------------------------------------------------------------------
+    # 1. ClusterVersion exists and has desired version
+    # ------------------------------------------------------------------
+    - name: Get ClusterVersion
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: ClusterVersion
+        name: version
+      register: cluster_version
+      failed_when: false
+
+    - name: Evaluate ClusterVersion desired version
+      ansible.builtin.set_fact:
+        cv_has_desired: >-
+          {{
+            (cluster_version.resources | default([]) | length > 0) and
+            (cluster_version.resources[0].status.desired.version | default('') | length > 0)
+          }}
+
+    - name: Record ClusterVersion result
+      ansible.builtin.set_fact:
+        results: "{{ results + [{'check': 'ClusterVersion has desired version', 'status': cv_has_desired | bool | ternary('PASS', 'FAIL')}] }}"
+
+    # ------------------------------------------------------------------
+    # 2. At least one CSV in mas-inst1-core
+    # ------------------------------------------------------------------
+    - name: Get CSVs in MAS core namespace
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        namespace: "{{ mas_core_ns }}"
+      register: core_csvs
+      failed_when: false
+
+    - name: Record CSV result
+      ansible.builtin.set_fact:
+        results: "{{ results + [{'check': 'CSV(s) exist in ' + mas_core_ns, 'status': ((core_csvs.resources | default([])) | length > 0) | ternary('PASS', 'FAIL')}] }}"
+
+    # ------------------------------------------------------------------
+    # 3. At least one Subscription in mas-inst1-core
+    # ------------------------------------------------------------------
+    - name: Get Subscriptions in MAS core namespace
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        namespace: "{{ mas_core_ns }}"
+      register: core_subs
+      failed_when: false
+
+    - name: Record Subscription result
+      ansible.builtin.set_fact:
+        results: "{{ results + [{'check': 'Subscription(s) exist in ' + mas_core_ns, 'status': ((core_subs.resources | default([])) | length > 0) | ternary('PASS', 'FAIL')}] }}"
+
+    # ------------------------------------------------------------------
+    # 4. ClusterVersion has update history
+    # ------------------------------------------------------------------
+    - name: Evaluate update history
+      ansible.builtin.set_fact:
+        has_history: >-
+          {{
+            (cluster_version.resources | default([]) | length > 0) and
+            (cluster_version.resources[0].status.history | default([]) | length > 0)
+          }}
+
+    - name: Record update history result
+      ansible.builtin.set_fact:
+        results: "{{ results + [{'check': 'ClusterVersion has update history', 'status': has_history | bool | ternary('PASS', 'FAIL')}] }}"
+
+    # ------------------------------------------------------------------
+    # Summary
+    # ------------------------------------------------------------------
+    - name: Display validation results
+      ansible.builtin.debug:
+        msg: |
+          ============================================================
+           Updates Exercise — Validation Results
+           Seat: {{ seat }}
+          ============================================================
+          {% for r in results %}
+           {{ '%-45s' | format(r.check) }}  {{ r.status }}
+          {% endfor %}
+          ============================================================

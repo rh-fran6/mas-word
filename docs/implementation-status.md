@@ -20,10 +20,11 @@ Use these status values:
 | 1 | Skeleton | COMPLETE | pyproject.toml, ansible.cfg, galaxy.yml, requirements.yml, CLI framework, config schema, secret providers, tests, Makefile |
 | 2 | Showroom Content | COMPLETE | Workshop content (manual fallback), verification pending via /showroom:verify-content |
 | 3 | Ansible Roles | COMPLETE | 17 role task files, 10 playbooks, 6 ACM manifests |
-| 4 | Integration | NOT STARTED | End-to-end playbook, Makefile, CI/CD |
-| 5 | Testing | NOT STARTED | Rehearsal dry-run, timing validation |
-| 6 | Hardening | NOT STARTED | Security review, credential rotation, backup |
-| 7 | Event Prep | NOT STARTED | Final validation, facilitator runbook |
+| 4 | Operations & AgnosticV | COMPLETE | Runbooks, checklists, repair procedures, AgnosticV catalog |
+| 5 | Integration | NOT STARTED | End-to-end playbook, CI/CD |
+| 6 | Testing | NOT STARTED | Rehearsal dry-run, timing validation |
+| 7 | Hardening | NOT STARTED | Security review, credential rotation, backup |
+| 8 | Event Prep | NOT STARTED | Final validation, facilitator runbook |
 
 ## Phase 0: Discovery — COMPLETE
 
@@ -50,7 +51,7 @@ Use these status values:
 | Galaxy collection | `galaxy.yml` | Done |
 | Galaxy requirements | `requirements.yml` | Done |
 | CLI entry point | `cli/main.py` | Done |
-| CLI command groups | `cli/commands/*.py` | Done (7 groups, stubs) |
+| CLI command groups | `cli/commands/*.py` | IMPLEMENTED_NOT_TESTED (7 groups, 2,234 lines) |
 | Config schema (Pydantic) | `cli/config/schema.py` | Done |
 | Config loader | `cli/config/loader.py` | Done |
 | Config validator | `cli/config/validator.py` | Done |
@@ -66,6 +67,10 @@ Use these status values:
 | ACM manifests | `acm/` | Done (5 manifests + label schema doc) |
 | Makefile | `Makefile` | SCAFFOLDED |
 | .gitignore | `.gitignore` | IMPLEMENTED_NOT_TESTED |
+| Pre-commit hooks | `.pre-commit-config.yaml` | IMPLEMENTED_NOT_TESTED |
+| YAML lint config | `.yamllint.yml` | IMPLEMENTED_NOT_TESTED |
+| Ansible lint config | `.ansible-lint.yml` | IMPLEMENTED_NOT_TESTED |
+| Gitleaks config | `.gitleaks.toml` | IMPLEMENTED_NOT_TESTED |
 
 ## Phase 2: Showroom Content — COMPLETE
 
@@ -85,7 +90,7 @@ Use these status values:
 | Production Architecture | `showroom/.../pages/07-production-architecture.adoc` | Done |
 | Troubleshooting | `showroom/.../pages/08-troubleshooting.adoc` | Done |
 | Conclusion | `showroom/.../pages/99-conclusion.adoc` | Done |
-| Runtime automation dirs | `showroom/runtime-automation/*/` | Done (6 dirs) |
+| Runtime automation dirs | `showroom/runtime-automation/*/` | SCAFFOLDED (17 playbooks across 6 modules) |
 | Skill creation | via `/showroom:create-lab` | MANUAL_FALLBACK (no standalone repo) |
 | Skill verification | via `/showroom:verify-content` | Done (0 Critical, 0 High, 2 Warning) |
 
@@ -116,3 +121,30 @@ Use these status values:
 | ACM baseline policy | `acm/policy-mas-world-baseline.yml` | Done |
 | ACM drift policy | `acm/policy-demo-drift.yml` | Done |
 | ACM label schema | `acm/managedcluster-labels.yml` | Done |
+
+## Phase 4: Operations & AgnosticV — COMPLETE
+
+| Deliverable | File/Directory | Status |
+|-------------|---------------|--------|
+| Pre-event runbook | `operations/runbooks/pre-event.md` | IMPLEMENTED_NOT_TESTED |
+| Event morning runbook | `operations/runbooks/event-morning.md` | IMPLEMENTED_NOT_TESTED |
+| During-event runbook | `operations/runbooks/during-event.md` | IMPLEMENTED_NOT_TESTED |
+| Post-event runbook | `operations/runbooks/post-event.md` | IMPLEMENTED_NOT_TESTED |
+| Pre-event checklist | `operations/checklists/pre-event-checklist.md` | IMPLEMENTED_NOT_TESTED |
+| Event morning checklist | `operations/checklists/event-morning-checklist.md` | IMPLEMENTED_NOT_TESTED |
+| Event day checklist | `operations/checklists/event-day-checklist.md` | IMPLEMENTED_NOT_TESTED |
+| Cluster repair procedures | `operations/repair-procedures/cluster-repair.md` | IMPLEMENTED_NOT_TESTED |
+| Spare replacement procedure | `operations/repair-procedures/spare-replacement.md` | IMPLEMENTED_NOT_TESTED |
+| Incident report template | `operations/incident-templates/incident-report.md` | IMPLEMENTED_NOT_TESTED |
+| Seat assignment guide | `operations/seat-assignment/seat-assignment-guide.md` | IMPLEMENTED_NOT_TESTED |
+| Dashboard guide | `operations/fleet-dashboard/dashboard-guide.md` | IMPLEMENTED_NOT_TESTED |
+| Cost report template | `operations/cost-reporting/cost-report-template.md` | IMPLEMENTED_NOT_TESTED |
+| AgnosticV catalog (event) | `agnosticv/catalog/mas-world-2026-workshop.yml` | SCAFFOLDED (MANUAL_FALLBACK) |
+| AgnosticV catalog (dev) | `agnosticv/catalog/mas-world-2026-dev.yml` | SCAFFOLDED (MANUAL_FALLBACK) |
+| AgnosticV catalog (rehearsal) | `agnosticv/catalog/mas-world-2026-rehearsal.yml` | SCAFFOLDED (MANUAL_FALLBACK) |
+| AgnosticV common vars | `agnosticv/vars/common.yml` | SCAFFOLDED |
+| AgnosticV env vars | `agnosticv/vars/{development,rehearsal,event}.yml` | SCAFFOLDED |
+| AgnosticV workloads | `agnosticv/workloads/*.yml` | SCAFFOLDED (3 workloads) |
+| AgnosticV access data | `agnosticv/access-data/*.yml` | SCAFFOLDED |
+| AgnosticV schema | `agnosticv/schemas/catalog-schema.yml` | SCAFFOLDED (85 variables) |
+| RHDP integration docs | `agnosticv/docs/*.md` | IMPLEMENTED_NOT_TESTED |

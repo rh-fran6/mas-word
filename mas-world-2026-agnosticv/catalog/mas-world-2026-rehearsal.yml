@@ -1,0 +1,114 @@
+---
+# MAS World 2026 Workshop -- Rehearsal Variant
+#
+# Status: MANUAL_FALLBACK_SKILL_UNAVAILABLE
+#
+# Rehearsal variant with a small fleet (5 attendee + 1 spare + 1 facilitator).
+# Uses the same code and workloads as event, with reduced scale.
+# Secret provider uses AWS Secrets Manager as in event.
+
+catalog_item:
+  name: mas-world-2026-rehearsal
+  display_name: "MAS World 2026 Workshop (Rehearsal)"
+  description: >-
+    Rehearsal variant of the MAS World 2026 workshop.
+    Small fleet of 5 attendee clusters plus spare and facilitator
+    for end-to-end validation before the event.
+  category: Workshops
+  provider: Red Hat
+  icon: openshift
+  tags:
+    - maximo
+    - openshift
+    - workshop
+    - mas-world-2026
+    - rehearsal
+  version: "1.0.0"
+  maintainers:
+    - name: Francis Anyaegbu
+      email: fanyaegb@redhat.com
+
+  lifecycle:
+    default_runtime_hours: 12
+    maximum_runtime_hours: 48
+    allow_extension: true
+
+  platform:
+    type: existing
+    provider: aws
+    ocp_version_min: "4.18"
+    ocp_version_max: "4.22"
+    architecture: amd64
+    minimum_workers: 3
+    minimum_worker_vcpu: 16
+    minimum_worker_memory_gi: 64
+
+  # Variable includes -- rehearsal overrides applied last
+  includes:
+    - ../vars/common.yml
+    - ../vars/rehearsal.yml
+
+  parameters:
+    - name: seat_number
+      display_name: "Seat Number"
+      description: "Attendee seat number (1-5)"
+      type: integer
+      required: true
+      min: 1
+      max: 10
+
+    - name: cluster_api_url
+      display_name: "Cluster API URL"
+      description: "OpenShift API URL for the pre-provisioned cluster"
+      type: string
+      required: true
+      validation: "^https://api\\..+:\\d+$"
+
+    - name: cluster_admin_secret_ref
+      display_name: "Admin Credential Reference"
+      description: "Secret reference for cluster administrative credentials"
+      type: string
+      required: true
+      secret: true
+      validation: "^secret://[\\w-]+/[\\w-]+(/[\\w-]+)*$"
+
+    - name: environment
+      display_name: "Environment"
+      description: "Fixed to rehearsal"
+      type: string
+      required: false
+      default: rehearsal
+      enum:
+        - rehearsal
+
+  # Rehearsal overrides
+  variable_overrides:
+    fleet_attendee_count: 5
+    fleet_spare_count: 1
+    fleet_facilitator_count: 1
+    fleet_require_exact_counts: true
+    fleet_max_concurrent_clusters: 3
+
+  agnosticd_workloads:
+    - name: mas-world-post-provision
+      src: ../workloads/mas-world-post-provision.yml
+      description: "Full post-provisioning configuration"
+
+    - name: mas-world-showroom
+      src: ../workloads/mas-world-showroom.yml
+      description: "Showroom deployment and parameterization"
+
+  agnosticd_teardown:
+    - name: mas-world-teardown
+      src: ../workloads/mas-world-teardown.yml
+      description: "Environment teardown and credential revocation"
+
+  agnosticd_user_info:
+    src: ../access-data/user-info-template.yml
+
+  credentials:
+    ibm_entitlement_key_ref: "secret://mas-world/ibm/entitlement-key"
+    ibm_license_ref: "secret://mas-world/ibm/license"
+    aws_credentials_ref: "secret://mas-world/aws/credentials"
+    acm_hub_kubeconfig_ref: "secret://mas-world/acm/hub-kubeconfig"
+    container_registry_pull_secret_ref: "secret://mas-world/registry/pull-secret"

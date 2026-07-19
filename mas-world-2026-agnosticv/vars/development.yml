@@ -1,0 +1,35 @@
+---
+# MAS World 2026 -- Development Environment Overrides
+#
+# Single-cluster configuration for iterating on automation and content.
+# Overrides common.yml defaults.
+#
+# WARNING: Shared student passwords are ENABLED for development convenience.
+# This configuration must NEVER be used for the live event.
+
+# ---------------------------------------------------------------------------
+# Fleet sizing -- minimal
+# ---------------------------------------------------------------------------
+fleet_attendee_count: 1
+fleet_spare_count: 0
+fleet_facilitator_count: 1
+fleet_require_exact_counts: false
+
+# Orchestration -- sequential, no concurrency needed
+fleet_max_concurrent_clusters: 1
+
+# ---------------------------------------------------------------------------
+# Student credentials -- relaxed for development
+# ---------------------------------------------------------------------------
+student_allow_shared_password: true
+
+# ---------------------------------------------------------------------------
+# Secret provider -- environment variables for local development
+# ---------------------------------------------------------------------------
+secret_provider: env
+secret_provider_config: {}
+
+# ---------------------------------------------------------------------------
+# Logging -- verbose for debugging
+# ---------------------------------------------------------------------------
+logging_log_level: debug

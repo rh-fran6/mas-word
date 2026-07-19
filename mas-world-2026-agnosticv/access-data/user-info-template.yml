@@ -1,0 +1,61 @@
+---
+# MAS World 2026 -- User Info Template
+#
+# Defines the agnosticd_user_info.data structure returned to RHDP
+# after a successful deployment. RHDP uses this data to populate
+# the user's service catalog order page and generate access
+# information.
+#
+# Variables prefixed with _ are computed by the automation roles
+# at deployment time. They are NOT defined in vars/ files.
+#
+# No actual credentials are stored here. Password values are
+# resolved from the secret provider at deployment time.
+
+agnosticd_user_info:
+  data:
+    # Attendee identification
+    seat_number: "{{ seat_number }}"
+    event_id: "{{ event_id }}"
+    event_name: "{{ event_name }}"
+
+    # Workshop access
+    showroom_url: "{{ _cluster_showroom_url }}"
+
+    # OpenShift access
+    openshift_console_url: "{{ _cluster_console_url }}"
+    openshift_api_url: "{{ cluster_api_url }}"
+
+    # Maximo access
+    mas_url: "{{ _cluster_mas_url }}"
+
+    # Student credentials
+    student_username: "{{ _student_username }}"
+    # Password is resolved from the secret provider at runtime.
+    # The actual value is injected here -- it is NOT a secret:// URI
+    # when returned to the user.
+    student_password: "{{ _student_password }}"
+
+    # Logging interface
+    logging_url: "{{ _cluster_logging_url }}"
+
+    # Cluster metadata (non-sensitive)
+    cluster_id: "{{ _cluster_id }}"
+    cluster_purpose: "{{ _cluster_purpose }}"
+    environment: "{{ environment | default('event') }}"
+
+    # Support information
+    support_contact: "Raise your hand or visit the support desk"
+
+  # Message displayed to the user in the RHDP service catalog
+  messages:
+    - >-
+      Your MAS World 2026 workshop environment is ready.
+    - >-
+      Open the Showroom URL to begin the workshop.
+    - >-
+      Your seat number is {{ seat_number }}.
+    - >-
+      Username: {{ _student_username }}
+    - >-
+      Use the password provided on your access card.

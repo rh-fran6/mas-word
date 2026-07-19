@@ -1,19 +1,11 @@
 ---
-- name: "Validate cluster {{ cluster.id }}"
-  block:
-    - name: Run readiness checks for {{ cluster.id }}
-      ansible.builtin.include_role:
-        name: event_readiness
-      vars:
-        masworld_cluster_id: "{{ cluster.id }}"
+- name: Run readiness checks for {{ cluster.id }}
+  ansible.builtin.include_role:
+    name: event_readiness
+  vars:
+    masworld_cluster_id: "{{ cluster.id }}"
 
-    - name: Record validation result for {{ cluster.id }}
-      ansible.builtin.set_fact:
-        masworld_validation_results: >-
-          {{ masworld_validation_results | default([]) + [{'cluster_id': cluster.id, 'readiness': readiness_result | default('UNKNOWN')}] }}
-
-  rescue:
-    - name: Record validation failure for {{ cluster.id }}
-      ansible.builtin.set_fact:
-        masworld_validation_results: >-
-          {{ masworld_validation_results | default([]) + [{'cluster_id': cluster.id, 'readiness': 'FAILED', 'error': ansible_failed_result.msg | default('unknown')}] }}
+- name: Record validation result for {{ cluster.id }}
+  ansible.builtin.set_fact:
+    masworld_validation_results: >-
+      {{ masworld_validation_results | default([]) + [{'cluster_id': cluster.id, 'readiness': readiness_result | default('UNKNOWN')}] }}

@@ -1,0 +1,106 @@
+---
+# Navigation exercise solver — runs the exercise commands and displays results
+- name: Solve navigation exercise
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    seat: "{{ '%02d' | format(seat_number | int) }}"
+    mas_core_ns: mas-inst1-core
+    mas_manage_ns: mas-inst1-manage
+
+  tasks:
+    # ------------------------------------------------------------------
+    # 1. List MAS namespaces
+    # ------------------------------------------------------------------
+    - name: List all namespaces containing 'mas'
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+      register: all_ns
+      failed_when: false
+
+    - name: Display MAS namespaces
+      ansible.builtin.debug:
+        msg: |
+          === MAS Namespaces ===
+          {% for ns in (all_ns.resources | default([]) | map(attribute='metadata.name') | select('match', '.*mas.*') | list) %}
+           - {{ ns }}
+          {% endfor %}
+          {% if (all_ns.resources | default([]) | map(attribute='metadata.name') | select('match', '.*mas.*') | list | length) == 0 %}
+           (none found)
+          {% endif %}
+
+    # ------------------------------------------------------------------
+    # 2. Show Suite CR status
+    # ------------------------------------------------------------------
+    - name: Get Suite CR
+      kubernetes.core.k8s_info:
+        api_version: core.mas.ibm.com/v1
+        kind: Suite
+        namespace: "{{ mas_core_ns }}"
+      register: suite_cr
+      failed_when: false
+
+    - name: Display Suite CR status
+      ansible.builtin.debug:
+        msg: |
+          === Suite CR Status ===
+          {% if (suite_cr.resources | default([]) | length) > 0 %}
+          Name:    {{ suite_cr.resources[0].metadata.name }}
+          Phase:   {{ suite_cr.resources[0].status.phase | default('unknown') }}
+          Conditions:
+          {% for c in (suite_cr.resources[0].status.conditions | default([])) %}
+           - {{ c.type }}: {{ c.status }} {% if c.message is defined %}({{ c.message }}){% endif %}
+          {% endfor %}
+          {% else %}
+           Suite CR not found in {{ mas_core_ns }}
+          {% endif %}
+
+    # ------------------------------------------------------------------
+    # 3. List CSVs in mas-inst1-core
+    # ------------------------------------------------------------------
+    - name: Get CSVs in MAS core namespace
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        namespace: "{{ mas_core_ns }}"
+      register: core_csvs
+      failed_when: false
+
+    - name: Display CSVs
+      ansible.builtin.debug:
+        msg: |
+          === ClusterServiceVersions in {{ mas_core_ns }} ===
+          {% for csv in (core_csvs.resources | default([])) %}
+           - {{ csv.metadata.name }}  ({{ csv.status.phase | default('unknown') }})
+          {% endfor %}
+          {% if (core_csvs.resources | default([]) | length) == 0 %}
+           (none found)
+          {% endif %}
+
+    # ------------------------------------------------------------------
+    # 4. List pods in mas-inst1-core (first 10)
+    # ------------------------------------------------------------------
+    - name: Get pods in MAS core namespace
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ mas_core_ns }}"
+      register: core_pods
+      failed_when: false
+
+    - name: Display first 10 pods
+      ansible.builtin.debug:
+        msg: |
+          === Pods in {{ mas_core_ns }} (first 10) ===
+          {% for pod in (core_pods.resources | default([]))[:10] %}
+           - {{ '%-50s' | format(pod.metadata.name) }}  {{ pod.status.phase | default('unknown') }}
+          {% endfor %}
+          {% if (core_pods.resources | default([]) | length) == 0 %}
+           (none found)
+          {% endif %}
+          {% if (core_pods.resources | default([]) | length) > 10 %}
+           ... and {{ (core_pods.resources | length) - 10 }} more
+          {% endif %}

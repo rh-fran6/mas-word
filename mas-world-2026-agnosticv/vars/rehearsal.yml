@@ -1,0 +1,28 @@
+---
+# MAS World 2026 -- Rehearsal Environment Overrides
+#
+# Small fleet for end-to-end validation before the event.
+# Uses the same secret provider and security posture as event.
+
+# ---------------------------------------------------------------------------
+# Fleet sizing -- 5 attendee + 1 spare + 1 facilitator
+# ---------------------------------------------------------------------------
+fleet_attendee_count: 5
+fleet_spare_count: 1
+fleet_facilitator_count: 1
+fleet_require_exact_counts: true
+
+# Orchestration -- moderate concurrency
+fleet_max_concurrent_clusters: 3
+
+# ---------------------------------------------------------------------------
+# Secret provider -- AWS Secrets Manager (same as event)
+# ---------------------------------------------------------------------------
+secret_provider: aws-sm
+secret_provider_config:
+  aws_region: us-east-2
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logging_log_level: info

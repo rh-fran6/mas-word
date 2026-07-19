@@ -1,0 +1,65 @@
+---
+# MAS World 2026 -- Access Card Template
+#
+# Defines the per-seat access card content generated for each attendee.
+# Access cards are distributed physically or digitally at the event.
+#
+# This template is consumed by the seat assignment tooling in
+# mas-world-2026-operations/ to produce individual access cards.
+#
+# SECURITY: Access cards contain ONLY the information needed by one
+# attendee. They must NOT include:
+#   - Cluster-admin credentials
+#   - ACM credentials
+#   - AWS credentials
+#   - IBM entitlement keys
+#   - Other attendee assignments
+#   - Secret provider paths
+#   - Internal operational metadata
+
+access_card:
+  # Card metadata
+  event_name: "{{ event_name }}"
+  event_date: "{{ event_date }}"
+  seat_number: "{{ seat_number }}"
+
+  # Primary access point
+  workshop_url:
+    label: "Workshop (Showroom)"
+    value: "{{ _cluster_showroom_url }}"
+    instructions: "Open this URL in your browser to begin the workshop."
+
+  # Additional interfaces
+  openshift_console:
+    label: "OpenShift Console"
+    value: "{{ _cluster_console_url }}"
+    instructions: "Use your student credentials to log in."
+
+  maximo:
+    label: "Maximo Application Suite"
+    value: "{{ _cluster_mas_url }}"
+    instructions: "Access Maximo using the credentials below."
+
+  # Student credentials
+  credentials:
+    username:
+      label: "Username"
+      value: "{{ _student_username }}"
+    password:
+      label: "Password"
+      value: "{{ _student_password }}"
+      sensitive: true
+
+  # Support
+  support:
+    instructions: >-
+      If you need help during the workshop, raise your hand and a
+      facilitator will assist you. You can also visit the support desk.
+
+  # Export formats supported by the operations tooling
+  export_formats:
+    - pdf
+    - html
+    - json
+    - csv
+    - qr_code

@@ -8,14 +8,23 @@ Last updated: 2026-07-19
 
 - Monorepo at `maximo-world/` with 6 logical subdirectories
 - `.gitignore` at monorepo root covering credentials, Python artifacts, IDE, OS, Ansible retry, generated reports
-- No git repository initialized yet (no `.git/`)
+- Git repository initialized (`.git/` exists)
+- Pre-commit hooks configured: `.pre-commit-config.yaml` (gitleaks, yamllint, ansible-lint, ruff, shellcheck, pre-commit-hooks)
+- Linter configs: `.yamllint.yml`, `.ansible-lint.yml`, `.gitleaks.toml`
 
 ## Automation
 
 - `mas-world-2026-automation/` contains:
   - `ansible.cfg`, `galaxy.yml`, `requirements.yml`, `pyproject.toml`, `Makefile`
   - 7 config YAML files + 3 environment configs (development, rehearsal, event)
-  - CLI framework: `cli/main.py` + 7 command group stubs (Click-based)
+  - CLI framework: `cli/main.py` + 7 fully implemented command groups (Click-based, 2,234 lines):
+    - `config` — validate, render, diff (was already implemented)
+    - `seats` — assign, replace, unassign, show, export-map (YAML-backed assignments)
+    - `cluster` — prepare, validate, repair (ansible-playbook dispatch, dry-run support)
+    - `fleet` — prepare (ThreadPoolExecutor parallel), validate (aggregated reports)
+    - `students` — create (crypto-secure `secrets` module), rotate, disable, delete, validate, export-cards (HTML/JSON)
+    - `exercises` — reset (runtime-automation playbook dispatch)
+    - `reports` — fleet-status (dashboard), seat-report (comprehensive seat map)
   - Config schema (Pydantic v2): `cli/config/schema.py`, loader, validator
   - Secret provider abstraction: 4 backends (env, k8s, aws-sm, vault) with `secret://` URI scheme
   - Filter plugins: `plugins/filter/masworld.py`
@@ -71,18 +80,53 @@ Last updated: 2026-07-19
   - `content/antora.yml` with ocp_version, mas_version attributes
   - `content/modules/ROOT/nav.adoc` — 10 navigation entries
   - 10 content pages: index, 01-access-readiness, 02-navigation-search, 03-acm-fleet-management, 04-updates, 05-observability, 06-identity (with LDAP sync + OIDC exercises), 07-production-architecture, 08-troubleshooting, 99-conclusion
-  - Runtime automation directories: readiness, navigation, acm, updates, observability, identity (empty, awaiting implementation)
+  - Runtime automation: 17 playbooks across 6 modules:
+    - `readiness/validate.yml` — 14-category infrastructure check
+    - `navigation/{prepare,validate,solve}.yml` — MAS namespace/CR exploration
+    - `acm/validate.yml` — event marker ConfigMap check
+    - `updates/{prepare,validate,solve,reset}.yml` — version/channel inspection
+    - `observability/{prepare,validate,solve,reset}.yml` — log-test pod lifecycle + Loki queries
+    - `identity/{prepare,validate,solve,reset}.yml` — Keycloak/LDAP/OIDC/RBAC chain
+  - `requirements.txt` (kubernetes Python package) and `packages.txt` (openldap-clients)
   - Partials directory (empty)
 - Also mirrored in `mas-world-2026-automation/showroom/`
 - `roles/showroom/` — Helm-based deployment (showroom-single-pod), cluster-specific userVariables
 - Showroom verify-content result: 0 Critical, 0 High, 2 Warning (intentional naming deviations)
-- Status: SCAFFOLDED — content written, runtime automation not yet implemented
+- Status: SCAFFOLDED — content and runtime automation written, not tested on live cluster
 
 ## Student Access
 
 - `roles/student_accounts/` — per-seat password generation, htpasswd, OAuth, namespace, RBAC
 - `roles/sample_workloads/` — log-generator pod, navigation exercise, exercise ConfigMaps
+- CLI: `masworld student create/rotate/disable/delete/validate/export-cards` — fully implemented
+- CLI: `masworld seat assign/replace/unassign/show/export-map` — fully implemented with YAML-backed assignments
 - Status: SCAFFOLDED — requires live cluster
+
+## Operations
+
+- `mas-world-2026-operations/` contains 13 files:
+  - `runbooks/`: pre-event.md, event-morning.md, during-event.md, post-event.md
+  - `checklists/`: pre-event-checklist.md, event-morning-checklist.md, event-day-checklist.md
+  - `repair-procedures/`: cluster-repair.md, spare-replacement.md
+  - `incident-templates/`: incident-report.md
+  - `seat-assignment/`: seat-assignment-guide.md
+  - `fleet-dashboard/`: dashboard-guide.md
+  - `cost-reporting/`: cost-report-template.md
+- All runbooks reference `masworld` CLI commands, include timing estimates, escalation procedures
+- Status: IMPLEMENTED_NOT_TESTED — content written, not exercised against live environment
+
+## AgnosticV Catalog
+
+- `mas-world-2026-agnosticv/` contains 16 files:
+  - `catalog/`: 3 catalog items (event, development, rehearsal)
+  - `vars/`: common.yml (81 shared defaults) + 3 environment overrides
+  - `workloads/`: post-provision (14 roles), showroom, teardown
+  - `access-data/`: user-info-template, access-card-template
+  - `schemas/`: catalog-schema.yml (85 variable definitions)
+  - `docs/`: rhdp-integration-model.md, existing-cluster-workflow.md
+- All marked MANUAL_FALLBACK_SKILL_UNAVAILABLE (catalog-builder skill does not support existing-cluster model)
+- All pinned versions consistent with automation config
+- Status: SCAFFOLDED — requires RHDP platform team integration
 
 ## Testing
 
@@ -94,16 +138,9 @@ Last updated: 2026-07-19
 
 ## Known Gaps
 
-- No `git init` — repository not initialized
-- Runtime automation playbooks (solve, validate, reset per module) not implemented
-- AgnosticV catalog not created (conditional on RHDP delivery model)
-- CI/CD pipelines not implemented
 - No live cluster testing — all roles are SCAFFOLDED
-- Seat assignment tooling (CLI commands) are stubs only
-- Access card generation not implemented
-- Fleet dashboard/reporting not implemented
-- Operational runbooks not created
-- Public content repository empty
-- Operations repository empty
-- Pre-commit hooks and secret scanning not configured
+- CI/CD pipelines not implemented
+- Public content repository (`mas-world-2026-public-content/`) empty
 - Molecule test scenarios not created
+- Pre-commit hooks configured but `pre-commit install` not run (requires user action)
+- AgnosticV catalog requires RHDP platform team review for existing-cluster integration

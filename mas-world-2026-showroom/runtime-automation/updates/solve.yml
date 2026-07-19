@@ -1,0 +1,131 @@
+---
+# Updates exercise solver — runs and displays cluster version, operators, channels, history
+- name: Solve updates exercise
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    seat: "{{ '%02d' | format(seat_number | int) }}"
+    mas_core_ns: mas-inst1-core
+
+  tasks:
+    # ------------------------------------------------------------------
+    # 1. Current cluster version
+    # ------------------------------------------------------------------
+    - name: Get ClusterVersion
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: ClusterVersion
+        name: version
+      register: cluster_version
+      failed_when: false
+
+    - name: Display current cluster version
+      ansible.builtin.debug:
+        msg: |
+          === Current Cluster Version ===
+          {% if (cluster_version.resources | default([]) | length) > 0 %}
+          Desired version: {{ cluster_version.resources[0].status.desired.version | default('unknown') }}
+          Channel:         {{ cluster_version.resources[0].spec.channel | default('unknown') }}
+          Cluster ID:      {{ cluster_version.resources[0].spec.clusterID | default('unknown') }}
+          {% else %}
+          ClusterVersion resource not found.
+          {% endif %}
+
+    # ------------------------------------------------------------------
+    # 2. MAS operator CSVs and their versions
+    # ------------------------------------------------------------------
+    - name: Get CSVs in MAS core namespace
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        namespace: "{{ mas_core_ns }}"
+      register: core_csvs
+      failed_when: false
+
+    - name: Display MAS operator CSVs
+      ansible.builtin.debug:
+        msg: |
+          === MAS Operator CSVs in {{ mas_core_ns }} ===
+          {% for csv in (core_csvs.resources | default([])) %}
+           - {{ csv.metadata.name }}
+             Version: {{ csv.spec.version | default('unknown') }}
+             Phase:   {{ csv.status.phase | default('unknown') }}
+          {% endfor %}
+          {% if (core_csvs.resources | default([]) | length) == 0 %}
+           (none found)
+          {% endif %}
+
+    # ------------------------------------------------------------------
+    # 3. Subscription channels
+    # ------------------------------------------------------------------
+    - name: Get Subscriptions in MAS core namespace
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        namespace: "{{ mas_core_ns }}"
+      register: core_subs
+      failed_when: false
+
+    - name: Display subscription channels
+      ansible.builtin.debug:
+        msg: |
+          === Subscriptions in {{ mas_core_ns }} ===
+          {% for sub in (core_subs.resources | default([])) %}
+           - {{ sub.metadata.name }}
+             Channel:     {{ sub.spec.channel | default('unknown') }}
+             Source:      {{ sub.spec.source | default('unknown') }}
+             Install plan: {{ sub.spec.installPlanApproval | default('unknown') }}
+             Current CSV: {{ sub.status.currentCSV | default('unknown') }}
+          {% endfor %}
+          {% if (core_subs.resources | default([]) | length) == 0 %}
+           (none found)
+          {% endif %}
+
+    # ------------------------------------------------------------------
+    # 4. PackageManifest available channels for ibm-mas
+    # ------------------------------------------------------------------
+    - name: Get ibm-mas PackageManifest
+      kubernetes.core.k8s_info:
+        api_version: packages.operators.coreos.com/v1
+        kind: PackageManifest
+        name: ibm-mas
+        namespace: "{{ mas_core_ns }}"
+      register: ibm_mas_pm
+      failed_when: false
+
+    - name: Display available channels
+      ansible.builtin.debug:
+        msg: |
+          === ibm-mas PackageManifest — Available Channels ===
+          {% if (ibm_mas_pm.resources | default([]) | length) > 0 %}
+          Default channel: {{ ibm_mas_pm.resources[0].status.defaultChannel | default('unknown') }}
+          Channels:
+          {% for ch in (ibm_mas_pm.resources[0].status.channels | default([])) %}
+           - {{ ch.name }}  (CSV: {{ ch.currentCSV | default('unknown') }})
+          {% endfor %}
+          {% else %}
+          PackageManifest 'ibm-mas' not found.
+          {% endif %}
+
+    # ------------------------------------------------------------------
+    # 5. Update history entries
+    # ------------------------------------------------------------------
+    - name: Display update history
+      ansible.builtin.debug:
+        msg: |
+          === Cluster Update History ===
+          {% if (cluster_version.resources | default([]) | length) > 0 %}
+          {% for entry in (cluster_version.resources[0].status.history | default([])) %}
+           {{ loop.index }}. Version: {{ entry.version | default('unknown') }}
+              State:   {{ entry.state | default('unknown') }}
+              Started: {{ entry.startedTime | default('unknown') }}
+              Completed: {{ entry.completionTime | default('in progress') }}
+          {% endfor %}
+          {% if (cluster_version.resources[0].status.history | default([]) | length) == 0 %}
+           (no update history entries found)
+          {% endif %}
+          {% else %}
+          ClusterVersion resource not found.
+          {% endif %}
