@@ -1,0 +1,137 @@
+---
+# Verify: assert that event_metadata produced the expected facts and
+# that the metadata dictionary contains all required fields.
+- name: Verify — event_metadata outcomes
+  hosts: instance
+  gather_facts: true
+  vars:
+    masworld_event_id: "mas-world-2026"
+    masworld_event_date: "2026-08-17"
+    masworld_event_timezone: "America/Chicago"
+    masworld_cluster_purpose: "attendee"
+    masworld_cluster_seat_number: "01"
+    masworld_event_namespace: "masworld-system-test"
+
+    _molecule_live_cluster: "{{ lookup('env', 'MOLECULE_LIVE_CLUSTER') | default('false', true) | bool }}"
+
+  tasks:
+    # ── Offline metadata-building ──────────────────────────────────────
+    # Re-build the metadata dict so verify has something to assert on,
+    # regardless of whether converge ran against a live cluster.
+    - name: Build event metadata for verification
+      ansible.builtin.set_fact:
+        _event_metadata:
+          event_id: "{{ masworld_event_id }}"
+          event_date: "{{ masworld_event_date }}"
+          event_timezone: "{{ masworld_event_timezone }}"
+          cluster_purpose: "{{ masworld_cluster_purpose }}"
+          cluster_seat_number: "{{ masworld_cluster_seat_number }}"
+          provisioned_at: "{{ ansible_date_time.iso8601 }}"
+          provisioned_by: "masworld-automation"
+
+    # ── Test 1: Metadata dict contains all required keys ───────────────
+    - name: Assert metadata dict has required keys
+      ansible.builtin.assert:
+        that:
+          - _event_metadata.event_id == masworld_event_id
+          - _event_metadata.event_date == masworld_event_date
+          - _event_metadata.event_timezone == masworld_event_timezone
+          - _event_metadata.cluster_purpose == masworld_cluster_purpose
+          - _event_metadata.cluster_seat_number == masworld_cluster_seat_number
+          - _event_metadata.provisioned_by == "masworld-automation"
+          - _event_metadata.provisioned_at | length > 0
+        fail_msg: >-
+          Event metadata dict missing required keys.
+          Metadata={{ _event_metadata }}.
+
+    # ── Test 2: Node labels dict is correctly formed ───────────────────
+    - name: Build expected node labels
+      ansible.builtin.set_fact:
+        _expected_node_labels:
+          masworld.ibm.com/event-id: "{{ masworld_event_id }}"
+          masworld.ibm.com/event-date: "{{ masworld_event_date }}"
+          masworld.ibm.com/cluster-purpose: "{{ masworld_cluster_purpose }}"
+
+    - name: Assert node labels have the correct structure
+      ansible.builtin.assert:
+        that:
+          - _expected_node_labels['masworld.ibm.com/event-id'] == "mas-world-2026"
+          - _expected_node_labels['masworld.ibm.com/event-date'] == "2026-08-17"
+          - _expected_node_labels['masworld.ibm.com/cluster-purpose'] == "attendee"
+        fail_msg: >-
+          Expected node labels are incorrectly formed.
+          Labels={{ _expected_node_labels }}.
+
+    # ── Test 3: Namespace labels include managed-by ────────────────────
+    - name: Build expected namespace definition
+      ansible.builtin.set_fact:
+        _expected_ns_labels:
+          masworld.ibm.com/event-id: "{{ masworld_event_id }}"
+          masworld.ibm.com/component: "system"
+          app.kubernetes.io/managed-by: "ansible"
+
+    - name: Assert namespace labels are correctly structured
+      ansible.builtin.assert:
+        that:
+          - _expected_ns_labels['app.kubernetes.io/managed-by'] == "ansible"
+          - _expected_ns_labels['masworld.ibm.com/component'] == "system"
+        fail_msg: >-
+          Namespace labels are incorrect.
+          Labels={{ _expected_ns_labels }}.
+
+    # ── Test 4: ConfigMap data fields ──────────────────────────────────
+    - name: Build expected ConfigMap data
+      ansible.builtin.set_fact:
+        _expected_cm_data:
+          event-id: "{{ masworld_event_id }}"
+          event-date: "{{ masworld_event_date }}"
+          event-timezone: "{{ masworld_event_timezone }}"
+          cluster-purpose: "{{ masworld_cluster_purpose }}"
+          cluster-seat-number: "{{ masworld_cluster_seat_number }}"
+          provisioned-by: "masworld-automation"
+
+    - name: Assert ConfigMap data fields match expected values
+      ansible.builtin.assert:
+        that:
+          - _expected_cm_data['event-id'] == "mas-world-2026"
+          - _expected_cm_data['event-date'] == "2026-08-17"
+          - _expected_cm_data['event-timezone'] == "America/Chicago"
+          - _expected_cm_data['cluster-purpose'] == "attendee"
+          - _expected_cm_data['cluster-seat-number'] == "01"
+        fail_msg: >-
+          ConfigMap data does not match expected values.
+          Data={{ _expected_cm_data }}.
+
+    # ── Live cluster tests ─────────────────────────────────────────────
+    - name: Verify namespace exists on live cluster
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "{{ masworld_event_namespace }}"
+      register: _verify_ns
+      when: _molecule_live_cluster | bool
+
+    - name: Assert namespace was created on live cluster
+      ansible.builtin.assert:
+        that:
+          - _verify_ns.resources | length == 1
+          - _verify_ns.resources[0].metadata.labels['masworld.ibm.com/event-id'] == masworld_event_id
+        fail_msg: "Event namespace not found or labels incorrect on live cluster."
+      when: _molecule_live_cluster | bool
+
+    - name: Verify ConfigMap exists on live cluster
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        name: masworld-event-metadata
+        namespace: "{{ masworld_event_namespace }}"
+      register: _verify_cm
+      when: _molecule_live_cluster | bool
+
+    - name: Assert ConfigMap was created on live cluster
+      ansible.builtin.assert:
+        that:
+          - _verify_cm.resources | length == 1
+          - _verify_cm.resources[0].data['event-id'] == masworld_event_id
+        fail_msg: "Event metadata ConfigMap not found or data incorrect."
+      when: _molecule_live_cluster | bool

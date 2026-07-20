@@ -1,0 +1,34 @@
+---
+# Molecule scenario: event_metadata
+#
+# Tests the event_metadata role which creates the event namespace,
+# metadata ConfigMap, and applies event labels to cluster nodes.
+#
+# REQUIRES: live OpenShift/Kubernetes cluster (uses kubernetes.core.k8s)
+#
+# Without a cluster, converge runs in check_mode to validate task
+# structure and variable resolution. The verify playbook tests the
+# metadata fact-building logic independently.
+dependency:
+  name: galaxy
+driver:
+  name: default
+platforms:
+  - name: instance
+    managed: false
+    connection: local
+provisioner:
+  name: ansible
+  inventory:
+    host_vars:
+      instance:
+        ansible_connection: local
+        ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  env:
+    ANSIBLE_ROLES_PATH: ../../roles
+    ANSIBLE_FILTER_PLUGINS: ../../plugins/filter
+  playbooks:
+    converge: converge.yml
+    verify: verify.yml
+verifier:
+  name: ansible

@@ -1,0 +1,38 @@
+---
+# Molecule scenario: sample_workloads
+#
+# Tests the sample_workloads role which deploys exercise pods,
+# Deployments, Services, and ConfigMaps for the workshop.
+#
+# REQUIRES: live OpenShift/Kubernetes cluster for full testing
+# (kubernetes.core.k8s for creating Pods, Deployments, Services,
+# ConfigMaps, and Namespaces).
+#
+# Offline mode tests:
+#   - disabled-workloads code path
+#   - run ID generation
+#   - resource definition structure validation
+#   - ConfigMap data correctness
+dependency:
+  name: galaxy
+driver:
+  name: default
+platforms:
+  - name: instance
+    managed: false
+    connection: local
+provisioner:
+  name: ansible
+  inventory:
+    host_vars:
+      instance:
+        ansible_connection: local
+        ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  env:
+    ANSIBLE_ROLES_PATH: ../../roles
+    ANSIBLE_FILTER_PLUGINS: ../../plugins/filter
+  playbooks:
+    converge: converge.yml
+    verify: verify.yml
+verifier:
+  name: ansible

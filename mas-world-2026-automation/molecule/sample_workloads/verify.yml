@@ -1,0 +1,169 @@
+---
+# Verify: assert expected outcomes of sample_workloads tests.
+- name: Verify — sample_workloads outcomes
+  hosts: instance
+  gather_facts: false
+  vars:
+    masworld_seat_number: 3
+    masworld_sample_namespace: "masworld-exercises"
+    masworld_logging_exercise_run_id: "molecule-test-20260717120000"
+    masworld_navigation_exercise_app_label: "masworld-nav-exercise"
+    _molecule_live_cluster: "{{ lookup('env', 'MOLECULE_LIVE_CLUSTER') | default('false', true) | bool }}"
+
+  tasks:
+    # ── Test 1: Disabled mode sets correct fact ────────────────────────
+    - name: Assert disabled mode set sample_workloads_ready to false
+      ansible.builtin.assert:
+        that:
+          - _disabled_workloads_ready is defined
+          - not (_disabled_workloads_ready | bool)
+        fail_msg: >-
+          Expected sample_workloads_ready == false when disabled,
+          got {{ _disabled_workloads_ready | default('undefined') }}.
+
+    # ── Test 2: Log-generator pod definition is correct ────────────────
+    - name: Assert log-generator pod name uses zero-padded seat number
+      ansible.builtin.assert:
+        that:
+          - _test_log_generator_pod is defined
+          - _test_log_generator_pod.metadata.name == "log-generator-seat-03"
+          - _test_log_generator_pod.metadata.namespace == masworld_sample_namespace
+        fail_msg: >-
+          Log-generator pod name is incorrect.
+          Expected 'log-generator-seat-03',
+          got '{{ _test_log_generator_pod.metadata.name | default('undefined') }}'.
+
+    - name: Assert log-generator pod has required labels
+      ansible.builtin.assert:
+        that:
+          - _test_log_generator_pod.metadata.labels.app == "log-generator"
+          - _test_log_generator_pod.metadata.labels['masworld.redhat.com/component'] == "logging-exercise"
+          - _test_log_generator_pod.metadata.labels['masworld.redhat.com/seat-number'] == "3"
+          - _test_log_generator_pod.metadata.labels['masworld.redhat.com/run-id'] == masworld_logging_exercise_run_id
+        fail_msg: >-
+          Log-generator pod labels are incorrect.
+          Labels={{ _test_log_generator_pod.metadata.labels | default({}) }}.
+
+    - name: Assert log-generator pod has resource limits
+      ansible.builtin.assert:
+        that:
+          - _test_log_generator_pod.spec.containers[0].resources.limits.cpu is defined
+          - _test_log_generator_pod.spec.containers[0].resources.limits.memory is defined
+          - _test_log_generator_pod.spec.containers[0].resources.requests.cpu is defined
+          - _test_log_generator_pod.spec.containers[0].resources.requests.memory is defined
+        fail_msg: "Log-generator pod is missing resource requests or limits."
+
+    - name: Assert log-generator uses pinned image (not latest)
+      ansible.builtin.assert:
+        that:
+          - "':' in _test_log_generator_pod.spec.containers[0].image"
+          - "'latest' not in _test_log_generator_pod.spec.containers[0].image"
+        fail_msg: >-
+          Log-generator image must be pinned (not 'latest').
+          Image={{ _test_log_generator_pod.spec.containers[0].image }}.
+
+    # ── Test 3: Navigation deployment definition is correct ────────────
+    - name: Assert navigation deployment uses correct app label
+      ansible.builtin.assert:
+        that:
+          - _test_nav_deployment is defined
+          - _test_nav_deployment.metadata.labels.app == masworld_navigation_exercise_app_label
+          - _test_nav_deployment.metadata.namespace == masworld_sample_namespace
+        fail_msg: >-
+          Navigation deployment definition is incorrect.
+          Definition={{ _test_nav_deployment | default({}) }}.
+
+    # ── Test 4: Exercise ConfigMap data is correct ─────────────────────
+    - name: Assert exercise ConfigMap has correct query format
+      ansible.builtin.assert:
+        that:
+          - _test_exercise_cm_data is defined
+          - "'seat_number=\"3\"' in _test_exercise_cm_data['logging-exercise-query']"
+          - _test_exercise_cm_data['logging-exercise-run-id'] == masworld_logging_exercise_run_id
+        fail_msg: >-
+          Exercise ConfigMap data is incorrect.
+          Data={{ _test_exercise_cm_data | default({}) }}.
+
+    - name: Assert exercise ConfigMap has navigation service reference
+      ansible.builtin.assert:
+        that:
+          - "'nav-exercise.' + masworld_sample_namespace + '.svc:8080' in _test_exercise_cm_data['navigation-exercise-service']"
+        fail_msg: >-
+          Navigation service reference is missing or incorrect.
+          Value={{ _test_exercise_cm_data['navigation-exercise-service'] | default('undefined') }}.
+
+    # ── Test 5: Multi-seat pod names are unique and correct ────────────
+    - name: Assert multi-seat pod names are correctly generated
+      ansible.builtin.assert:
+        that:
+          - _multi_seat_pod_names is defined
+          - _multi_seat_pod_names | length == 5
+          - _multi_seat_pod_names | unique | length == 5
+          - _multi_seat_pod_names[0] == "log-generator-seat-01"
+          - _multi_seat_pod_names[1] == "log-generator-seat-02"
+          - _multi_seat_pod_names[2] == "log-generator-seat-03"
+          - _multi_seat_pod_names[3] == "log-generator-seat-04"
+          - _multi_seat_pod_names[4] == "log-generator-seat-05"
+        fail_msg: >-
+          Multi-seat pod names are incorrect.
+          Got {{ _multi_seat_pod_names | default([]) }}.
+
+    # ── Test 6: Run ID is deterministic when explicitly set ────────────
+    - name: Assert run ID matches provided value
+      ansible.builtin.assert:
+        that:
+          - _test_exercise_cm_data['logging-exercise-run-id'] == "molecule-test-20260717120000"
+        fail_msg: >-
+          Run ID should match the explicitly provided value.
+          Got {{ _test_exercise_cm_data['logging-exercise-run-id'] | default('undefined') }}.
+
+    # ── Live cluster tests ─────────────────────────────────────────────
+    - name: Verify exercises namespace on live cluster
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "{{ masworld_sample_namespace }}"
+      register: _verify_ns
+      when: _molecule_live_cluster | bool
+
+    - name: Assert exercises namespace exists
+      ansible.builtin.assert:
+        that:
+          - _verify_ns.resources | length == 1
+          - _verify_ns.resources[0].metadata.labels['masworld.redhat.com/component'] == "exercises"
+        fail_msg: "Exercises namespace not found or labels incorrect."
+      when: _molecule_live_cluster | bool
+
+    - name: Verify log-generator pod on live cluster
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ masworld_sample_namespace }}"
+        name: "log-generator-seat-03"
+      register: _verify_pod
+      when: _molecule_live_cluster | bool
+
+    - name: Assert log-generator pod exists and is running
+      ansible.builtin.assert:
+        that:
+          - _verify_pod.resources | length == 1
+          - _verify_pod.resources[0].status.phase == "Running"
+        fail_msg: "Log-generator pod is not running."
+      when: _molecule_live_cluster | bool
+
+    - name: Verify exercise ConfigMap on live cluster
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        namespace: "{{ masworld_sample_namespace }}"
+        name: "exercise-expected-outputs"
+      register: _verify_cm
+      when: _molecule_live_cluster | bool
+
+    - name: Assert exercise ConfigMap exists with correct data
+      ansible.builtin.assert:
+        that:
+          - _verify_cm.resources | length == 1
+          - _verify_cm.resources[0].data['logging-exercise-run-id'] == masworld_logging_exercise_run_id
+        fail_msg: "Exercise ConfigMap not found or data incorrect."
+      when: _molecule_live_cluster | bool

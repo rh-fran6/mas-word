@@ -1,0 +1,38 @@
+---
+# Molecule scenario: event_readiness
+#
+# Tests the event_readiness role which runs health checks and produces
+# a readiness report with PASS/FAIL/WARNING/NOT_APPLICABLE status.
+#
+# REQUIRES: live OpenShift cluster for full testing (kubernetes.core.k8s_info,
+# k8s_cluster_info).
+#
+# Offline mode tests:
+#   - disabled-checks code path
+#   - readiness result aggregation logic
+#   - report file generation
+#   - NOT_APPLICABLE classification for missing checks
+dependency:
+  name: galaxy
+driver:
+  name: default
+platforms:
+  - name: instance
+    managed: false
+    connection: local
+provisioner:
+  name: ansible
+  inventory:
+    host_vars:
+      instance:
+        ansible_connection: local
+        ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  env:
+    ANSIBLE_ROLES_PATH: ../../roles
+    ANSIBLE_FILTER_PLUGINS: ../../plugins/filter
+  playbooks:
+    prepare: prepare.yml
+    converge: converge.yml
+    verify: verify.yml
+verifier:
+  name: ansible

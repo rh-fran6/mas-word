@@ -1,0 +1,31 @@
+---
+# Prepare: set up test fixtures for student_accounts tests.
+- name: Prepare student_accounts test fixtures
+  hosts: instance
+  gather_facts: false
+  tasks:
+    - name: Create temporary directory for test artifacts
+      ansible.builtin.file:
+        path: /tmp/masworld-molecule-student-accounts
+        state: directory
+        mode: "0755"
+
+    - name: Verify htpasswd command is available
+      ansible.builtin.command:
+        cmd: which htpasswd
+      register: _htpasswd_check
+      changed_when: false
+      failed_when: false
+
+    - name: Record htpasswd availability
+      ansible.builtin.set_fact:
+        _htpasswd_available: "{{ _htpasswd_check.rc == 0 }}"
+
+    - name: Warn if htpasswd is not installed
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: htpasswd is not available on this system.
+          Install httpd-tools (RHEL/Fedora) or apache2-utils (Debian/Ubuntu)
+          to enable full student_accounts testing.
+          Password generation tests will be limited.
+      when: not (_htpasswd_available | bool)

@@ -173,10 +173,35 @@ Last updated: 2026-07-19
 - No Molecule test scenarios
 - Status: Unit tests IMPLEMENTED_AND_TESTED; integration tests NOT_STARTED
 
+## Documentation (Section 29)
+
+- 30 files in `docs/` — all 25 Section 29 deliverables covered:
+  - Previously existing (15): architecture, blockers, change-log, compatibility-matrix, configuration-model, credential-lifecycle, current-state, decision-log, discovery-report, implementation-plan, implementation-status, rhdp-skills-execution-log, rhdp-skills-inventory, risk-register, workarounds
+  - Newly created (15): threat-model, installation-guide, developer-guide, operator-guide, teardown-guide, test-report, known-limitations, bill-of-materials, acceptance-report, configuration-reference, cli-reference, security-review, fleet-sizing-guide, technical-design, product-requirements
+- Status: IMPLEMENTED_NOT_TESTED
+
+## Molecule Test Scaffolding
+
+- 5 scenarios under `mas-world-2026-automation/molecule/`:
+  - `config_validation/` — 4 files, fully offline-capable
+  - `event_metadata/` — 3 files, offline + live cluster gated via `MOLECULE_LIVE_CLUSTER=true`
+  - `student_accounts/` — 4 files, offline + live cluster gated
+  - `event_readiness/` — 4 files, offline + live cluster gated
+  - `sample_workloads/` — 3 files, offline + live cluster gated
+- Shared: `molecule/requirements.yml`, `molecule/conftest.py`
+- Status: SCAFFOLDED
+
+## Makefile
+
+- Enhanced from 9 to 31 targets
+- Self-documenting (`make help` default)
+- New sections: setup, config, students, seats, showroom, security, molecule, docs, CI helpers
+- Status: IMPLEMENTED_NOT_TESTED
+
 ## Known Gaps
 
 - No live cluster testing — all roles are SCAFFOLDED
-- Molecule test scenarios not created
 - CI/CD pipeline not yet pushed to GitHub for execution
 - AgnosticV catalog requires RHDP platform team review for existing-cluster integration
 - `no-commit-to-branch` hook re-enabled — work on feature branches going forward
+- Molecule scenarios created but not executed (config_validation could run locally)

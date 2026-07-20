@@ -1,0 +1,110 @@
+---
+# Converge: exercise the sample_workloads role.
+#
+# This playbook tests three paths:
+#   1. Disabled mode — the role exits early.
+#   2. Offline resource definition validation — build the resource
+#      definitions the role would apply and validate their structure.
+#   3. Live cluster — run the full role (MOLECULE_LIVE_CLUSTER=true).
+
+# ── Play 1: Disabled workloads ─────────────────────────────────────────
+- name: Converge — sample_workloads disabled path
+  hosts: instance
+  gather_facts: false
+  vars:
+    masworld_sample_workloads_enabled: false
+    masworld_seat_number: 1
+    seat_number: 1
+  tasks:
+    - name: Run sample_workloads in disabled mode
+      ansible.builtin.include_role:
+        name: sample_workloads
+
+    - name: Save disabled-path result
+      ansible.builtin.set_fact:
+        _disabled_workloads_ready: "{{ sample_workloads_ready | default('undefined') }}"
+
+# ── Play 2: Offline resource definition validation ─────────────────────
+- name: Converge — sample_workloads resource definitions (offline)
+  hosts: instance
+  gather_facts: false
+  vars:
+    masworld_sample_workloads_enabled: true
+    masworld_seat_number: 3
+    seat_number: 3
+    masworld_sample_namespace: "masworld-exercises"
+    masworld_logging_exercise_image: "registry.access.redhat.com/ubi9/ubi-minimal:9.4"
+    masworld_logging_exercise_run_id: "molecule-test-20260717120000"
+    masworld_logging_exercise_interval: 5
+    masworld_navigation_exercise_app_label: "masworld-nav-exercise"
+    _molecule_live_cluster: "{{ lookup('env', 'MOLECULE_LIVE_CLUSTER') | default('false', true) | bool }}"
+
+  tasks:
+    # ── Resolve run ID ─────────────────────────────────────────────────
+    - name: Use provided run ID
+      ansible.builtin.set_fact:
+        _masworld_run_id: "{{ masworld_logging_exercise_run_id }}"
+
+    # ── Build and validate log-generator Pod definition ────────────────
+    - name: Build log-generator Pod definition
+      ansible.builtin.set_fact:
+        _test_log_generator_pod:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: "log-generator-seat-{{ masworld_seat_number | masworld.automation.pad(2) }}"
+            namespace: "{{ masworld_sample_namespace }}"
+            labels:
+              app: log-generator
+              masworld.redhat.com/component: logging-exercise
+              masworld.redhat.com/seat-number: "{{ masworld_seat_number | string }}"
+              masworld.redhat.com/run-id: "{{ _masworld_run_id }}"
+          spec:
+            restartPolicy: Always
+            containers:
+              - name: log-generator
+                image: "{{ masworld_logging_exercise_image }}"
+                resources:
+                  requests:
+                    cpu: 10m
+                    memory: 32Mi
+                  limits:
+                    cpu: 50m
+                    memory: 64Mi
+
+    # ── Build navigation exercise Deployment ───────────────────────────
+    - name: Build navigation exercise Deployment definition
+      ansible.builtin.set_fact:
+        _test_nav_deployment:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: nav-exercise
+            namespace: "{{ masworld_sample_namespace }}"
+            labels:
+              app: "{{ masworld_navigation_exercise_app_label }}"
+
+    # ── Build exercise ConfigMap ───────────────────────────────────────
+    - name: Build exercise expected-outputs ConfigMap definition
+      ansible.builtin.set_fact:
+        _test_exercise_cm_data:
+          logging-exercise-query: >-
+            {seat_number="{{ masworld_seat_number }}"} |= "Workshop log entry"
+          logging-exercise-expected-fields: >-
+            timestamp, level, seat_number, run_id, message, exercise, counter
+          logging-exercise-run-id: "{{ _masworld_run_id }}"
+          navigation-exercise-service: "nav-exercise.{{ masworld_sample_namespace }}.svc:8080"
+
+    # ── Build multi-seat pod names ─────────────────────────────────────
+    - name: Build pod names for seats 1 through 5
+      ansible.builtin.set_fact:
+        _multi_seat_pod_names: >-
+          {{ _multi_seat_pod_names | default([]) +
+             ['log-generator-seat-' + (item | masworld.automation.pad(2))] }}
+      loop: "{{ range(1, 6) | list }}"
+
+    # ── Live cluster: run the full role ─────────────────────────────────
+    - name: Run sample_workloads role against live cluster
+      ansible.builtin.include_role:
+        name: sample_workloads
+      when: _molecule_live_cluster | bool

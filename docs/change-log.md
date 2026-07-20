@@ -86,3 +86,18 @@ This file records every user instruction that changes or clarifies the project.
   - **CI/CD pipeline**: `.github/workflows/ci.yml` (6 jobs: lint-and-validate, secret-scan, unit-tests, validate-manifests, validate-showroom, docs-links), `.github/workflows/release.yml` (manual dispatch with semver validation), `.github/dependabot.yml` (weekly checks for github-actions and pip).
   - **Branch protection**: Re-enabled `no-commit-to-branch` hook in `.pre-commit-config.yaml`.
   - **Linter fixes**: `.yamllint.yml` updated with ansible-lint required settings (comments-indentation, braces, octal-values). `.ansible-lint.yml` updated with mock_roles and _*.yml exclusion.
+
+### TASK-20260719-006
+
+- Date: 2026-07-19
+- Original instruction: "go ahead to implement things that can be done without a live cluster"
+- Classification: Implementation — documentation, testing scaffolding, build system
+- Specification impact: None — implements existing requirements
+- `prompt.md` sections changed: None
+- Decisions created or updated: None
+- Workarounds created or updated: None
+- Execution status: IMPLEMENTED_NOT_TESTED
+- Validation evidence:
+  - **Documentation (Section 29)**: 15 new files in `docs/`: threat-model, installation-guide, developer-guide, operator-guide, teardown-guide, test-report, known-limitations, bill-of-materials, acceptance-report, configuration-reference, cli-reference, security-review, fleet-sizing-guide, technical-design, product-requirements. Total docs count: 30.
+  - **Molecule scaffolding**: 5 scenarios (config_validation, event_metadata, student_accounts, event_readiness, sample_workloads) with 18 files total. config_validation can run fully offline; others gated behind `MOLECULE_LIVE_CLUSTER=true`.
+  - **Makefile**: Enhanced from 9 to 31 targets. Added setup, config, student, seat, showroom, security, molecule, docs, CI helper targets. Self-documenting with `make help` default.

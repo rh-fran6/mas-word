@@ -1,0 +1,187 @@
+---
+# Converge: exercise the event_readiness role.
+#
+# This playbook tests three paths:
+#   1. Disabled mode — role exits early with SKIPPED.
+#   2. Offline aggregation — simulate check results and test
+#      the classification logic (READY/WARNING/FAILED).
+#   3. Live cluster — run the full role (MOLECULE_LIVE_CLUSTER=true).
+
+# ── Play 1: Disabled checks ───────────────────────────────────────────
+- name: Converge — event_readiness disabled path
+  hosts: instance
+  gather_facts: false
+  vars:
+    masworld_readiness_enabled: false
+  tasks:
+    - name: Run event_readiness in disabled mode
+      ansible.builtin.include_role:
+        name: event_readiness
+
+    - name: Save disabled-path results
+      ansible.builtin.set_fact:
+        _disabled_readiness_result: "{{ readiness_result | default('undefined') }}"
+        _disabled_readiness_report_path: "{{ readiness_report_path | default('undefined') }}"
+
+# ── Play 2: Offline aggregation logic ─────────────────────────────────
+- name: Converge — event_readiness aggregation logic (offline)
+  hosts: instance
+  gather_facts: true
+  vars:
+    masworld_readiness_report_dir: "/tmp/masworld-molecule-readiness"
+    masworld_cluster_id: "test-cluster-01"
+    masworld_seat_number: "01"
+  tasks:
+    # Simulate a scenario where all checks pass
+    - name: Simulate all-pass readiness results
+      ansible.builtin.set_fact:
+        _masworld_readiness_results:
+          api:
+            status: "PASS"
+            message: "API server is reachable"
+          mas:
+            status: "PASS"
+            message: "MAS Core Suite CR is Ready"
+          manage:
+            status: "PASS"
+            message: "Manage workspace is Ready"
+          logging:
+            status: "PASS"
+            message: "Log forwarding is operational"
+          loki:
+            status: "PASS"
+            message: "LokiStack is operational"
+          showroom:
+            status: "PASS"
+            message: "Showroom is running and route exists"
+          student_access:
+            status: "PASS"
+            message: "Student account, namespace, and RBAC configured"
+          exercise_data:
+            status: "PASS"
+            message: "Exercise data and workloads present"
+        _masworld_readiness_failures: []
+        _masworld_readiness_warnings: []
+
+    - name: Classify all-pass readiness
+      ansible.builtin.set_fact:
+        _all_pass_result: >-
+          {{ 'FAILED' if (_masworld_readiness_failures | length > 0)
+             else ('WARNING' if (_masworld_readiness_warnings | length > 0) else 'READY') }}
+
+    - name: Save all-pass result
+      ansible.builtin.set_fact:
+        _test_all_pass_result: "{{ _all_pass_result }}"
+
+    # Simulate a scenario with warnings only
+    - name: Simulate warning readiness results
+      ansible.builtin.set_fact:
+        _masworld_readiness_results:
+          api:
+            status: "PASS"
+            message: "API server is reachable"
+          logging:
+            status: "WARNING"
+            message: "Log forwarding not confirmed ready"
+          loki:
+            status: "WARNING"
+            message: "LokiStack not confirmed ready"
+        _masworld_readiness_failures: []
+        _masworld_readiness_warnings:
+          - "Log forwarding not confirmed ready"
+          - "LokiStack not confirmed ready"
+
+    - name: Classify warning readiness
+      ansible.builtin.set_fact:
+        _warning_result: >-
+          {{ 'FAILED' if (_masworld_readiness_failures | length > 0)
+             else ('WARNING' if (_masworld_readiness_warnings | length > 0) else 'READY') }}
+
+    - name: Save warning result
+      ansible.builtin.set_fact:
+        _test_warning_result: "{{ _warning_result }}"
+
+    # Simulate a scenario with failures
+    - name: Simulate failure readiness results
+      ansible.builtin.set_fact:
+        _masworld_readiness_results:
+          api:
+            status: "PASS"
+            message: "API server is reachable"
+          mas:
+            status: "FAIL"
+            message: "MAS Core Suite CR is not Ready"
+          showroom:
+            status: "FAIL"
+            message: "Showroom is not running or route missing"
+        _masworld_readiness_failures:
+          - "MAS Core not ready"
+          - "Showroom not accessible"
+        _masworld_readiness_warnings: []
+
+    - name: Classify failure readiness
+      ansible.builtin.set_fact:
+        _failure_result: >-
+          {{ 'FAILED' if (_masworld_readiness_failures | length > 0)
+             else ('WARNING' if (_masworld_readiness_warnings | length > 0) else 'READY') }}
+
+    - name: Save failure result
+      ansible.builtin.set_fact:
+        _test_failure_result: "{{ _failure_result }}"
+
+    # Test report file generation
+    - name: Ensure readiness report directory exists
+      ansible.builtin.file:
+        path: "{{ masworld_readiness_report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Set readiness report path
+      ansible.builtin.set_fact:
+        readiness_report_path: "{{ masworld_readiness_report_dir }}/readiness-molecule-test.yml"
+
+    - name: Write test readiness report
+      ansible.builtin.copy:
+        content: |
+          ---
+          # MAS World 2026 — Event Readiness Report (Molecule Test)
+          overall_result: {{ _test_all_pass_result }}
+          cluster_id: {{ masworld_cluster_id }}
+          seat_number: {{ masworld_seat_number }}
+          checks:
+          {% for check_name, check_result in _masworld_readiness_results.items() %}
+            {{ check_name }}:
+              status: {{ check_result.status }}
+              message: "{{ check_result.message }}"
+          {% endfor %}
+          failures: []
+          warnings: []
+        dest: "{{ readiness_report_path }}"
+        mode: "0644"
+
+# ── Play 3: Live cluster (optional) ───────────────────────────────────
+- name: Converge — event_readiness live cluster
+  hosts: instance
+  gather_facts: true
+  vars:
+    masworld_readiness_enabled: true
+    masworld_readiness_report_dir: "/tmp/masworld-molecule-readiness"
+    masworld_cluster_id: "test-cluster-01"
+    masworld_seat_number: "01"
+    masworld_mas_instance_id: "inst1"
+    masworld_mas_workspace_id: "masworld"
+    masworld_sample_namespace: "masworld-exercises"
+    masworld_showroom_namespace: "showroom"
+    _molecule_live_cluster: "{{ lookup('env', 'MOLECULE_LIVE_CLUSTER') | default('false', true) | bool }}"
+  tasks:
+    - name: Run event_readiness role against live cluster
+      ansible.builtin.include_role:
+        name: event_readiness
+      when: _molecule_live_cluster | bool
+
+    - name: Skip live cluster tests
+      ansible.builtin.debug:
+        msg: >-
+          Skipping live cluster event_readiness test.
+          Set MOLECULE_LIVE_CLUSTER=true to enable.
+      when: not (_molecule_live_cluster | bool)

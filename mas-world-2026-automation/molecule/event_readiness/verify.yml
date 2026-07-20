@@ -1,0 +1,117 @@
+---
+# Verify: assert event_readiness produced correct results.
+- name: Verify — event_readiness outcomes
+  hosts: instance
+  gather_facts: false
+  vars:
+    masworld_readiness_report_dir: "/tmp/masworld-molecule-readiness"
+
+  tasks:
+    # ── Test 1: Disabled mode returns SKIPPED ──────────────────────────
+    - name: Assert disabled mode set result to SKIPPED
+      ansible.builtin.assert:
+        that:
+          - _disabled_readiness_result is defined
+          - _disabled_readiness_result == "SKIPPED"
+        fail_msg: >-
+          Expected readiness_result == 'SKIPPED' when disabled,
+          got '{{ _disabled_readiness_result | default('undefined') }}'.
+
+    - name: Assert disabled mode set empty report path
+      ansible.builtin.assert:
+        that:
+          - _disabled_readiness_report_path is defined
+          - _disabled_readiness_report_path == ""
+        fail_msg: >-
+          Expected empty readiness_report_path when disabled,
+          got '{{ _disabled_readiness_report_path | default('undefined') }}'.
+
+    # ── Test 2: All-pass classifies as READY ───────────────────────────
+    - name: Assert all-pass result is READY
+      ansible.builtin.assert:
+        that:
+          - _test_all_pass_result is defined
+          - _test_all_pass_result == "READY"
+        fail_msg: >-
+          Expected 'READY' when all checks pass,
+          got '{{ _test_all_pass_result | default('undefined') }}'.
+
+    # ── Test 3: Warnings-only classifies as WARNING ────────────────────
+    - name: Assert warning-only result is WARNING
+      ansible.builtin.assert:
+        that:
+          - _test_warning_result is defined
+          - _test_warning_result == "WARNING"
+        fail_msg: >-
+          Expected 'WARNING' when only warnings present,
+          got '{{ _test_warning_result | default('undefined') }}'.
+
+    # ── Test 4: Any failure classifies as FAILED ───────────────────────
+    - name: Assert failure result is FAILED
+      ansible.builtin.assert:
+        that:
+          - _test_failure_result is defined
+          - _test_failure_result == "FAILED"
+        fail_msg: >-
+          Expected 'FAILED' when failures present,
+          got '{{ _test_failure_result | default('undefined') }}'.
+
+    # ── Test 5: Report file was generated ──────────────────────────────
+    - name: Check readiness report file exists
+      ansible.builtin.stat:
+        path: "{{ masworld_readiness_report_dir }}/readiness-molecule-test.yml"
+      register: _report_stat
+
+    - name: Assert readiness report file exists
+      ansible.builtin.assert:
+        that:
+          - _report_stat.stat.exists
+          - _report_stat.stat.size > 0
+        fail_msg: >-
+          Readiness report file was not created at
+          {{ masworld_readiness_report_dir }}/readiness-molecule-test.yml.
+
+    - name: Read readiness report content
+      ansible.builtin.slurp:
+        src: "{{ masworld_readiness_report_dir }}/readiness-molecule-test.yml"
+      register: _report_content
+
+    - name: Assert readiness report contains expected fields
+      ansible.builtin.assert:
+        that:
+          - "'overall_result' in (_report_content.content | b64decode)"
+          - "'cluster_id' in (_report_content.content | b64decode)"
+          - "'seat_number' in (_report_content.content | b64decode)"
+          - "'checks' in (_report_content.content | b64decode)"
+          - "'test-cluster-01' in (_report_content.content | b64decode)"
+        fail_msg: >-
+          Readiness report is missing required fields.
+          Content={{ _report_content.content | b64decode }}.
+
+    # ── Test 6: Classification logic with mixed results ────────────────
+    - name: Test classification with failure overriding warnings
+      ansible.builtin.set_fact:
+        _mixed_failures:
+          - "Something failed"
+        _mixed_warnings:
+          - "Something warned"
+
+    - name: Classify mixed results
+      ansible.builtin.set_fact:
+        _mixed_result: >-
+          {{ 'FAILED' if (_mixed_failures | length > 0)
+             else ('WARNING' if (_mixed_warnings | length > 0) else 'READY') }}
+
+    - name: Assert failure takes priority over warning
+      ansible.builtin.assert:
+        that:
+          - _mixed_result == "FAILED"
+        fail_msg: >-
+          Expected 'FAILED' when both failures and warnings present,
+          got '{{ _mixed_result }}'.
+
+    # ── Cleanup ────────────────────────────────────────────────────────
+    - name: Remove test readiness reports
+      ansible.builtin.file:
+        path: "{{ masworld_readiness_report_dir }}"
+        state: absent

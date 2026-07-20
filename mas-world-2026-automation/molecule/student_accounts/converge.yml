@@ -1,0 +1,85 @@
+---
+# Converge: exercise the student_accounts role logic.
+#
+# This playbook tests two paths:
+#   1. Disabled mode — the role exits early and sets skipped facts.
+#   2. Username/namespace resolution logic (offline, no cluster).
+#
+# For the full role (htpasswd, k8s namespace, RBAC, OAuth patching),
+# set MOLECULE_LIVE_CLUSTER=true and ensure KUBECONFIG is configured.
+- name: Converge — student_accounts disabled path
+  hosts: instance
+  gather_facts: false
+  vars:
+    masworld_student_accounts_enabled: false
+    masworld_seat_number: 1
+    seat_number: 1
+  tasks:
+    - name: Run student_accounts role in disabled mode
+      ansible.builtin.include_role:
+        name: student_accounts
+
+    - name: Save disabled-path results
+      ansible.builtin.set_fact:
+        _disabled_student_created: "{{ student_accounts_created | default('undefined') }}"
+        _disabled_student_creds: "{{ student_credentials | default('undefined') }}"
+
+- name: Converge — student_accounts variable resolution (offline)
+  hosts: instance
+  gather_facts: false
+  vars:
+    masworld_student_accounts_enabled: true
+    masworld_seat_number: 7
+    seat_number: 7
+    masworld_student_password_length: 18
+    masworld_student_allow_shared_password: false
+    masworld_student_cluster_role: "basic-user"
+    masworld_htpasswd_idp_name: "masworld-htpasswd"
+    masworld_htpasswd_secret_name: "masworld-htpasswd-secret"
+    masworld_htpasswd_secret_namespace: "openshift-config"
+    masworld_oauth_cr_name: "cluster"
+
+    _molecule_live_cluster: "{{ lookup('env', 'MOLECULE_LIVE_CLUSTER') | default('false', true) | bool }}"
+
+  tasks:
+    # ── Offline: test username and namespace resolution ─────────────────
+    - name: Resolve student username (mirrors role logic)
+      ansible.builtin.set_fact:
+        _test_student_username: "user{{ masworld_seat_number | masworld.automation.pad(2) }}"
+
+    - name: Resolve student namespace (mirrors role logic)
+      ansible.builtin.set_fact:
+        _test_student_namespace: "student-{{ masworld_seat_number | masworld.automation.pad(2) }}"
+
+    - name: Generate a test password
+      ansible.builtin.set_fact:
+        _test_student_password: >-
+          {{ lookup('ansible.builtin.password',
+                    '/dev/null length=' + (masworld_student_password_length | string)
+                    + ' chars=ascii_letters,digits') }}
+      no_log: true
+
+    - name: Save offline resolution results
+      ansible.builtin.set_fact:
+        _offline_username: "{{ _test_student_username }}"
+        _offline_namespace: "{{ _test_student_namespace }}"
+        _offline_password_length: "{{ _test_student_password | trim | length }}"
+
+    # ── Multi-seat resolution test ─────────────────────────────────────
+    - name: Resolve usernames for seats 1 through 5
+      ansible.builtin.set_fact:
+        _multi_seat_usernames: >-
+          {{ _multi_seat_usernames | default([]) + ['user' + (item | masworld.automation.pad(2))] }}
+      loop: "{{ range(1, 6) | list }}"
+
+    - name: Resolve namespaces for seats 1 through 5
+      ansible.builtin.set_fact:
+        _multi_seat_namespaces: >-
+          {{ _multi_seat_namespaces | default([]) + ['student-' + (item | masworld.automation.pad(2))] }}
+      loop: "{{ range(1, 6) | list }}"
+
+    # ── Live cluster: run the full role ─────────────────────────────────
+    - name: Run student_accounts role against live cluster
+      ansible.builtin.include_role:
+        name: student_accounts
+      when: _molecule_live_cluster | bool

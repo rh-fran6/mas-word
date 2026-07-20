@@ -1,0 +1,170 @@
+---
+# Verify: assert expected outcomes of student_accounts tests.
+- name: Verify — student_accounts outcomes
+  hosts: instance
+  gather_facts: false
+  vars:
+    masworld_seat_number: 7
+    seat_number: 7
+    masworld_student_password_length: 18
+    _molecule_live_cluster: "{{ lookup('env', 'MOLECULE_LIVE_CLUSTER') | default('false', true) | bool }}"
+
+  tasks:
+    # ── Test 1: Disabled mode sets correct facts ───────────────────────
+    - name: Assert disabled mode set student_accounts_created to false
+      ansible.builtin.assert:
+        that:
+          - _disabled_student_created is defined
+          - not (_disabled_student_created | bool)
+        fail_msg: >-
+          Expected student_accounts_created == false when disabled,
+          got {{ _disabled_student_created | default('undefined') }}.
+
+    - name: Assert disabled mode set empty credentials
+      ansible.builtin.assert:
+        that:
+          - _disabled_student_creds is defined
+          - _disabled_student_creds | length == 0
+        fail_msg: >-
+          Expected empty student_credentials when disabled,
+          got {{ _disabled_student_creds | default('undefined') }}.
+
+    # ── Test 2: Username resolution uses zero-padded seat number ───────
+    - name: Assert username for seat 7 is user07
+      ansible.builtin.assert:
+        that:
+          - _offline_username is defined
+          - _offline_username == "user07"
+        fail_msg: >-
+          Expected username 'user07' for seat 7,
+          got '{{ _offline_username | default('undefined') }}'.
+
+    # ── Test 3: Namespace resolution uses zero-padded seat number ──────
+    - name: Assert namespace for seat 7 is student-07
+      ansible.builtin.assert:
+        that:
+          - _offline_namespace is defined
+          - _offline_namespace == "student-07"
+        fail_msg: >-
+          Expected namespace 'student-07' for seat 7,
+          got '{{ _offline_namespace | default('undefined') }}'.
+
+    # ── Test 4: Generated password meets length requirement ────────────
+    - name: Assert generated password has correct length
+      ansible.builtin.assert:
+        that:
+          - _offline_password_length is defined
+          - _offline_password_length | int == masworld_student_password_length | int
+        fail_msg: >-
+          Expected password length {{ masworld_student_password_length }},
+          got {{ _offline_password_length | default('undefined') }}.
+
+    # ── Test 5: Multi-seat usernames are unique and correctly formed ────
+    - name: Assert multi-seat usernames are correct
+      ansible.builtin.assert:
+        that:
+          - _multi_seat_usernames is defined
+          - _multi_seat_usernames | length == 5
+          - _multi_seat_usernames[0] == "user01"
+          - _multi_seat_usernames[1] == "user02"
+          - _multi_seat_usernames[2] == "user03"
+          - _multi_seat_usernames[3] == "user04"
+          - _multi_seat_usernames[4] == "user05"
+        fail_msg: >-
+          Multi-seat usernames are incorrect.
+          Got {{ _multi_seat_usernames | default([]) }}.
+
+    # ── Test 6: Multi-seat namespaces are unique ───────────────────────
+    - name: Assert multi-seat namespaces are correct
+      ansible.builtin.assert:
+        that:
+          - _multi_seat_namespaces is defined
+          - _multi_seat_namespaces | length == 5
+          - _multi_seat_namespaces | unique | length == 5
+          - _multi_seat_namespaces[0] == "student-01"
+          - _multi_seat_namespaces[4] == "student-05"
+        fail_msg: >-
+          Multi-seat namespaces are incorrect or contain duplicates.
+          Got {{ _multi_seat_namespaces | default([]) }}.
+
+    # ── Test 7: RBAC definition structure (offline) ────────────────────
+    - name: Build expected RoleBinding definition
+      ansible.builtin.set_fact:
+        _expected_rb:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          metadata:
+            name: "user07-admin"
+            namespace: "student-07"
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: admin
+          subjects:
+            - apiGroup: rbac.authorization.k8s.io
+              kind: User
+              name: "user07"
+
+    - name: Assert RoleBinding structure is correct
+      ansible.builtin.assert:
+        that:
+          - _expected_rb.metadata.name == "user07-admin"
+          - _expected_rb.metadata.namespace == "student-07"
+          - _expected_rb.roleRef.name == "admin"
+          - _expected_rb.subjects[0].name == "user07"
+        fail_msg: >-
+          RoleBinding structure is incorrect.
+          Got {{ _expected_rb }}.
+
+    # ── Live cluster tests ─────────────────────────────────────────────
+    - name: Verify student namespace exists on live cluster
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "student-07"
+      register: _verify_student_ns
+      when: _molecule_live_cluster | bool
+
+    - name: Assert student namespace was created
+      ansible.builtin.assert:
+        that:
+          - _verify_student_ns.resources | length == 1
+        fail_msg: "Student namespace student-07 not found on live cluster."
+      when: _molecule_live_cluster | bool
+
+    - name: Verify student RoleBinding exists
+      kubernetes.core.k8s_info:
+        api_version: rbac.authorization.k8s.io/v1
+        kind: RoleBinding
+        name: "user07-admin"
+        namespace: "student-07"
+      register: _verify_student_rb
+      when: _molecule_live_cluster | bool
+
+    - name: Assert student RoleBinding was created
+      ansible.builtin.assert:
+        that:
+          - _verify_student_rb.resources | length == 1
+          - _verify_student_rb.resources[0].subjects[0].name == "user07"
+        fail_msg: "Student RoleBinding user07-admin not found or incorrect."
+      when: _molecule_live_cluster | bool
+
+    - name: Verify student has no cluster-admin binding
+      kubernetes.core.k8s_info:
+        api_version: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+      register: _verify_crbs
+      when: _molecule_live_cluster | bool
+
+    - name: Assert no cluster-admin binding for student
+      ansible.builtin.assert:
+        that:
+          - _verify_crbs.resources
+            | selectattr('roleRef.name', 'equalto', 'cluster-admin')
+            | map(attribute='subjects')
+            | flatten
+            | selectattr('name', 'defined')
+            | selectattr('name', 'equalto', 'user07')
+            | list | length == 0
+        fail_msg: "SECURITY VIOLATION: user07 has a cluster-admin binding."
+      when: _molecule_live_cluster | bool

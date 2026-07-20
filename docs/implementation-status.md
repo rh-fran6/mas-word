@@ -21,7 +21,7 @@ Use these status values:
 | 2 | Showroom Content | COMPLETE | Workshop content (manual fallback), verification pending via /showroom:verify-content |
 | 3 | Ansible Roles | COMPLETE | 17 role task files, 10 playbooks, 6 ACM manifests |
 | 4 | Operations & AgnosticV | COMPLETE | Runbooks, checklists, repair procedures, AgnosticV catalog |
-| 5 | Integration & CI/CD | IN PROGRESS | CI pipeline done, public content done, unit tests passing |
+| 5 | Integration & CI/CD | COMPLETE | CI pipeline, public content, docs, Molecule, Makefile |
 | 6 | Testing | NOT STARTED | Rehearsal dry-run, timing validation |
 | 7 | Hardening | NOT STARTED | Security review, credential rotation, backup |
 | 8 | Event Prep | NOT STARTED | Final validation, facilitator runbook |
@@ -167,3 +167,29 @@ Use these status values:
 | Troubleshooting docs | `public-content/troubleshooting/*` | IMPLEMENTED_NOT_TESTED (2 docs) |
 | MAS Edge overview | `public-content/mas-edge/overview.md` | IMPLEMENTED_NOT_TESTED |
 | Linter config fixes | `.yamllint.yml`, `.ansible-lint.yml` | IMPLEMENTED_AND_TESTED (all hooks pass) |
+
+## Phase 5b: Documentation, Molecule, Makefile — IN PROGRESS
+
+| Deliverable | File/Directory | Status |
+|-------------|---------------|--------|
+| Threat model | `docs/threat-model.md` | IMPLEMENTED_NOT_TESTED |
+| Installation guide | `docs/installation-guide.md` | IMPLEMENTED_NOT_TESTED |
+| Developer guide | `docs/developer-guide.md` | IMPLEMENTED_NOT_TESTED |
+| Operator guide | `docs/operator-guide.md` | IMPLEMENTED_NOT_TESTED |
+| Teardown guide | `docs/teardown-guide.md` | IMPLEMENTED_NOT_TESTED |
+| Test report | `docs/test-report.md` | IMPLEMENTED_NOT_TESTED |
+| Known limitations | `docs/known-limitations.md` | IMPLEMENTED_NOT_TESTED |
+| Bill of materials | `docs/bill-of-materials.md` | IMPLEMENTED_NOT_TESTED |
+| Acceptance report | `docs/acceptance-report.md` | IMPLEMENTED_NOT_TESTED |
+| Configuration reference | `docs/configuration-reference.md` | IMPLEMENTED_NOT_TESTED |
+| CLI reference | `docs/cli-reference.md` | IMPLEMENTED_NOT_TESTED |
+| Security review | `docs/security-review.md` | IMPLEMENTED_NOT_TESTED |
+| Fleet sizing guide | `docs/fleet-sizing-guide.md` | IMPLEMENTED_NOT_TESTED |
+| Technical design | `docs/technical-design.md` | IMPLEMENTED_NOT_TESTED |
+| Product requirements | `docs/product-requirements.md` | IMPLEMENTED_NOT_TESTED |
+| Makefile (enhanced) | `Makefile` | IMPLEMENTED_NOT_TESTED (31 targets) |
+| Molecule: config_validation | `molecule/config_validation/` | SCAFFOLDED (runs offline) |
+| Molecule: event_metadata | `molecule/event_metadata/` | SCAFFOLDED (live cluster gated) |
+| Molecule: student_accounts | `molecule/student_accounts/` | SCAFFOLDED (live cluster gated) |
+| Molecule: event_readiness | `molecule/event_readiness/` | SCAFFOLDED (live cluster gated) |
+| Molecule: sample_workloads | `molecule/sample_workloads/` | SCAFFOLDED (live cluster gated) |

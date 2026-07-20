@@ -1,0 +1,35 @@
+---
+# Molecule scenario: student_accounts
+#
+# Tests the student_accounts role which creates htpasswd entries,
+# student namespaces, and RBAC bindings.
+#
+# REQUIRES: live OpenShift cluster for full testing (htpasswd command,
+# kubernetes.core.k8s, OAuth CR patching).
+#
+# Offline mode tests variable resolution, username/namespace generation,
+# password generation, and the disabled-accounts code path.
+dependency:
+  name: galaxy
+driver:
+  name: default
+platforms:
+  - name: instance
+    managed: false
+    connection: local
+provisioner:
+  name: ansible
+  inventory:
+    host_vars:
+      instance:
+        ansible_connection: local
+        ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  env:
+    ANSIBLE_ROLES_PATH: ../../roles
+    ANSIBLE_FILTER_PLUGINS: ../../plugins/filter
+  playbooks:
+    prepare: prepare.yml
+    converge: converge.yml
+    verify: verify.yml
+verifier:
+  name: ansible
