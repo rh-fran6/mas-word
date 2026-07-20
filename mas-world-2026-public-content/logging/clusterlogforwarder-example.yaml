@@ -1,0 +1,88 @@
+# ============================================================================
+# ClusterLogForwarder -- Example Custom Resource
+# ============================================================================
+#
+# Purpose:
+#   Configures log collection and forwarding on OpenShift. This example
+#   collects application, infrastructure, and audit logs and forwards them
+#   to a LokiStack instance in the same cluster.
+#
+# Required permissions:
+#   - cluster-admin (to create ClusterLogForwarder)
+#   - The referenced ServiceAccount must have appropriate log-collection
+#     ClusterRoles bound.
+#
+# Supported / tested versions:
+#   - OpenShift Container Platform: 4.16 -- 4.21
+#   - OpenShift Logging Operator: stable-6.6
+#   - API: observability.openshift.io/v1
+#
+# Variables to replace:
+#   None for basic usage -- this example uses in-cluster defaults. If
+#   forwarding to an external Loki, replace the lokiStack output reference.
+#
+# Security warnings:
+#   - Audit logs may contain sensitive information. Restrict access to the
+#     Loki tenants and S3 bucket storing them.
+#   - The collector ServiceAccount requires cluster-wide log-reading
+#     permissions. Do not grant these permissions to regular users.
+#   - Review retention policies to comply with your data-handling
+#     requirements.
+#
+# Apply:
+#   # 1. Create the ServiceAccount and bind required roles:
+#   oc create serviceaccount collector -n openshift-logging
+#   oc adm policy add-cluster-role-to-user collect-application-logs \
+#     -z collector -n openshift-logging
+#   oc adm policy add-cluster-role-to-user collect-infrastructure-logs \
+#     -z collector -n openshift-logging
+#   oc adm policy add-cluster-role-to-user collect-audit-logs \
+#     -z collector -n openshift-logging
+#
+#   # 2. Apply the ClusterLogForwarder:
+#   oc apply -f clusterlogforwarder-example.yaml
+#
+# Validate:
+#   oc get clusterlogforwarder collector -n openshift-logging
+#   oc get pods -n openshift-logging -l app.kubernetes.io/component=collector
+#   oc logs -n openshift-logging -l app.kubernetes.io/component=collector --tail=20
+#
+# Cleanup:
+#   oc delete clusterlogforwarder collector -n openshift-logging
+# ============================================================================
+
+---
+apiVersion: observability.openshift.io/v1
+kind: ClusterLogForwarder
+metadata:
+  name: collector
+  namespace: openshift-logging
+spec:
+  serviceAccount:
+    name: collector
+  outputs:
+    - name: default-lokistack
+      type: lokiStack
+      lokiStack:
+        target:
+          name: logging-loki
+          namespace: openshift-logging
+        authentication:
+          token:
+            from: serviceAccount
+  pipelines:
+    - name: application-logs
+      inputRefs:
+        - application
+      outputRefs:
+        - default-lokistack
+    - name: infrastructure-logs
+      inputRefs:
+        - infrastructure
+      outputRefs:
+        - default-lokistack
+    - name: audit-logs
+      inputRefs:
+        - audit
+      outputRefs:
+        - default-lokistack

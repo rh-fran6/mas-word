@@ -1,0 +1,76 @@
+# ============================================================================
+# Keycloak Client -- OIDC for OpenShift OAuth Integration (Sanitized)
+# ============================================================================
+#
+# Purpose:
+#   Defines a Keycloak client that allows OpenShift to use Keycloak as an
+#   OpenID Connect (OIDC) identity provider. This is a sanitized example
+#   with placeholder values.
+#
+# Required permissions:
+#   - Keycloak realm administrator (to create/manage clients)
+#   - OpenShift cluster-admin (to configure OAuth)
+#
+# Supported / tested versions:
+#   - Keycloak Operator: 26.x (k8s.keycloak.org/v2alpha1)
+#   - OpenShift Container Platform: 4.16 -- 4.21
+#
+# Variables to replace:
+#   - YOUR_KEYCLOAK_REALM     -- Keycloak realm name (e.g., "openshift")
+#   - YOUR_CLUSTER_DOMAIN     -- OpenShift cluster apps domain
+#                                (e.g., "apps.cluster.example.com")
+#   - YOUR_CLIENT_SECRET      -- a strong, randomly generated client secret
+#                                (store in a Kubernetes Secret, not here)
+#
+# Security warnings:
+#   - NEVER commit the client secret to version control.
+#   - Use HTTPS for all redirect URIs.
+#   - Restrict redirect URIs to your specific cluster domain.
+#   - Review token lifetimes and session policies in the Keycloak realm.
+#   - In production, use confidential clients with PKCE where supported.
+#
+# Apply:
+#   oc apply -f keycloak-oidc-client.yaml
+#
+# Validate:
+#   oc get keycloakclient openshift-oidc -n YOUR_KEYCLOAK_NAMESPACE
+#   # Or verify in the Keycloak admin console under the realm's Clients tab.
+#
+# Cleanup:
+#   oc delete keycloakclient openshift-oidc -n YOUR_KEYCLOAK_NAMESPACE
+# ============================================================================
+
+---
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: KeycloakRealmImport
+metadata:
+  name: openshift-oidc-client
+  namespace: keycloak
+  labels:
+    app: keycloak
+    purpose: openshift-integration
+spec:
+  keycloakCRName: keycloak
+  realm:
+    realm: YOUR_KEYCLOAK_REALM
+    clients:
+      - clientId: openshift-oidc
+        name: OpenShift OIDC Client
+        enabled: true
+        protocol: openid-connect
+        clientAuthenticatorType: client-secret
+        # PLACEHOLDER -- store the actual secret in a Kubernetes Secret
+        secret: YOUR_CLIENT_SECRET
+        redirectUris:
+          - "https://oauth-openshift.YOUR_CLUSTER_DOMAIN/oauth2callback/keycloak-oidc"
+        webOrigins:
+          - "https://console-openshift-console.YOUR_CLUSTER_DOMAIN"
+        standardFlowEnabled: true
+        directAccessGrantsEnabled: false
+        publicClient: false
+        defaultClientScopes:
+          - openid
+          - profile
+          - email
+        optionalClientScopes:
+          - groups

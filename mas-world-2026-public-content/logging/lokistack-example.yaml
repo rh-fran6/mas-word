@@ -1,0 +1,87 @@
+# ============================================================================
+# LokiStack -- Example Custom Resource (DEMO SIZING)
+# ============================================================================
+#
+# Purpose:
+#   Deploys a LokiStack instance for log storage on OpenShift. This example
+#   uses demo sizing (1x.extra-small) suitable ONLY for workshops, demos,
+#   and development. It is NOT appropriate for production.
+#
+# Required permissions:
+#   - cluster-admin (to create LokiStack and associated storage secrets)
+#
+# Supported / tested versions:
+#   - OpenShift Container Platform: 4.16 -- 4.21
+#   - Loki Operator: stable-6.6
+#   - API: loki.grafana.com/v1
+#
+# Variables to replace:
+#   - YOUR_S3_BUCKET_NAME       -- S3 bucket for Loki chunk storage
+#   - YOUR_AWS_REGION           -- AWS region (e.g., us-east-2)
+#   - YOUR_S3_ACCESS_KEY_ID     -- AWS IAM access key with S3 permissions
+#   - YOUR_S3_SECRET_ACCESS_KEY -- AWS IAM secret key
+#   - YOUR_S3_ENDPOINT          -- S3 endpoint URL (use https://s3.YOUR_AWS_REGION.amazonaws.com for standard AWS)
+#
+# Security warnings:
+#   - The storage secret contains S3 credentials. Protect it with RBAC.
+#   - Use IAM policies scoped to the minimum required S3 actions.
+#   - Enable S3 bucket encryption and block public access.
+#   - Rotate S3 credentials regularly.
+#
+# DEMO vs PRODUCTION SIZING:
+#   This example uses 1x.extra-small, which runs minimal replicas with low
+#   resource requests. Production deployments should use at least 1x.medium
+#   with appropriate retention, replication, and resource limits.
+#
+#   | Size            | Use case           | Ingestion  | Replicas |
+#   |-----------------|--------------------|------------|----------|
+#   | 1x.extra-small  | Demo / dev         | ~100 GB/d  | Minimal  |
+#   | 1x.small        | Small clusters     | ~100 GB/d  | HA       |
+#   | 1x.medium       | Production         | ~500 GB/d  | HA       |
+#
+#   See production-guidance/logging-production.md for full recommendations.
+#
+# Apply:
+#   # 1. Create the storage secret first:
+#   oc create secret generic logging-loki-s3 \
+#     -n openshift-logging \
+#     --from-literal=bucketnames=YOUR_S3_BUCKET_NAME \
+#     --from-literal=region=YOUR_AWS_REGION \
+#     --from-literal=access_key_id=YOUR_S3_ACCESS_KEY_ID \
+#     --from-literal=access_key_secret=YOUR_S3_SECRET_ACCESS_KEY \
+#     --from-literal=endpoint=YOUR_S3_ENDPOINT
+#
+#   # 2. Apply the LokiStack:
+#   oc apply -f lokistack-example.yaml
+#
+# Validate:
+#   oc get lokistack logging-loki -n openshift-logging
+#   oc get pods -n openshift-logging -l app.kubernetes.io/instance=logging-loki
+#
+# Cleanup:
+#   oc delete lokistack logging-loki -n openshift-logging
+#   oc delete secret logging-loki-s3 -n openshift-logging
+# ============================================================================
+
+---
+apiVersion: loki.grafana.com/v1
+kind: LokiStack
+metadata:
+  name: logging-loki
+  namespace: openshift-logging
+spec:
+  size: 1x.extra-small
+  storage:
+    schemas:
+      - version: v13
+        effectiveDate: "2024-10-01"
+    secret:
+      name: logging-loki-s3
+      type: s3
+  storageClassName: gp3-csi
+  tenants:
+    mode: openshift-logging
+  limits:
+    global:
+      retention:
+        days: 3

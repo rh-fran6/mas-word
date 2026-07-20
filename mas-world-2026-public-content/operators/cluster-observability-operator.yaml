@@ -1,0 +1,50 @@
+# ============================================================================
+# Cluster Observability Operator -- Example Subscription
+# ============================================================================
+#
+# Purpose:
+#   Installs the Cluster Observability Operator (COO), which provides
+#   observability signal correlation, dashboarding, and the UIPlugin API
+#   for extending the OpenShift web console with logging, tracing, and
+#   distributed-tracing views.
+#
+# Required permissions:
+#   - cluster-admin (to create Subscription)
+#
+# Supported / tested versions:
+#   - OpenShift Container Platform: 4.16 -- 4.21
+#   - Channel: stable
+#   - CatalogSource: redhat-operators
+#
+# Variables to replace:
+#   None -- this example uses standard defaults.
+#
+# Security warnings:
+#   - COO runs in the openshift-operators namespace with broad read access.
+#   - Review UIPlugin configurations if exposing dashboards to
+#     non-administrative users.
+#
+# Apply:
+#   oc apply -f cluster-observability-operator.yaml
+#
+# Validate:
+#   oc get csv -n openshift-operators | grep observability
+#   oc get pods -n openshift-operators -l app.kubernetes.io/name=cluster-observability-operator
+#
+# Cleanup:
+#   oc delete subscription cluster-observability-operator -n openshift-operators
+#   oc delete csv -n openshift-operators -l operators.coreos.com/cluster-observability-operator.openshift-operators
+# ============================================================================
+
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: cluster-observability-operator
+  namespace: openshift-operators
+spec:
+  channel: stable
+  name: cluster-observability-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Automatic

@@ -1,0 +1,95 @@
+# ============================================================================
+# Sample Log Generator Pod
+# ============================================================================
+#
+# Purpose:
+#   Deploys a lightweight pod that emits uniquely identifiable log messages
+#   at regular intervals. Use this to verify that the log collection pipeline
+#   (Vector -> LokiStack -> S3) is working correctly.
+#
+#   Each log line includes a run ID and a sequence number so you can query
+#   for specific runs in Loki even after the pod is deleted (historical
+#   log verification).
+#
+# Required permissions:
+#   - edit or admin role in the target namespace
+#
+# Supported / tested versions:
+#   - OpenShift Container Platform: 4.16 -- 4.21
+#   - Any Kubernetes cluster with a log collector configured
+#
+# Variables to replace:
+#   - YOUR_NAMESPACE -- namespace where the pod should run
+#   - YOUR_RUN_ID   -- a unique identifier for this test run (e.g., "run-001")
+#   - YOUR_SEAT_ID  -- your seat or user identifier (e.g., "seat-01")
+#
+# Security warnings:
+#   - This pod runs as a non-root BusyBox container with no special
+#     privileges.
+#   - Do not run this in production namespaces or namespaces containing
+#     sensitive workloads.
+#
+# Apply:
+#   oc apply -f sample-log-generator.yaml -n YOUR_NAMESPACE
+#
+# Validate (wait ~60 seconds for logs to be collected):
+#   oc logs log-generator -n YOUR_NAMESPACE --tail=5
+#
+# Query from Loki (via OpenShift Console -> Observe -> Logs):
+#   {kubernetes_namespace_name="YOUR_NAMESPACE"} |= "YOUR_RUN_ID"
+#
+# See logging/logql-queries.md for more query examples.
+#
+# Cleanup:
+#   oc delete pod log-generator -n YOUR_NAMESPACE
+# ============================================================================
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: log-generator
+  labels:
+    app: log-generator
+    purpose: logging-exercise
+spec:
+  containers:
+    - name: generator
+      image: registry.access.redhat.com/ubi9/ubi-minimal:9.4
+      command:
+        - /bin/sh
+        - -c
+        - |
+          RUN_ID="${LOG_RUN_ID:-unset}"
+          SEAT_ID="${LOG_SEAT_ID:-unset}"
+          SEQ=0
+          echo "LOG_GENERATOR_START run_id=${RUN_ID} seat_id=${SEAT_ID} timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          while true; do
+            SEQ=$((SEQ + 1))
+            echo "LOG_GENERATOR run_id=${RUN_ID} seat_id=${SEAT_ID} seq=${SEQ} level=info message=\"Sample log entry\" timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            if [ $((SEQ % 10)) -eq 0 ]; then
+              echo "LOG_GENERATOR run_id=${RUN_ID} seat_id=${SEAT_ID} seq=${SEQ} level=warn message=\"Periodic warning for query exercise\" timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            fi
+            sleep 5
+          done
+      env:
+        - name: LOG_RUN_ID
+          value: "YOUR_RUN_ID"
+        - name: LOG_SEAT_ID
+          value: "YOUR_SEAT_ID"
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          cpu: 50m
+          memory: 32Mi
+      securityContext:
+        allowPrivilegeEscalation: false
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+        capabilities:
+          drop:
+            - ALL
+  restartPolicy: Always

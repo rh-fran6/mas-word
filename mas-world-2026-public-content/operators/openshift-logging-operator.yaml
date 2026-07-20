@@ -1,0 +1,70 @@
+# ============================================================================
+# OpenShift Logging Operator -- Example Subscription
+# ============================================================================
+#
+# Purpose:
+#   Installs the Red Hat OpenShift Logging Operator, which provides log
+#   collection (Vector) and the ClusterLogForwarder API for forwarding logs
+#   to LokiStack or external destinations.
+#
+# Required permissions:
+#   - cluster-admin (to create Namespace, OperatorGroup, and Subscription)
+#
+# Supported / tested versions:
+#   - OpenShift Container Platform: 4.16 -- 4.21
+#   - Logging Operator channel: stable-6.6
+#   - CatalogSource: redhat-operators
+#
+# Variables to replace:
+#   None -- this example uses standard defaults.
+#
+# Security warnings:
+#   - The Logging Operator has cluster-wide access to read container logs.
+#   - Review RBAC and log-forwarding destinations before enabling in
+#     production.
+#
+# Apply:
+#   oc apply -f openshift-logging-operator.yaml
+#
+# Validate:
+#   oc get csv -n openshift-logging
+#   oc get pods -n openshift-logging
+#
+# Cleanup:
+#   oc delete subscription cluster-logging -n openshift-logging
+#   oc delete operatorgroup openshift-logging -n openshift-logging
+#   oc delete namespace openshift-logging
+#   # Then remove the ClusterServiceVersion if present:
+#   oc delete csv -n openshift-logging -l operators.coreos.com/cluster-logging.openshift-logging
+# ============================================================================
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openshift-logging
+  labels:
+    openshift.io/cluster-monitoring: "true"
+
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: openshift-logging
+  namespace: openshift-logging
+spec:
+  targetNamespaces:
+    - openshift-logging
+
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: cluster-logging
+  namespace: openshift-logging
+spec:
+  channel: stable-6.6
+  name: cluster-logging
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Automatic

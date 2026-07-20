@@ -69,3 +69,20 @@ This file records every user instruction that changes or clarifies the project.
   - **CLI commands**: 6 command files rewritten (2,234 total lines). seats.py (assign/replace/unassign/show/export-map with YAML-backed assignments), cluster.py (prepare/validate/repair via ansible-playbook), fleet.py (ThreadPoolExecutor parallel preparation), students.py (crypto-secure password gen via `secrets`, secret-provider integration, HTML access cards), exercises.py (runtime-automation playbook dispatch), reports.py (fleet-status dashboard, seat-report). Config group unchanged (already implemented).
   - **Operational runbooks**: 13 files across 7 directories in mas-world-2026-operations/: 4 runbooks (pre-event, event-morning, during-event, post-event), 3 checklists, 2 repair procedures, 1 incident template, 1 seat-assignment guide, 1 dashboard guide, 1 cost-report template. All reference `masworld` CLI commands. No credentials.
   - **AgnosticV catalog**: 16 files in mas-world-2026-agnosticv/: 3 catalog items (event/dev/rehearsal), 4 variable files (common + 3 env overrides), 3 workload references (post-provision with 14 roles, showroom, teardown), 2 access-data templates, 1 schema (85 variable definitions), 2 docs (RHDP integration model, existing-cluster workflow gap). All use `secret://` references.
+
+### TASK-20260719-005
+
+- Date: 2026-07-19
+- Original instruction: "proceed with the most reasonable next step" (after initial commit)
+- Classification: Implementation — testing, public content, CI/CD, branch protection
+- Specification impact: None — implements existing requirements
+- `prompt.md` sections changed: None
+- Decisions created or updated: None
+- Workarounds created or updated: None
+- Execution status: IMPLEMENTED_NOT_TESTED
+- Validation evidence:
+  - **Unit tests**: 39/39 pass (0.14s). Fixed `test_detects_embedded_aws_key` — Pydantic schema correctly rejects raw AWS keys at validation time, updated test to assert ValidationError.
+  - **Public content**: 21 files across 7 directories in `mas-world-2026-public-content/`. README, 3 operator Subscriptions (Logging stable-6.6, Loki stable-6.6, COO stable), 4 logging examples (LokiStack, CLF, log generator, LogQL queries), 4 identity examples (Keycloak OIDC client, OAuth patch, LDAP group sync, RBAC), 3 architecture diagrams (system context, logging topology, identity topology — all Mermaid), 3 production guidance docs (logging, identity, MAS operations), 2 troubleshooting docs (common issues, diagnostic commands), 1 MAS Edge overview. No credentials — verified via grep.
+  - **CI/CD pipeline**: `.github/workflows/ci.yml` (6 jobs: lint-and-validate, secret-scan, unit-tests, validate-manifests, validate-showroom, docs-links), `.github/workflows/release.yml` (manual dispatch with semver validation), `.github/dependabot.yml` (weekly checks for github-actions and pip).
+  - **Branch protection**: Re-enabled `no-commit-to-branch` hook in `.pre-commit-config.yaml`.
+  - **Linter fixes**: `.yamllint.yml` updated with ansible-lint required settings (comments-indentation, braces, octal-values). `.ansible-lint.yml` updated with mock_roles and _*.yml exclusion.

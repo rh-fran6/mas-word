@@ -1,0 +1,83 @@
+# ============================================================================
+# LDAP Group Synchronization -- Example Configuration
+# ============================================================================
+#
+# Purpose:
+#   Synchronizes LDAP groups into OpenShift Groups so that RBAC can be
+#   managed based on LDAP group membership. This example uses the RFC 2307
+#   schema, which is the most common layout.
+#
+# Required permissions:
+#   - cluster-admin (oc adm groups sync requires cluster-level access)
+#   - LDAP bind account with read access to group and user entries
+#
+# Supported / tested versions:
+#   - OpenShift Container Platform: 4.16 -- 4.21
+#   - Any RFC 2307-compatible LDAP server (Active Directory, FreeIPA,
+#     OpenLDAP, Red Hat Directory Server)
+#
+# Variables to replace:
+#   - YOUR_LDAP_URL           -- LDAP server URL (e.g., "ldaps://ldap.example.com:636")
+#   - YOUR_BIND_DN            -- LDAP bind distinguished name
+#   - YOUR_BIND_PASSWORD_FILE -- path to a file containing the bind password
+#   - YOUR_GROUP_BASE_DN      -- base DN for group search
+#   - YOUR_USER_BASE_DN       -- base DN for user search
+#
+# Security warnings:
+#   - Use LDAPS (port 636) or STARTTLS. Never use unencrypted LDAP in
+#     production.
+#   - The bind password must NOT be stored in this file. Use a file
+#     reference or Kubernetes Secret.
+#   - If using a CA certificate, provide it via the --ca flag.
+#   - Run with --confirm only after reviewing the dry-run output.
+#   - Group sync does not remove users from OpenShift Groups if they are
+#     removed from LDAP. Use a prune job for that.
+#
+# Dry run (review before applying):
+#   oc adm groups sync \
+#     --sync-config=ldap-group-sync.yaml \
+#     --bind-password-file=YOUR_BIND_PASSWORD_FILE
+#
+# Apply:
+#   oc adm groups sync \
+#     --sync-config=ldap-group-sync.yaml \
+#     --bind-password-file=YOUR_BIND_PASSWORD_FILE \
+#     --confirm
+#
+# Validate:
+#   oc get groups
+#   oc get group <group-name> -o yaml
+#
+# Cleanup (remove synced groups):
+#   oc adm groups prune \
+#     --sync-config=ldap-group-sync.yaml \
+#     --bind-password-file=YOUR_BIND_PASSWORD_FILE \
+#     --confirm
+# ============================================================================
+
+kind: LDAPSyncConfig
+apiVersion: v1
+url: "YOUR_LDAP_URL"
+bindDN: "YOUR_BIND_DN"
+# bindPassword is intentionally omitted. Use --bind-password-file flag.
+insecure: false
+rfc2307:
+  groupsQuery:
+    baseDN: "YOUR_GROUP_BASE_DN"
+    scope: sub
+    derefAliases: never
+    filter: "(objectClass=groupOfNames)"
+  groupUIDAttribute: dn
+  groupNameAttributes:
+    - cn
+  groupMembershipAttributes:
+    - member
+  usersQuery:
+    baseDN: "YOUR_USER_BASE_DN"
+    scope: sub
+    derefAliases: never
+  userUIDAttribute: dn
+  userNameAttributes:
+    - uid
+  tolerateMemberNotFoundErrors: true
+  tolerateMemberOutOfScopeErrors: true

@@ -1,0 +1,138 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. v0.1.0)"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark as pre-release"
+        required: false
+        type: boolean
+        default: false
+
+# NOTE: For production use, configure an environment protection rule named
+# "release" in the repository settings (Settings > Environments) with:
+#   - Required reviewers (at least one of: francis.anyaegbu, ernie.steagall, myles.vivian)
+#   - Deployment branches restricted to "main"
+# Then uncomment the environment line below in the release job.
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Validate before releasing
+  # ---------------------------------------------------------------------------
+  preflight:
+    name: Release Preflight
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate version format
+        run: |
+          version="${{ inputs.version }}"
+          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "ERROR: Version must match vMAJOR.MINOR.PATCH[-prerelease] (e.g. v0.1.0, v1.0.0-rc.1)"
+            exit 1
+          fi
+
+      - name: Check tag does not already exist
+        run: |
+          if git rev-parse "${{ inputs.version }}" >/dev/null 2>&1; then
+            echo "ERROR: Tag ${{ inputs.version }} already exists."
+            exit 1
+          fi
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install and run unit tests
+        run: |
+          pip install --upgrade pip
+          pip install -e mas-world-2026-automation[dev]
+          pytest mas-world-2026-automation/tests/unit/ -v --tb=short
+
+      - name: Run secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+  # ---------------------------------------------------------------------------
+  # Create the release
+  # ---------------------------------------------------------------------------
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: preflight
+    # Uncomment the next line after configuring the "release" environment
+    # with required reviewers in the repository settings.
+    # environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ inputs.version }}" -m "Release ${{ inputs.version }}"
+          git push origin "${{ inputs.version }}"
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          # Find the previous tag, if any
+          prev_tag=$(git tag --sort=-creatordate | grep -v "^${{ inputs.version }}$" | head -1)
+
+          {
+            echo "notes<<RELEASE_NOTES_EOF"
+            echo "## MAS World 2026 Automation - ${{ inputs.version }}"
+            echo ""
+            if [ -n "$prev_tag" ]; then
+              echo "### Changes since $prev_tag"
+              echo ""
+              git log --pretty=format:"- %s (%h)" "$prev_tag..HEAD" --no-merges
+            else
+              echo "### Initial release"
+              echo ""
+              git log --pretty=format:"- %s (%h)" --no-merges
+            fi
+            echo ""
+            echo ""
+            echo "### Components"
+            echo "- Automation roles and playbooks"
+            echo "- Showroom workshop content"
+            echo "- ACM policies and manifests"
+            echo "- AgnosticV catalog configuration"
+            echo "- Operational runbooks"
+            echo ""
+            echo "### Release commit"
+            echo "$(git rev-parse HEAD)"
+            echo ""
+            echo "---"
+            echo ""
+            echo "_Production releases would also include: container image builds and scans,"
+            echo "software bill of materials (SBOM), artifact signing, and promotion_"
+            echo "_to the event environment after explicit approval._"
+            echo "RELEASE_NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.version }}
+          name: ${{ inputs.version }}
+          body: ${{ steps.notes.outputs.notes }}
+          prerelease: ${{ inputs.prerelease }}
+          generate_release_notes: false

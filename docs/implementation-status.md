@@ -21,7 +21,7 @@ Use these status values:
 | 2 | Showroom Content | COMPLETE | Workshop content (manual fallback), verification pending via /showroom:verify-content |
 | 3 | Ansible Roles | COMPLETE | 17 role task files, 10 playbooks, 6 ACM manifests |
 | 4 | Operations & AgnosticV | COMPLETE | Runbooks, checklists, repair procedures, AgnosticV catalog |
-| 5 | Integration | NOT STARTED | End-to-end playbook, CI/CD |
+| 5 | Integration & CI/CD | IN PROGRESS | CI pipeline done, public content done, unit tests passing |
 | 6 | Testing | NOT STARTED | Rehearsal dry-run, timing validation |
 | 7 | Hardening | NOT STARTED | Security review, credential rotation, backup |
 | 8 | Event Prep | NOT STARTED | Final validation, facilitator runbook |
@@ -148,3 +148,22 @@ Use these status values:
 | AgnosticV access data | `agnosticv/access-data/*.yml` | SCAFFOLDED |
 | AgnosticV schema | `agnosticv/schemas/catalog-schema.yml` | SCAFFOLDED (85 variables) |
 | RHDP integration docs | `agnosticv/docs/*.md` | IMPLEMENTED_NOT_TESTED |
+
+## Phase 5: Integration & CI/CD — IN PROGRESS
+
+| Deliverable | File/Directory | Status |
+|-------------|---------------|--------|
+| Unit tests (39) | `tests/unit/` | IMPLEMENTED_AND_TESTED (39/39 pass) |
+| CI pipeline | `.github/workflows/ci.yml` | IMPLEMENTED_NOT_TESTED (6 jobs) |
+| Release pipeline | `.github/workflows/release.yml` | IMPLEMENTED_NOT_TESTED |
+| Dependabot config | `.github/dependabot.yml` | IMPLEMENTED_NOT_TESTED |
+| Branch protection hook | `.pre-commit-config.yaml` | IMPLEMENTED_NOT_TESTED (no-commit-to-branch re-enabled) |
+| Public content README | `public-content/README.md` | IMPLEMENTED_NOT_TESTED |
+| Operator examples | `public-content/operators/*.yaml` | IMPLEMENTED_NOT_TESTED (3 Subscriptions) |
+| Logging examples | `public-content/logging/*` | IMPLEMENTED_NOT_TESTED (4 files) |
+| Identity examples | `public-content/identity/*` | IMPLEMENTED_NOT_TESTED (4 files) |
+| Architecture diagrams | `public-content/architecture/*` | IMPLEMENTED_NOT_TESTED (3 Mermaid diagrams) |
+| Production guidance | `public-content/production-guidance/*` | IMPLEMENTED_NOT_TESTED (3 docs) |
+| Troubleshooting docs | `public-content/troubleshooting/*` | IMPLEMENTED_NOT_TESTED (2 docs) |
+| MAS Edge overview | `public-content/mas-edge/overview.md` | IMPLEMENTED_NOT_TESTED |
+| Linter config fixes | `.yamllint.yml`, `.ansible-lint.yml` | IMPLEMENTED_AND_TESTED (all hooks pass) |

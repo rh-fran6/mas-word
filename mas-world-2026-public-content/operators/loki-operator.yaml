@@ -1,0 +1,50 @@
+# ============================================================================
+# Loki Operator -- Example Subscription
+# ============================================================================
+#
+# Purpose:
+#   Installs the Loki Operator, which provides the LokiStack custom resource
+#   for deploying Loki as a log storage backend on OpenShift.
+#
+# Required permissions:
+#   - cluster-admin (to create Subscription and OperatorGroup)
+#
+# Supported / tested versions:
+#   - OpenShift Container Platform: 4.16 -- 4.21
+#   - Loki Operator channel: stable-6.6
+#   - CatalogSource: redhat-operators
+#
+# Variables to replace:
+#   None -- this example uses standard defaults. The Loki Operator installs
+#   into the openshift-logging namespace alongside the Logging Operator.
+#
+# Security warnings:
+#   - The Loki Operator manages storage credentials for log data. Ensure
+#     object-storage secrets are properly secured.
+#   - LokiStack requires a Secret with S3 (or compatible) credentials
+#     before it will become ready.
+#
+# Apply:
+#   oc apply -f loki-operator.yaml
+#
+# Validate:
+#   oc get csv -n openshift-logging | grep loki
+#   oc get pods -n openshift-logging -l app.kubernetes.io/name=loki-operator
+#
+# Cleanup:
+#   oc delete subscription loki-operator -n openshift-logging
+#   oc delete csv -n openshift-logging -l operators.coreos.com/loki-operator.openshift-logging
+# ============================================================================
+
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: loki-operator
+  namespace: openshift-logging
+spec:
+  channel: stable-6.6
+  name: loki-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Automatic

@@ -1,0 +1,107 @@
+# ============================================================================
+# OpenShift OAuth -- OIDC Identity Provider Configuration (Example Patch)
+# ============================================================================
+#
+# Purpose:
+#   Shows how to add a Keycloak-backed OpenID Connect identity provider to
+#   the OpenShift OAuth server. This is an EXAMPLE SNIPPET -- do not apply
+#   blindly. Review your existing OAuth configuration first.
+#
+# Required permissions:
+#   - cluster-admin
+#
+# Supported / tested versions:
+#   - OpenShift Container Platform: 4.16 -- 4.21
+#   - Keycloak: 26.x
+#
+# Variables to replace:
+#   - YOUR_KEYCLOAK_URL       -- Keycloak base URL
+#                                (e.g., "https://keycloak.apps.cluster.example.com")
+#   - YOUR_KEYCLOAK_REALM     -- Keycloak realm name (e.g., "openshift")
+#   - YOUR_OIDC_CLIENT_SECRET_NAME -- name of the Kubernetes Secret
+#                                     containing the OIDC client secret
+#
+# Security warnings:
+#   - NEVER apply this without first reviewing your existing OAuth CR:
+#       oc get oauth cluster -o yaml
+#     Applying a full replacement will REMOVE existing identity providers.
+#   - Use `oc patch` or `oc edit` to ADD the provider to the existing list.
+#   - The client secret must be stored in a Kubernetes Secret in the
+#     openshift-config namespace.
+#   - Test in a non-production environment first.
+#   - ROSA HCP clusters use a different OAuth model -- this example does
+#     not apply to HCP.
+#
+# Inspect current configuration:
+#   oc get oauth cluster -o yaml
+#
+# Create the client secret:
+#   oc create secret generic YOUR_OIDC_CLIENT_SECRET_NAME \
+#     -n openshift-config \
+#     --from-literal=clientSecret=YOUR_CLIENT_SECRET_VALUE
+#
+# Apply (as a patch to ADD to existing providers):
+#   oc patch oauth cluster --type=json -p '[
+#     {
+#       "op": "add",
+#       "path": "/spec/identityProviders/-",
+#       "value": {
+#         "name": "keycloak-oidc",
+#         "type": "OpenID",
+#         "mappingMethod": "claim",
+#         "openID": {
+#           "clientID": "openshift-oidc",
+#           "clientSecret": {
+#             "name": "YOUR_OIDC_CLIENT_SECRET_NAME"
+#           },
+#           "issuer": "YOUR_KEYCLOAK_URL/realms/YOUR_KEYCLOAK_REALM",
+#           "claims": {
+#             "preferredUsername": ["preferred_username"],
+#             "name": ["name"],
+#             "email": ["email"]
+#           }
+#         }
+#       }
+#     }
+#   ]'
+#
+# Validate:
+#   oc get oauth cluster -o jsonpath='{.spec.identityProviders[*].name}'
+#   oc get pods -n openshift-authentication
+#   # Wait for oauth-openshift pods to restart, then test login.
+#
+# Cleanup:
+#   oc patch oauth cluster --type=json -p '[
+#     {"op": "test", "path": "/spec/identityProviders/1/name", "value": "keycloak-oidc"},
+#     {"op": "remove", "path": "/spec/identityProviders/1"}
+#   ]'
+#   oc delete secret YOUR_OIDC_CLIENT_SECRET_NAME -n openshift-config
+# ============================================================================
+
+# This file is a reference snippet. The full OAuth CR is shown below for
+# context, but you should PATCH the existing resource rather than replacing
+# it. See the apply instructions above.
+
+---
+apiVersion: config.openshift.io/v1
+kind: OAuth
+metadata:
+  name: cluster
+spec:
+  identityProviders:
+    # Existing providers should be preserved. This shows only the new entry.
+    - name: keycloak-oidc
+      type: OpenID
+      mappingMethod: claim
+      openID:
+        clientID: openshift-oidc
+        clientSecret:
+          name: YOUR_OIDC_CLIENT_SECRET_NAME
+        issuer: "YOUR_KEYCLOAK_URL/realms/YOUR_KEYCLOAK_REALM"
+        claims:
+          preferredUsername:
+            - preferred_username
+          name:
+            - name
+          email:
+            - email

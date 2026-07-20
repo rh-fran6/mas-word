@@ -136,11 +136,47 @@ Last updated: 2026-07-19
 - No security/negative tests
 - Status: SCAFFOLDED
 
+## CI/CD
+
+- `.github/workflows/ci.yml` — 6-job PR validation pipeline:
+  - lint-and-validate (yamllint, ansible-lint, ruff, shellcheck, config YAML parse)
+  - secret-scan (gitleaks with `.gitleaks.toml`)
+  - unit-tests (pytest, uploads results artifact)
+  - validate-manifests (kubeconform on ACM manifests)
+  - validate-showroom (Antora build, nav.adoc xref validation)
+  - docs-links (broken relative link detection in Markdown)
+- `.github/workflows/release.yml` — manual dispatch with semver validation, tag creation, GitHub Release
+- `.github/dependabot.yml` — weekly pip and github-actions dependency updates
+- Status: IMPLEMENTED_NOT_TESTED (not yet pushed to GitHub)
+
+## Public Content
+
+- `mas-world-2026-public-content/` — 21 files, all sanitized (no credentials):
+  - `README.md` — repo overview with conference-vs-production disclaimer
+  - `operators/` — 3 Subscription YAMLs (Logging stable-6.6, Loki stable-6.6, COO stable)
+  - `logging/` — LokiStack CR, ClusterLogForwarder CR, sample log generator pod, 10 LogQL query examples
+  - `identity/` — Keycloak OIDC client, OAuth patch snippet, LDAPSyncConfig, 3 RBAC examples
+  - `architecture/` — 3 Mermaid diagrams (system context, logging topology, identity chain)
+  - `production-guidance/` — logging sizing/HA/SIEM, identity HA/IdP selection, MAS operations/DR
+  - `troubleshooting/` — 12 common issues with diagnosis/resolution, organized `oc` diagnostic commands
+  - `mas-edge/` — Visual Inspection Edge overview
+- Status: IMPLEMENTED_NOT_TESTED
+
+## Testing
+
+- 39 unit tests: all passing (verified 2026-07-19)
+  - `test_config_loader.py` — 14 tests (deep merge, redaction, config loading)
+  - `test_config_validation.py` — 10 tests (schema validation, embedded key detection)
+  - `test_secret_provider.py` — 15 tests (ref parsing, conversions, env provider CRUD)
+- No integration tests against live clusters
+- No security/negative tests
+- No Molecule test scenarios
+- Status: Unit tests IMPLEMENTED_AND_TESTED; integration tests NOT_STARTED
+
 ## Known Gaps
 
 - No live cluster testing — all roles are SCAFFOLDED
-- CI/CD pipelines not implemented
-- Public content repository (`mas-world-2026-public-content/`) empty
 - Molecule test scenarios not created
-- Pre-commit hooks configured but `pre-commit install` not run (requires user action)
+- CI/CD pipeline not yet pushed to GitHub for execution
 - AgnosticV catalog requires RHDP platform team review for existing-cluster integration
+- `no-commit-to-branch` hook re-enabled — work on feature branches going forward

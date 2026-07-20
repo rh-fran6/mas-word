@@ -10,9 +10,8 @@ repos:
       - id: check-merge-conflict
       - id: check-added-large-files
         args: [--maxkb=500]
-      # Uncomment after initial commit and branching strategy is in place:
-      # - id: no-commit-to-branch
-      #   args: [--branch, main, --branch, master]
+      - id: no-commit-to-branch
+        args: [--branch, main, --branch, master]
 
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.21.2

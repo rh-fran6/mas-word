@@ -1,0 +1,96 @@
+# ============================================================================
+# RBAC Examples -- ClusterRoleBinding and RoleBinding
+# ============================================================================
+#
+# Purpose:
+#   Three common RBAC patterns for OpenShift:
+#     1. Grant basic-user cluster role (minimal cluster-level access)
+#     2. Grant namespace admin (full control within one namespace)
+#     3. Grant view-only access to a namespace
+#
+# Required permissions:
+#   - cluster-admin for ClusterRoleBindings
+#   - namespace admin for RoleBindings
+#
+# Supported / tested versions:
+#   - OpenShift Container Platform: 4.16 -- 4.21
+#   - Kubernetes RBAC: rbac.authorization.k8s.io/v1
+#
+# Variables to replace:
+#   - YOUR_USERNAME  -- the OpenShift username to grant access to
+#   - YOUR_NAMESPACE -- the target namespace for RoleBindings
+#
+# Security warnings:
+#   - Never grant cluster-admin to workshop attendees.
+#   - Use the principle of least privilege: start with view, escalate
+#     only as needed.
+#   - ClusterRoleBindings apply cluster-wide. Use RoleBindings to limit
+#     scope to a single namespace.
+#   - Review existing bindings before adding new ones:
+#       oc get clusterrolebindings | grep YOUR_USERNAME
+#       oc get rolebindings -n YOUR_NAMESPACE
+#
+# Apply:
+#   oc apply -f rbac-examples.yaml
+#
+# Validate:
+#   oc auth can-i --list --as=YOUR_USERNAME
+#   oc auth can-i --list --as=YOUR_USERNAME -n YOUR_NAMESPACE
+#
+# Cleanup:
+#   oc delete -f rbac-examples.yaml
+# ============================================================================
+
+# ---- Example 1: Basic User (cluster-level) ----
+# Grants the basic-user ClusterRole, which provides minimal access:
+# ability to get basic cluster information and view own project list.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: YOUR_USERNAME-basic-user
+subjects:
+  - kind: User
+    apiGroup: rbac.authorization.k8s.io
+    name: YOUR_USERNAME
+roleRef:
+  kind: ClusterRole
+  apiGroup: rbac.authorization.k8s.io
+  name: basic-user
+
+# ---- Example 2: Namespace Admin ----
+# Grants full admin access within a single namespace. The user can create,
+# modify, and delete most resources in this namespace, but cannot modify
+# cluster-scoped resources or access other namespaces.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: YOUR_USERNAME-admin
+  namespace: YOUR_NAMESPACE
+subjects:
+  - kind: User
+    apiGroup: rbac.authorization.k8s.io
+    name: YOUR_USERNAME
+roleRef:
+  kind: ClusterRole
+  apiGroup: rbac.authorization.k8s.io
+  name: admin
+
+# ---- Example 3: View-Only Access ----
+# Grants read-only access within a namespace. The user can list and get
+# resources but cannot create, modify, or delete anything.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: YOUR_USERNAME-view
+  namespace: YOUR_NAMESPACE
+subjects:
+  - kind: User
+    apiGroup: rbac.authorization.k8s.io
+    name: YOUR_USERNAME
+roleRef:
+  kind: ClusterRole
+  apiGroup: rbac.authorization.k8s.io
+  name: view
