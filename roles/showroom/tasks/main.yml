@@ -91,6 +91,23 @@
       retries: "{{ masworld_showroom_ready_retries }}"
       delay: "{{ masworld_showroom_ready_delay }}"
 
+    # ── Link Content Into WWW Directory ────────────────────────────────
+    - name: Get Showroom pod name
+      ansible.builtin.set_fact:
+        _masworld_showroom_pod: >-
+          {{ _masworld_showroom_pods.resources
+             | selectattr('status.phase', 'equalto', 'Running')
+             | map(attribute='metadata.name') | first }}
+
+    - name: Create content symlinks in showroom www directory
+      kubernetes.core.k8s_exec:
+        namespace: "{{ masworld_showroom_namespace }}"
+        pod: "{{ _masworld_showroom_pod }}"
+        container: content
+        command: >-
+          sh -c 'ln -sf /showroom/repo/showroom/content/antora.yml /showroom/www/antora.yml &&
+                 ln -sf /showroom/repo/showroom/content/modules /showroom/www/modules'
+
     # ── Get Showroom Route URL ──────────────────────────────────────────
     - name: Get Showroom route
       kubernetes.core.k8s_info:
