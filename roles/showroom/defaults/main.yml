@@ -5,11 +5,14 @@ masworld_showroom_enabled: true
 # Showroom Helm chart version
 masworld_showroom_chart_version: "v2.1.8"
 
-# Showroom content repository — must be set before use
-masworld_showroom_content_repo: ""
+# Showroom content repository
+masworld_showroom_content_repo: "https://github.com/rh-fran6/mas-word.git"
 
 # Content branch or tag
 masworld_showroom_content_ref: "main"
+
+# Antora playbook path (relative to repo root)
+masworld_showroom_antora_playbook: "showroom/site.yml"
 
 # Deployment namespace
 masworld_showroom_namespace: "showroom"

@@ -54,6 +54,7 @@
           content:
             repoUrl: "{{ masworld_showroom_content_repo }}"
             repoRef: "{{ masworld_showroom_content_ref }}"
+            antoraPlaybook: "{{ masworld_showroom_antora_playbook }}"
           general:
             title: "MAS World 2026 Workshop"
           userVariables:
