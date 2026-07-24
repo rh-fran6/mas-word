@@ -27,7 +27,7 @@ dev = [
     "pytest-mock>=3.14,<4",
     "ruff>=0.5,<1",
     "mypy>=1.10,<2",
-    "ansible-lint>=24.2,<25",
+    "ansible-lint>=24.2,<27",
     "yamllint>=1.35,<2",
     "molecule>=24.2,<25",
 ]
