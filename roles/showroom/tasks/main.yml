@@ -61,6 +61,7 @@
               mas_url: {{ mas_url | default('') }}
               manage_url: {{ manage_url | default('') }}
               seat_number: {{ masworld_seat_number }}
+              user: {{ masworld_student_username }}
               student_username: {{ masworld_student_username }}
               mas_instance_id: {{ masworld_mas_instance_id }}
           terminal:
