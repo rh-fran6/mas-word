@@ -18,8 +18,8 @@ masworld_showroom_antora_playbook: "showroom/site.yml"
 masworld_showroom_namespace: "showroom"
 
 # Helm chart repository
-masworld_showroom_chart_repo: "https://rhpds.github.io/showroom"
-masworld_showroom_chart_name: "showroom"
+masworld_showroom_chart_repo: "https://rhpds.github.io/showroom-deployer"
+masworld_showroom_chart_name: "showroom-single-pod"
 
 # Seat number and username — set by playbook
 masworld_seat_number: "{{ seat_number | default(1) }}"

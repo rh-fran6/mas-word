@@ -55,16 +55,18 @@
             repoUrl: "{{ masworld_showroom_content_repo }}"
             repoRef: "{{ masworld_showroom_content_ref }}"
             antoraPlaybook: "{{ masworld_showroom_antora_playbook }}"
-          general:
-            title: "MAS World 2026 Workshop"
-          userVariables:
-            openshift_console_url: "{{ _masworld_console_url }}"
-            mas_url: "{{ mas_url | default('') }}"
-            manage_url: "{{ manage_url | default('') }}"
-            seat_number: "{{ masworld_seat_number }}"
-            student_username: "{{ masworld_student_username }}"
-            cluster_domain: "{{ _masworld_cluster_domain }}"
-            mas_instance_id: "{{ masworld_mas_instance_id }}"
+            user_data: |
+              openshift_console_url: {{ _masworld_console_url }}
+              openshift_cluster_ingress_domain: {{ _masworld_cluster_domain }}
+              mas_url: {{ mas_url | default('') }}
+              manage_url: {{ manage_url | default('') }}
+              seat_number: {{ masworld_seat_number }}
+              student_username: {{ masworld_student_username }}
+              mas_instance_id: {{ masworld_mas_instance_id }}
+          terminal:
+            setup: "false"
+          wetty:
+            setup: "false"
 
     # ── Wait for Showroom Pod Ready ─────────────────────────────────────
     - name: Wait for Showroom pod to be ready
