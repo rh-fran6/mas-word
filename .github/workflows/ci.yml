@@ -27,7 +27,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Cache pip
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/pip
           key: lint-pip-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
@@ -104,7 +104,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Cache pip
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/pip
           key: test-pip-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
