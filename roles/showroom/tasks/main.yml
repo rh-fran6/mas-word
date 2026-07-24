@@ -51,6 +51,11 @@
         wait: true
         wait_timeout: "300s"
         values:
+          deployer:
+            domain: "{{ _masworld_cluster_domain }}"
+          general:
+            guid: "{{ masworld_seat_number }}"
+          user: "{{ masworld_student_username }}"
           content:
             repoUrl: "{{ masworld_showroom_content_repo }}"
             repoRef: "{{ masworld_showroom_content_ref }}"
