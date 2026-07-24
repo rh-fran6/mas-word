@@ -12,7 +12,7 @@ masworld_showroom_content_repo: "https://github.com/rh-fran6/mas-word.git"
 masworld_showroom_content_ref: "main"
 
 # Antora playbook path (relative to repo root)
-masworld_showroom_antora_playbook: "showroom/site.yml"
+masworld_showroom_antora_playbook: "site.yml"
 
 # Deployment namespace
 masworld_showroom_namespace: "showroom"
