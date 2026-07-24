@@ -1,0 +1,9 @@
+---
+- name: Validate infra_action
+  ansible.builtin.assert:
+    that:
+      - infra_action in infra_valid_actions
+    fail_msg: "Invalid infra_action '{{ infra_action }}'. Must be one of: {{ infra_valid_actions | join(', ') }}"
+
+- name: "Include {{ infra_action }} tasks"
+  ansible.builtin.include_tasks: "{{ infra_action }}.yml"

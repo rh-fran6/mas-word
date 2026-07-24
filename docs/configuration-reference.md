@@ -11,15 +11,15 @@ Configuration is loaded and merged in the following order. Later layers
 override earlier layers.
 
 ```text
-config/defaults.yaml                 Base defaults for all environments
+config/defaults.yaml                        Base defaults for all environments
        |
-config/environments/<env>.yaml       Environment-specific overrides
+config/environments/<env>.yaml              Environment-specific overrides
        |
-config/event.yaml                    Event-specific overrides
+config/event.yaml                           Event-specific overrides
        |
-config/clusters.yaml (per-cluster)   Cluster-specific overrides
+secrets/cluster-credentials.yml (per-cluster)  Cluster-specific overrides
        |
-Command-line arguments               Runtime overrides
+Command-line arguments                      Runtime overrides
 ```
 
 **Merge behavior**: deep merge. Nested mapping keys are merged recursively.
@@ -42,7 +42,7 @@ Secrets are redacted in all rendered output by default.
 **Purpose**: Base defaults that apply to all environments unless overridden by
 a later layer.
 
-**Location**: `mas-world-2026-automation/config/defaults.yaml`
+**Location**: `config/defaults.yaml`
 
 #### `event` -- Event identity
 
@@ -100,13 +100,13 @@ component causes readiness checks to report `NOT_APPLICABLE` instead of
 | `components.keycloak.deployment_mode` | `str` | `"per-cluster"` | One of `per-cluster`, `shared`, or `external`. |
 | `components.mas_edge.enabled` | `bool` | `false` | Enable MAS Edge. Disabled by default. |
 | `components.showroom.enabled` | `bool` | `true` | Enable Showroom deployment. |
-| `components.acm_registration.enabled` | `bool` | `true` | Enable ACM hub registration and labeling. |
+| `components.acm_registration.enabled` | `bool` | `false` | Enable ACM hub registration and labeling. Disabled by default; requires `hub_cluster_id` referencing a cluster in inventory. |
 
 #### `secrets` -- Secret provider
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `secrets.provider` | `str` | `"env"` | Secret backend. One of `env`, `k8s`, `aws-sm`, or `vault`. |
+| `secrets.provider` | `str` | `"env"` | Secret backend. One of `env`, `file`, `k8s`, `aws-sm`, or `vault`. |
 | `secrets.config` | `dict` | `{}` | Provider-specific settings (e.g., `aws_region` for `aws-sm`). |
 
 #### `student_credentials` -- Credential policy
@@ -166,7 +166,7 @@ Each profile is a named mapping. Two profiles ship in defaults:
 **Purpose**: Event-specific overrides. Typically contains event identity and
 session scheduling that does not change between environments.
 
-**Location**: `mas-world-2026-automation/config/event.yaml`
+**Location**: `config/event.yaml`
 
 | Key | Type | Description |
 |-----|------|-------------|
@@ -226,69 +226,52 @@ session:
 
 ---
 
-### 2.3 `config/clusters.yaml`
+### 2.3 `secrets/cluster-credentials.yml`
 
-**Purpose**: Per-cluster inventory. Every cluster that automation can target
-must have an entry here. Clusters with `enabled: false` are skipped by all
-fleet operations.
+**Purpose**: Per-cluster inventory and credentials. Every cluster that
+automation can target must have an entry here. This is the single source
+of truth for all per-cluster identity and credentials. Clusters with
+`enabled: false` are skipped by all fleet operations.
 
-**Location**: `mas-world-2026-automation/config/clusters.yaml`
+**Location**: `secrets/cluster-credentials.yml` (Ansible Vault encrypted)
 
-The top-level key is `clusters`, containing a list of cluster definitions.
+The top-level key is `cluster_credentials`, containing a dictionary keyed
+by cluster name. Each key matches the generated cluster name pattern:
+`{cluster_prefix}-{category}-{index}` (e.g., `lab-seat-01`).
+
+Phase 2 fleet playbooks use the `to_cluster_list` filter to convert the
+credentials dictionary into a list for iteration.
 
 | Key | Type | Required | Default | Description |
 |-----|------|----------|---------|-------------|
-| `id` | `str` | yes | -- | Unique cluster identifier (e.g., `seat-01`, `spare-01`, `facilitator-01`). |
+| `aws_access_key_id` | `str` | yes | -- | AWS access key ID for this cluster's account. |
+| `aws_secret_access_key` | `str` | yes | -- | AWS secret access key for this cluster's account. |
+| `aws_region` | `str` | no | `"us-east-2"` | AWS region for this cluster. |
 | `enabled` | `bool` | no | `true` | Whether the cluster participates in fleet operations. |
 | `purpose` | `str` | no | `"attendee"` | One of `attendee`, `spare`, or `facilitator`. |
 | `seat_number` | `int` or `null` | no | `null` | Pre-assigned seat number. `null` for spares and facilitators. |
-| `connection.api_url` | `str` | yes | -- | OpenShift API URL (e.g., `https://api.cluster.example.com:6443`). |
-| `connection.admin_auth_method` | `str` | no | `"kubeconfig"` | One of `kubeconfig`, `token`, `username-password`, or `external`. |
-| `connection.admin_secret_ref` | `str` | yes | -- | Secret reference for administrative credentials. Must match `secret://...` pattern or `PLACEHOLDER`. |
-| `platform.provider` | `str` | no | `"aws"` | Cloud provider. |
-| `platform.aws_account_id` | `str` | no | `"PLACEHOLDER"` | AWS account ID. |
-| `platform.aws_region` | `str` | no | `"us-east-2"` | AWS region. |
-| `endpoints.console_url` | `str` or `null` | no | `null` | OpenShift console URL. Populated by automation after preparation. |
-| `endpoints.mas_url` | `str` or `null` | no | `null` | Maximo Application Suite URL. |
-| `endpoints.showroom_url` | `str` or `null` | no | `null` | Showroom URL. |
-| `endpoints.logging_url` | `str` or `null` | no | `null` | Logging dashboard URL. |
-| `credentials.student_credential_profile` | `str` | no | `"attendee-default"` | Name of the credential profile to use for student accounts on this cluster. |
-| `metadata` | `dict` | no | `{event: "mas-world-2026", environment: "workshop"}` | Arbitrary metadata applied as cluster labels. |
-| `component_overrides` | `dict` | no | `{}` | Per-cluster component configuration overrides (see Section 3). |
+| `api_url` | `str` | no | -- | OpenShift API URL (e.g., `https://api.cluster.example.com:6443`). |
+| `admin_password` | `str` | no | -- | Administrative password for the cluster. |
 
 Example entry:
 
 ```yaml
-clusters:
-  - id: seat-01
+cluster_credentials:
+  lab-seat-01:
+    aws_access_key_id: "AKIA..."
+    aws_secret_access_key: "wJalr..."
+    aws_region: us-east-2
     enabled: true
     purpose: attendee
     seat_number: 1
-    connection:
-      api_url: "https://api.seat-01.example.com:6443"
-      admin_auth_method: kubeconfig
-      admin_secret_ref: "secret://mas-world/clusters/seat-01/admin-kubeconfig"
-    platform:
-      provider: aws
-      aws_account_id: "111111111111"
-      aws_region: us-east-2
-    endpoints:
-      console_url: null
-      mas_url: null
-      showroom_url: null
-      logging_url: null
-    credentials:
-      student_credential_profile: attendee-default
-    metadata:
-      event: mas-world-2026
-      environment: workshop
+    api_url: "https://api.lab-seat-01.example.com:6443"
+    admin_password: "REDACTED"
 ```
 
-For large fleets, use the inventory generation command:
-
-```bash
-mas-world config generate-inventory --count 50 --spare 5
-```
+This file is encrypted with Ansible Vault and must never be committed in
+plain text. Event-level defaults such as `admin_username`,
+`auth_method`, and `student_credential_profile` are defined in
+`config/defaults.yaml`, not repeated per cluster.
 
 ---
 
@@ -297,15 +280,15 @@ mas-world config generate-inventory --count 50 --spare 5
 **Purpose**: Central registry of secret references for external services.
 Contains only `secret://` references -- never actual secret values.
 
-**Location**: `mas-world-2026-automation/config/credentials.yaml`
+**Location**: `config/credentials.yaml`
 
 | Key | Type | Description |
 |-----|------|-------------|
 | `ibm.entitlement_key_ref` | `str` | Secret reference for the IBM container entitlement key. |
 | `ibm.license_ref` | `str` | Secret reference for the MAS license file. |
 | `aws.default_region` | `str` | AWS region for credential retrieval. |
-| `aws.credentials_ref` | `str` | Secret reference for AWS access credentials. |
-| `acm.hub_kubeconfig_ref` | `str` | Secret reference for the ACM hub cluster kubeconfig. |
+| `aws.access_key_id_ref` | `str` | Secret reference for the AWS access key ID. |
+| `aws.secret_access_key_ref` | `str` | Secret reference for the AWS secret access key. |
 | `container_registry.pull_secret_ref` | `str` | Secret reference for the container registry pull secret. |
 
 Example:
@@ -317,10 +300,8 @@ ibm:
 
 aws:
   default_region: us-east-2
-  credentials_ref: "secret://mas-world/aws/credentials"
-
-acm:
-  hub_kubeconfig_ref: "secret://mas-world/acm/hub-kubeconfig"
+  access_key_id_ref: "secret://mas-world/aws/access-key-id"
+  secret_access_key_ref: "secret://mas-world/aws/secret-access-key"
 
 container_registry:
   pull_secret_ref: "secret://mas-world/registry/pull-secret"
@@ -333,12 +314,11 @@ container_registry:
 **Purpose**: Component version pins and channel selections. Values are
 populated from `docs/compatibility-matrix.md` and must be updated together.
 
-**Location**: `mas-world-2026-automation/config/components.yaml`
+**Location**: `config/components.yaml`
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `components.openshift.minimum_version` | `str` | Minimum supported OpenShift version (e.g., `"4.18"`). |
-| `components.openshift.maximum_version` | `str` | Maximum supported OpenShift version (e.g., `"4.22"`). |
+| `components.openshift.version` | `str` | Target OpenShift major.minor version (e.g., `"4.21"`). Latest stable patch is resolved automatically during provisioning. |
 | `components.mas.version` | `str` | Pinned MAS version (e.g., `"9.1.x"`). |
 | `components.mas.channel` | `str` | OLM subscription channel (e.g., `"9.1.x"`). |
 | `components.mas.catalog_tag` | `str` | IBM operator catalog image tag. |
@@ -357,8 +337,7 @@ Example:
 ```yaml
 components:
   openshift:
-    minimum_version: "4.18"
-    maximum_version: "4.22"
+    version: "4.21"
 
   mas:
     version: "9.1.x"
@@ -396,7 +375,7 @@ components:
 **Purpose**: AWS-specific configuration for S3 object storage and IAM
 resources used by the Loki logging backend.
 
-**Location**: `mas-world-2026-automation/config/aws.yaml`
+**Location**: `config/aws.yaml`
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
@@ -430,7 +409,7 @@ Additional S3 settings applied by automation (not user-configurable):
 
 **Purpose**: Showroom deployment configuration for the attendee workshop UI.
 
-**Location**: `mas-world-2026-automation/config/showroom.yaml`
+**Location**: `config/showroom.yaml`
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
@@ -463,7 +442,7 @@ showroom_attributes:
 **Purpose**: Overrides for local development with a minimal single-cluster
 setup.
 
-**Location**: `mas-world-2026-automation/config/environments/development.yaml`
+**Location**: `config/environments/development.yaml`
 
 Key differences from defaults:
 
@@ -483,7 +462,7 @@ Key differences from defaults:
 
 **Purpose**: Overrides for a rehearsal run with a small representative fleet.
 
-**Location**: `mas-world-2026-automation/config/environments/rehearsal.yaml`
+**Location**: `config/environments/rehearsal.yaml`
 
 Key differences from defaults:
 
@@ -503,7 +482,7 @@ Key differences from defaults:
 
 **Purpose**: Production overrides for the live event with the full fleet.
 
-**Location**: `mas-world-2026-automation/config/environments/event.yaml`
+**Location**: `config/environments/event.yaml`
 
 Key differences from defaults:
 
@@ -523,22 +502,21 @@ Key differences from defaults:
 
 ## 3. Cluster-Specific Overrides
 
-Individual clusters can override component configuration through the
-`component_overrides` key in their `clusters.yaml` entry:
+Individual clusters can override component configuration through
+per-cluster settings in their `secrets/cluster-credentials.yml` entry
+or through the configuration overlay system:
 
 ```yaml
-clusters:
-  - id: seat-17
+cluster_credentials:
+  lab-seat-17:
+    aws_access_key_id: "AKIA..."
+    aws_secret_access_key: "wJalr..."
+    aws_region: us-east-2
     enabled: true
     purpose: attendee
     seat_number: 17
-    connection:
-      api_url: "https://api.seat-17.example.com:6443"
-      admin_auth_method: kubeconfig
-      admin_secret_ref: "secret://mas-world/clusters/seat-17/admin-kubeconfig"
-    component_overrides:
-      mas_edge:
-        enabled: true
+    api_url: "https://api.lab-seat-17.example.com:6443"
+    admin_password: "REDACTED"
 ```
 
 Override rules:
@@ -560,7 +538,7 @@ preparation begins.
 
 | Check | Severity | Description |
 |-------|----------|-------------|
-| Duplicate cluster IDs | ERROR | Every `id` in `clusters.yaml` must be unique. |
+| Duplicate cluster IDs | ERROR | Every cluster key in `cluster-credentials.yml` must be unique. |
 | Duplicate seat numbers | ERROR | Seat numbers across all clusters must be unique (ignoring `null`). |
 | Missing admin credential reference | ERROR | `connection.admin_secret_ref` must be a valid `secret://` path or `PLACEHOLDER`. |
 | Missing student credential profile | ERROR | `credentials.student_credential_profile` must reference a defined profile. |

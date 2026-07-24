@@ -1,0 +1,8 @@
+---
+galaxy_info:
+  author: MAS World 2026
+  role_name: aws_efs
+  description: Provision AWS EFS filesystem with security group and mount targets
+  license: Apache-2.0
+  min_ansible_version: "2.14"
+dependencies: []

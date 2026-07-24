@@ -1,0 +1,13 @@
+---
+# Internal variables — do not override
+rosa_valid_actions:
+  - create
+  - wait_ready
+  - create_admin
+  - save_credentials
+  - machinepool
+  - workshop_machinepool
+  - verify
+  - status
+  - destroy
+  - destroy_cleanup

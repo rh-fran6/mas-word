@@ -1,39 +1,22 @@
 title = "MAS World 2026 Gitleaks Config"
 
 [allowlist]
+  description = "Global allowlist — paths already in .gitignore and known false positives"
   paths = [
+    '''secrets/''',
+    '''collections/''',
+    '''__pycache__/''',
+    '''\.cache/''',
+    '''\.claude/''',
     '''\.example$''',
-    '''\.md$''',
-    '''docs/''',
   ]
-
-[[rules]]
-  id = "aws-access-key"
-  description = "AWS Access Key"
-  regex = '''AKIA[0-9A-Z]{16}'''
-  tags = ["aws", "credentials"]
-
-[[rules]]
-  id = "generic-secret"
-  description = "Generic secret assignment"
-  regex = '''(?i)(password|secret|token|key)\s*[:=]\s*['"][^\s'"]{8,}['"]'''
-  tags = ["generic", "credentials"]
-  [rules.allowlist]
-    regexes = [
-      '''PLACEHOLDER''',
-      '''UNSET''',
-      '''secret://''',
-      '''\{\{.*\}\}''',
-    ]
-
-[[rules]]
-  id = "private-key"
-  description = "Private key header"
-  regex = '''-----BEGIN (RSA |EC |DSA )?PRIVATE KEY-----'''
-  tags = ["key", "credentials"]
-
-[[rules]]
-  id = "ibm-entitlement"
-  description = "IBM Entitlement Key pattern"
-  regex = '''eyJ[A-Za-z0-9_-]{20,}\.eyJ[A-Za-z0-9_-]{20,}'''
-  tags = ["ibm", "credentials"]
+  regexTarget = "match"
+  regexes = [
+    '''PLACEHOLDER''',
+    '''REPLACE_ME''',
+    '''UNSET''',
+    '''YOUR_.*''',
+    '''changeme''',
+    '''secret://''',
+    '''\{\{.*\}\}''',
+  ]

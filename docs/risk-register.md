@@ -1,7 +1,56 @@
-# Risk Register — MAS World 2026
+# Risk Register
 
-**Status**: DRAFT — Phase 0  
-**Date**: 2026-07-19  
+> **Last updated:** 2026-07-20
+
+---
+
+## Risk Matrix Key
+
+| Likelihood | Description |
+|---|---|
+| Low | Unlikely to occur under normal operations |
+| Medium | Possible under certain conditions |
+| High | Likely to occur without explicit prevention |
+
+| Impact | Description |
+|---|---|
+| Low | Minor inconvenience, self-recoverable |
+| Medium | Workflow disruption, manual intervention needed |
+| High | Data loss, security breach, or extended outage |
+
+---
+
+## Active Risks
+
+| ID | Risk | Likelihood | Impact | Mitigation | Status |
+|---|---|---|---|---|---|
+| R-001 | AWS quota exhaustion blocks provisioning | Medium | Medium | Preflight checks validate credentials; documentation includes quota verification commands; operator must check quotas pre-workshop | Mitigated |
+| R-002 | Credentials committed to git | Medium | High | `.gitignore` covers `secrets/`; `.example` templates committed; pre-commit hooks installed | Mitigated |
+| R-003 | Partial fleet provisioning failure | Medium | Medium | `make provision` is idempotent — re-run after fixing the failed account | Accepted |
+| R-004 | Workshop disrupted by accidental `make destroy` | Low | High | Destroy requires interactive "yes" confirmation; `destroy-auto` is explicitly named | Mitigated |
+| R-005 | ROSA API rate limiting during large fleet operations | Low | Medium | Async pattern spreads initial requests; polling intervals are configurable | Accepted |
+| R-006 | AWS access keys compromised | Low | High | Vault encryption available; `no_log: true` on all credential tasks; keys should be rotated post-workshop | Mitigated |
+| R-007 | Cluster provisioning exceeds expected timeframe | Medium | Low | Timeout and retry values are configurable in `rosa_defaults.yml`; operator can monitor with `make status` | Accepted |
+| R-008 | IAM cleanup fails after cluster destruction | Low | Medium | `destroy_cleanup.yml` uses `failed_when: false`; operator can run manual cleanup | Accepted |
+| R-009 | Inconsistent cluster state after interrupted provision | Low | Medium | Re-running `make provision` handles existing clusters gracefully | Accepted |
+| R-010 | Filter plugin breaks on unexpected topology input | Very Low | Medium | Comprehensive unit tests (7 cases); `ValueError` on missing credentials | Mitigated |
+| R-011 | Running `make destroy-infra` while clusters still exist could orphan cluster resources | Medium | High | Always run `make destroy` to destroy all clusters before running `make destroy-infra`. The destroy-infra playbook includes a warning prompt but does not block execution | Mitigated |
+| R-012 | NAT gateway cost accumulates if infrastructure is not destroyed after workshop | High | Medium | The teardown guide includes a post-workshop checklist that explicitly calls out `make destroy-infra`. The `make destroy-infra-auto` target can be used in automated cleanup scripts | Mitigated |
+
+---
+
+## Retired Risks
+
+_None yet._
+
+
+---
+
+## Phase 2: MAS World Application Layer
+
+
+**Status**: DRAFT — Phase 0
+**Date**: 2026-07-19
 **Last Updated**: 2026-07-19
 
 ---

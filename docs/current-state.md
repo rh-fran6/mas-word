@@ -2,7 +2,7 @@
 
 This file describes what is actually implemented now, not merely planned.
 
-Last updated: 2026-07-19
+Last updated: 2026-07-20 (session 4)
 
 ## Environment
 
@@ -10,11 +10,11 @@ Last updated: 2026-07-19
 - `.gitignore` at monorepo root covering credentials, Python artifacts, IDE, OS, Ansible retry, generated reports
 - Git repository initialized (`.git/` exists)
 - Pre-commit hooks configured: `.pre-commit-config.yaml` (gitleaks, yamllint, ansible-lint, ruff, shellcheck, pre-commit-hooks)
-- Linter configs: `.yamllint.yml`, `.ansible-lint.yml`, `.gitleaks.toml`
+- Linter configs: `.yamllint.yml`, `.ansible-lint`, `.gitleaks.toml`
 
 ## Automation
 
-- `mas-world-2026-automation/` contains:
+- `` contains:
   - `ansible.cfg`, `galaxy.yml`, `requirements.yml`, `pyproject.toml`, `Makefile`
   - 7 config YAML files + 3 environment configs (development, rehearsal, event)
   - CLI framework: `cli/main.py` + 7 fully implemented command groups (Click-based, 2,234 lines):
@@ -26,24 +26,43 @@ Last updated: 2026-07-19
     - `exercises` — reset (runtime-automation playbook dispatch)
     - `reports` — fleet-status (dashboard), seat-report (comprehensive seat map)
   - Config schema (Pydantic v2): `cli/config/schema.py`, loader, validator
-  - Secret provider abstraction: 4 backends (env, k8s, aws-sm, vault) with `secret://` URI scheme
+  - Secret provider abstraction: 5 backends (env, file, k8s, aws-sm, vault) with `secret://` URI scheme
+  - File secret provider: reads from gitignored YAML files in `secrets/` directory
+  - File reference support: `file://` prefix in YAML values reads from external files (entitlement.dat, license.dat, pullsecret.json)
+  - Example template: `secrets/masworld-secrets.yml.example`
   - Filter plugins: `plugins/filter/masworld.py`
   - 17 Ansible roles (defaults/main.yml + tasks/main.yml each)
   - 10 playbooks (8 main + 2 helper task files)
-  - 30 unit tests in `tests/unit/`
-- Status: SCAFFOLDED — no live cluster testing performed
+  - 30 unit tests in `tests/unit/` (original set)
+- `ibm.mas_devops` collection v37.10.0 installed, `mas-devops` Python package v12.1.1
+- Ansible 2.21.2 (upgraded from 2.17.1 for ibm.mas_devops compatibility)
+- FileSecretProvider: strips comment lines from `file://` references
+- Status: LIVE CLUSTER TESTING — automation pipeline tested iteratively against seat-01
 
 ## Maximo
 
-- `roles/mas_prerequisites/` — delegates to `ibm.mas_devops` (cert_manager, mongodb, sls)
+- `roles/mas_prerequisites/` — delegates to `ibm.mas_devops` (ibm_catalogs, cert_manager, mongodb, sls, dro)
+  - Passes `ibm_entitlement_key`, `mas_instance_id`, `mas_config_dir` explicitly to each IBM role
+  - Uses persistent config dir `/tmp/masworld-config-<cluster>/` for inter-role config file exchange
+  - DRO added for BasCfg generation required by MAS Suite CR
 - `roles/mas_core/` — delegates to `ibm.mas_devops` (ibm_catalogs, suite_install, suite_config)
+  - Auto-detects MAS domain from cluster Ingress config before calling suite_install
+  - Passes `ibm_entitlement_key` and `mas_config_dir` to IBM roles
 - `roles/maximo_manage/` — delegates to `ibm.mas_devops` (db2, suite_db2_setup_for_manage, suite_app_install, suite_app_configure)
 - `roles/mas_edge/` — disabled by default, stub implementation
-- Status: SCAFFOLDED — requires IBM entitlement key (blocker B-01) and live cluster
+- Live cluster state (seat-01):
+  - cert-manager operator: INSTALLED
+  - MongoDB Community v8.0.20: INSTALLED
+  - SLS v3.13.0: INSTALLED (SlsCfg generated)
+  - DRO: PARTIALLY INSTALLED (operators subscribed, blocked on CPU)
+  - IBM operator CatalogSource (v9-260625-amd64): INSTALLED
+  - MAS Suite CR: CREATED (domain `inst1.apps.rosa.rosa-x2flh.efu3.p3.openshiftapps.com`, 30+ pods, routes ready, CoreIDP ready)
+  - MAS readiness: BLOCKED (5 pods Pending — insufficient CPU, 7.8 cores requested vs 7.0 allocatable)
+- Status: IN_PROGRESS — blocked on cluster capacity (B-06)
 
 ## ACM
 
-- `mas-world-2026-acm/` and `mas-world-2026-automation/acm/` contain:
+- `acm/` and `acm/` contain:
   - `namespace.yml` — `mas-world-2026-policies`
   - `managedclusterset.yml` — `mas-world-2026` (v1beta2 API)
   - `placement.yml` — 3 Placement resources (attendee, all, facilitator)
@@ -51,6 +70,8 @@ Last updated: 2026-07-19
   - `policy-demo-drift.yml` — facilitator-only drift demo
   - `managedcluster-labels.yml` — label schema documentation
 - `roles/acm_registration/` — creates ManagedCluster, assigns labels and ManagedClusterSet
+  - Supports 3 hub auth methods: kubeconfig, host+api_key, host+username/password (OAuth exchange)
+  - Hub cluster is a regular cluster in inventory referenced by `hub_cluster_id`
 - Status: SCAFFOLDED — requires ACM hub cluster (blocker B-04)
 
 ## Logging and Loki
@@ -75,7 +96,7 @@ Last updated: 2026-07-19
 
 ## Showroom
 
-- `mas-world-2026-showroom/` contains:
+- `showroom/` contains:
   - `site.yml`, `ui-config.yml` (Terminal, Console, Maximo, Grafana tabs)
   - `content/antora.yml` with ocp_version, mas_version attributes
   - `content/modules/ROOT/nav.adoc` — 10 navigation entries
@@ -87,9 +108,9 @@ Last updated: 2026-07-19
     - `updates/{prepare,validate,solve,reset}.yml` — version/channel inspection
     - `observability/{prepare,validate,solve,reset}.yml` — log-test pod lifecycle + Loki queries
     - `identity/{prepare,validate,solve,reset}.yml` — Keycloak/LDAP/OIDC/RBAC chain
-  - `requirements.txt` (kubernetes Python package) and `packages.txt` (openldap-clients)
+  - `pyproject.toml` (Python dependencies) and `requirements.yml` (Ansible Galaxy collections)
   - Partials directory (empty)
-- Also mirrored in `mas-world-2026-automation/showroom/`
+- Also mirrored in `showroom/`
 - `roles/showroom/` — Helm-based deployment (showroom-single-pod), cluster-specific userVariables
 - Showroom verify-content result: 0 Critical, 0 High, 2 Warning (intentional naming deviations)
 - Status: SCAFFOLDED — content and runtime automation written, not tested on live cluster
@@ -104,7 +125,7 @@ Last updated: 2026-07-19
 
 ## Operations
 
-- `mas-world-2026-operations/` contains 13 files:
+- `operations/` contains 13 files:
   - `runbooks/`: pre-event.md, event-morning.md, during-event.md, post-event.md
   - `checklists/`: pre-event-checklist.md, event-morning-checklist.md, event-day-checklist.md
   - `repair-procedures/`: cluster-repair.md, spare-replacement.md
@@ -117,7 +138,7 @@ Last updated: 2026-07-19
 
 ## AgnosticV Catalog
 
-- `mas-world-2026-agnosticv/` contains 16 files:
+- `agnosticv/` contains 16 files:
   - `catalog/`: 3 catalog items (event, development, rehearsal)
   - `vars/`: common.yml (81 shared defaults) + 3 environment overrides
   - `workloads/`: post-provision (14 roles), showroom, teardown
@@ -151,7 +172,7 @@ Last updated: 2026-07-19
 
 ## Public Content
 
-- `mas-world-2026-public-content/` — 21 files, all sanitized (no credentials):
+- `public-content/` — 21 files, all sanitized (no credentials):
   - `README.md` — repo overview with conference-vs-production disclaimer
   - `operators/` — 3 Subscription YAMLs (Logging stable-6.6, Loki stable-6.6, COO stable)
   - `logging/` — LokiStack CR, ClusterLogForwarder CR, sample log generator pod, 10 LogQL query examples
@@ -164,10 +185,10 @@ Last updated: 2026-07-19
 
 ## Testing
 
-- 39 unit tests: all passing (verified 2026-07-19)
+- 55 unit tests: all passing (verified 2026-07-19)
   - `test_config_loader.py` — 14 tests (deep merge, redaction, config loading)
   - `test_config_validation.py` — 10 tests (schema validation, embedded key detection)
-  - `test_secret_provider.py` — 15 tests (ref parsing, conversions, env provider CRUD)
+  - `test_secret_provider.py` — 31 tests (ref parsing, conversions, env provider CRUD, file provider CRUD + permissions + multi-file + file:// resolution)
 - No integration tests against live clusters
 - No security/negative tests
 - No Molecule test scenarios
@@ -182,7 +203,7 @@ Last updated: 2026-07-19
 
 ## Molecule Test Scaffolding
 
-- 5 scenarios under `mas-world-2026-automation/molecule/`:
+- 5 scenarios under `molecule/`:
   - `config_validation/` — 4 files, fully offline-capable
   - `event_metadata/` — 3 files, offline + live cluster gated via `MOLECULE_LIVE_CLUSTER=true`
   - `student_accounts/` — 4 files, offline + live cluster gated

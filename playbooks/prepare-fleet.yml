@@ -1,0 +1,484 @@
+---
+- name: Prepare fleet for MAS World 2026
+  hosts: localhost
+  gather_facts: false
+  vars:
+    masworld_config_dir: "{{ config_dir | default('config') }}"
+    masworld_environment: "{{ env | default('development') }}"
+    masworld_max_concurrent: "{{ max_concurrent | default(5) | int }}"
+    masworld_fleet_results: []
+    _fleet_vars_dir: "/tmp/masworld-fleet-vars"
+
+  tasks:
+    - name: Load cluster credentials
+      ansible.builtin.include_vars:
+        file: "../secrets/cluster-credentials.yml"
+      no_log: true
+
+    - name: Load environment configuration
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../{{ masworld_config_dir }}/environments/{{ masworld_environment }}.yaml"
+        name: masworld_env_config
+
+    - name: Load MAS World secrets
+      ansible.builtin.include_vars:
+        file: "../secrets/masworld-secrets.yml"
+        name: _masworld_raw_secrets
+      no_log: true
+
+    - name: Resolve IBM entitlement key from secrets
+      ansible.builtin.set_fact:
+        _resolved_entitlement_key: >-
+          {{ lookup('ansible.builtin.file',
+             playbook_dir + '/../secrets/' + _masworld_raw_secrets['ibm/entitlement-key'] | regex_replace('^file://', ''),
+             errors='ignore')
+             | default(_masworld_raw_secrets['ibm/entitlement-key'] | default(''), true) }}
+      no_log: true
+
+    - name: Resolve MAS license file from secrets
+      ansible.builtin.set_fact:
+        _resolved_license_file: >-
+          {{ lookup('ansible.builtin.file',
+             playbook_dir + '/../secrets/' + _masworld_raw_secrets['ibm/license'] | regex_replace('^file://', ''),
+             errors='ignore')
+             | default('', true) }}
+      no_log: true
+      when: (_masworld_raw_secrets['ibm/license'] | default('')) is match('^file://')
+
+    - name: Build enabled cluster list
+      ansible.builtin.set_fact:
+        masworld_enabled_clusters: "{{ cluster_credentials | to_cluster_list }}"
+      no_log: true
+
+    - name: Display fleet preparation plan
+      ansible.builtin.debug:
+        msg: >-
+          Fleet preparation: {{ masworld_enabled_clusters | length }} clusters,
+          max concurrency: {{ masworld_max_concurrent }},
+          environment: {{ masworld_environment }}
+
+    - name: Validate fleet has clusters to prepare
+      ansible.builtin.fail:
+        msg: >-
+          No enabled clusters found in cluster_credentials.
+          Check secrets/cluster-credentials.yml and ensure at least one cluster has 'enabled: true'.
+      when: masworld_enabled_clusters | length == 0
+
+    # ── Bastion SSH Connectivity Preflight ──────────────────────────────
+    # For pre-provisioned ROSA HCP clusters, validate that bastion hosts
+    # are reachable before attempting machinepool creation or cluster prep.
+    - name: Bastion SSH connectivity preflight
+      when: masworld_enabled_clusters | selectattr('bastion_host', 'defined') | list | length > 0
+      block:
+        - name: Test SSH connectivity to each bastion host
+          ansible.builtin.command:
+            cmd: >-
+              sshpass -p '{{ item.bastion_password }}'
+              ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=no
+              {{ item.bastion_username }}@{{ item.bastion_host }}
+              'echo reachable'
+          loop: "{{ masworld_enabled_clusters | selectattr('bastion_host', 'defined') | list }}"
+          loop_control:
+            label: "{{ item.id }}"
+          register: _bastion_ssh_check
+          failed_when: false
+          no_log: true
+
+        - name: Report bastion SSH connectivity results
+          ansible.builtin.debug:
+            msg: |
+              ── Bastion SSH Connectivity Preflight ──────────────────
+              {% for r in _bastion_ssh_check.results %}
+              {{ '  %-25s %s' | format(r.item.id, 'PASS' if (r.rc | default(1)) == 0 else 'FAIL — ' + (r.stderr | default('unreachable') | regex_replace('\n.*', '') | truncate(60, true))) }}
+              {% endfor %}
+              ───────────────────────────────────────────────────────
+              Reachable: {{ _bastion_ssh_check.results | selectattr('rc', 'defined') | selectattr('rc', 'equalto', 0) | list | length }}/{{ _bastion_ssh_check.results | length }}
+
+        - name: Warn if any bastions are unreachable
+          ansible.builtin.debug:
+            msg: >-
+              WARNING: {{ _bastion_ssh_check.results | rejectattr('rc', 'equalto', 0) | list | length }}
+              bastion host(s) are unreachable. Machine pool creation and per-cluster ROSA token
+              extraction will fail for those clusters. Check VPN connectivity and bastion DNS resolution.
+          when: _bastion_ssh_check.results | rejectattr('rc', 'equalto', 0) | list | length > 0
+
+    # ── Workshop Machine Pool (if enabled) ───────────────────────────────
+    # For ROSA HCP clusters that came pre-provisioned, machine pools are
+    # managed at the hosting layer (not via Kubernetes API). Each cluster
+    # lives in its own OCM account, so we SSH into each bastion host to
+    # obtain the per-cluster ROSA token, then use it to create the pool.
+    - name: Create workshop machine pools for fleet capacity
+      when: add_new_machine_pool | default(true) | bool
+      block:
+        - name: Extract ROSA cluster names from API URLs
+          ansible.builtin.set_fact:
+            _rosa_cluster_names: >-
+              {{ _rosa_cluster_names | default({}) | combine({
+                item.id: item.api_url | regex_search('api\.([^.]+)\.', '\1') | first | default(item.id)
+              }) }}
+          loop: "{{ masworld_enabled_clusters }}"
+          loop_control:
+            label: "{{ item.id }}"
+          no_log: true
+
+        - name: Display machinepool plan
+          ansible.builtin.debug:
+            msg: >-
+              Creating workshop machinepool '{{ workshop_machinepool_name }}'
+              ({{ workshop_machinepool_instance_type }},
+              autoscale {{ workshop_machinepool_min_replicas }}-{{ workshop_machinepool_max_replicas }})
+              on {{ masworld_enabled_clusters | length }} clusters via bastion SSH...
+
+        - name: Create per-cluster OCM config directory
+          ansible.builtin.file:
+            path: "/tmp/masworld-ocm-configs"
+            state: directory
+            mode: "0700"
+
+        - name: Extract ROSA token from each bastion host
+          ansible.builtin.command:
+            cmd: >-
+              sshpass -p '{{ item.bastion_password }}'
+              ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15
+              {{ item.bastion_username }}@{{ item.bastion_host }}
+              'rosa token'
+          loop: "{{ masworld_enabled_clusters }}"
+          loop_control:
+            label: "{{ item.id }}"
+          register: _bastion_token_results
+          failed_when: false
+          no_log: true
+
+        - name: Build per-cluster token map
+          ansible.builtin.set_fact:
+            _cluster_rosa_tokens: >-
+              {{ _cluster_rosa_tokens | default({}) | combine({
+                item.item.id: item.stdout | default('') | trim
+              }) }}
+            _cluster_bastion_ok: >-
+              {{ _cluster_bastion_ok | default({}) | combine({
+                item.item.id: (item.rc | default(1)) == 0
+              }) }}
+          loop: "{{ _bastion_token_results.results }}"
+          loop_control:
+            label: "{{ item.item.id }}"
+          no_log: true
+
+        - name: Report bastion token extraction results
+          ansible.builtin.debug:
+            msg: >-
+              {{ item.id }}: bastion token extraction
+              {{ 'succeeded' if _cluster_bastion_ok[item.id] | default(false) | bool
+                 else 'FAILED — SSH unreachable or rosa token unavailable' }}
+          loop: "{{ masworld_enabled_clusters }}"
+          loop_control:
+            label: "{{ item.id }}"
+
+        - name: Login to ROSA with per-cluster token
+          ansible.builtin.command:
+            cmd: "rosa login --token={{ _cluster_rosa_tokens[item.id] }}"
+          environment:
+            OCM_CONFIG: "/tmp/masworld-ocm-configs/{{ item.id }}.json"
+          loop: "{{ masworld_enabled_clusters }}"
+          loop_control:
+            label: "{{ item.id }}"
+          when: _cluster_bastion_ok[item.id] | default(false) | bool
+          failed_when: false
+          no_log: true
+
+        - name: Check existing machinepools per cluster
+          ansible.builtin.command:
+            cmd: >-
+              rosa list machinepools
+              --cluster={{ _rosa_cluster_names[item.id] }}
+              --output json
+          environment:
+            OCM_CONFIG: "/tmp/masworld-ocm-configs/{{ item.id }}.json"
+            AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+            AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+            AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+          loop: "{{ masworld_enabled_clusters }}"
+          loop_control:
+            label: "{{ item.id }}"
+          when: _cluster_bastion_ok[item.id] | default(false) | bool
+          register: _wmp_existing
+          failed_when: false
+          changed_when: false
+          no_log: true
+
+        - name: Build machinepool existence map  # noqa: jinja[invalid]
+          ansible.builtin.set_fact:
+            _cluster_has_workshop_pool: >-
+              {{ _cluster_has_workshop_pool | default({}) | combine({
+                item.item.id: workshop_machinepool_name in (item.stdout | default(''))
+              }) }}
+          loop: "{{ _wmp_existing.results | default([]) }}"
+          loop_control:
+            label: "{{ item.item.id | default('n/a') }}"
+          when: item is not skipped
+
+        - name: Create workshop machinepool where missing
+          ansible.builtin.command:
+            cmd: >-
+              rosa create machinepool
+              --cluster={{ _rosa_cluster_names[item.id] }}
+              --name={{ workshop_machinepool_name }}
+              --instance-type={{ workshop_machinepool_instance_type }}
+              --enable-autoscaling
+              --min-replicas={{ workshop_machinepool_min_replicas }}
+              --max-replicas={{ workshop_machinepool_max_replicas }}
+              --autorepair
+          environment:
+            OCM_CONFIG: "/tmp/masworld-ocm-configs/{{ item.id }}.json"
+            AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+            AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+            AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+          loop: "{{ masworld_enabled_clusters }}"
+          loop_control:
+            label: "{{ item.id }}"
+          when:
+            - _cluster_bastion_ok[item.id] | default(false) | bool
+            - not (_cluster_has_workshop_pool[item.id] | default(false) | bool)
+          register: _wmp_create
+          failed_when: false
+          no_log: true
+
+        - name: Report machinepool results
+          ansible.builtin.debug:
+            msg: >-
+              {{ item.item.id }} ({{ _rosa_cluster_names[item.item.id] | default('unknown') }}):
+              {% if item.skipped | default(false) %}
+              {% if not (_cluster_bastion_ok[item.item.id] | default(false) | bool) %}skipped — bastion unreachable
+              {% else %}already exists
+              {% endif %}
+              {% elif (item.rc | default(1)) == 0 %}workshop machinepool created
+              {% else %}FAILED — {{ item.stderr | default('check rosa CLI access') | regex_replace('\n.*', '') | truncate(80, true) }}
+              {% endif %}
+          loop: "{{ _wmp_create.results | default([]) }}"
+          loop_control:
+            label: "{{ item.item.id | default('n/a') }}"
+
+        - name: Count machinepool failures
+          ansible.builtin.set_fact:
+            _wmp_failed_count: >-
+              {{ _wmp_create.results | default([])
+                 | rejectattr('skipped', 'defined')
+                 | selectattr('rc', 'defined')
+                 | selectattr('rc', 'ne', 0)
+                 | list | length }}
+
+        - name: Warn about machinepool failures
+          ansible.builtin.debug:
+            msg: >-
+              WARNING: {{ _wmp_failed_count }} cluster(s) could not have workshop machinepool created.
+              Check that bastion hosts are reachable and have valid ROSA tokens.
+              To create manually via the ROSA console or CLI:
+              rosa create machinepool --cluster=<name> --name={{ workshop_machinepool_name }}
+              --instance-type={{ workshop_machinepool_instance_type }} --enable-autoscaling
+              --min-replicas={{ workshop_machinepool_min_replicas }} --max-replicas={{ workshop_machinepool_max_replicas }}
+          when: _wmp_failed_count | int > 0
+
+        - name: Clean up OCM config files
+          ansible.builtin.file:
+            path: "/tmp/masworld-ocm-configs"
+            state: absent
+
+    # ── EFS Filesystem Provisioning ──────────────────────────────────────
+    # Each non-hub cluster needs an EFS filesystem for RWX PVCs (required by Db2/Manage).
+    # Creates: EFS filesystem, NFS security group, mount targets per private subnet.
+    # VPC and subnets are auto-discovered from each cluster's AWS account.
+    - name: Initialize EFS tracking dict
+      ansible.builtin.set_fact:
+        _cluster_efs_ids: {}
+
+    - name: Provision EFS for each non-hub cluster
+      ansible.builtin.include_role:
+        name: aws_efs
+      vars:
+        masworld_aws_access_key_id: "{{ item.aws_access_key_id }}"
+        masworld_aws_secret_access_key: "{{ item.aws_secret_access_key }}"
+        masworld_aws_region: "{{ item.aws_region }}"
+        masworld_cluster_id: "{{ item.id }}"
+      loop: "{{ masworld_enabled_clusters | rejectattr('purpose', 'equalto', 'hub') | list }}"
+      loop_control:
+        label: "{{ item.id }}"
+
+    - name: Report EFS provisioning results
+      ansible.builtin.debug:
+        msg: |
+          ── EFS Provisioning Results ──────────────────────
+          {% for c in masworld_enabled_clusters | rejectattr('purpose', 'equalto', 'hub') | list %}
+          {{ '  %-25s %s' | format(c.id, 'PASS — ' + _cluster_efs_ids[c.id] if _cluster_efs_ids[c.id] | default('') | length > 0 else 'FAIL') }}
+          {% endfor %}
+          ─────────────────────────────────────────────────
+          Provisioned: {{ _cluster_efs_ids.values() | select | list | length }}/{{ masworld_enabled_clusters | rejectattr('purpose', 'equalto', 'hub') | list | length }}
+
+    # ── S3 Bucket Provisioning ───────────────────────────────────────────
+    # Each non-hub cluster needs an S3 bucket for Loki log storage backend.
+    - name: Initialize S3 tracking dict
+      ansible.builtin.set_fact:
+        _cluster_s3_buckets: {}
+
+    - name: Provision S3 bucket for each non-hub cluster
+      ansible.builtin.include_role:
+        name: aws_s3_bucket
+      vars:
+        masworld_aws_access_key_id: "{{ item.aws_access_key_id }}"
+        masworld_aws_secret_access_key: "{{ item.aws_secret_access_key }}"
+        masworld_aws_region: "{{ item.aws_region }}"
+        masworld_cluster_id: "{{ item.id }}"
+        masworld_s3_bucket_name: "{{ item.id | s3_bucket_name }}"
+      loop: "{{ masworld_enabled_clusters | rejectattr('purpose', 'equalto', 'hub') | list }}"
+      loop_control:
+        label: "{{ item.id }}"
+
+    - name: Report S3 provisioning results
+      ansible.builtin.debug:
+        msg: |
+          ── S3 Bucket Provisioning Results ────────────────
+          {% for c in masworld_enabled_clusters | rejectattr('purpose', 'equalto', 'hub') | list %}
+          {{ '  %-25s %s' | format(c.id, 'PASS — ' + _cluster_s3_buckets[c.id] if _cluster_s3_buckets[c.id] | default('') | length > 0 else 'FAIL') }}
+          {% endfor %}
+          ─────────────────────────────────────────────────
+
+    # ── Resolve Hub Cluster Details ──────────────────────────────────────
+    # Extract hub cluster API URL and admin password for ACM registration.
+    - name: Extract hub cluster details for ACM
+      ansible.builtin.set_fact:
+        _hub_cluster: "{{ masworld_enabled_clusters | selectattr('purpose', 'equalto', 'hub') | first | default({}) }}"
+
+    - name: Create temporary vars directory
+      ansible.builtin.file:
+        path: "{{ _fleet_vars_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Write per-cluster variable files
+      ansible.builtin.copy:
+        content: "{{ _cluster_vars | to_nice_yaml(indent=2) }}"
+        dest: "{{ _fleet_vars_dir }}/{{ item.id }}.yml"
+        mode: "0600"
+      vars:
+        _cluster_vars:
+          masworld_cluster_api_url: "{{ item.api_url | default('') }}"
+          masworld_admin_password: "{{ item.admin_password | default('') }}"
+          masworld_seat_number: "{{ item.seat_number | default('') }}"
+          masworld_cluster_purpose: "{{ item.purpose | default('attendee') }}"
+          masworld_cluster_name: "{{ item.id }}"
+          masworld_cluster_id: "{{ item.id }}"
+          masworld_event_id: "{{ masworld_env_config.event.id | default('mas-world-2026') }}"
+          masworld_base_domain: "{{ item.api_url | default('') | regex_replace('^https?://api\\.', '') | regex_replace(':.*$', '') }}"
+          masworld_bastion_host: "{{ item.bastion_host | default('') }}"
+          masworld_bastion_username: "{{ item.bastion_username | default('') }}"
+          masworld_bastion_password: "{{ item.bastion_password | default('') }}"
+          masworld_ibm_entitlement_key: "{{ _resolved_entitlement_key | default('') }}"
+          masworld_mas_license_file: "{{ playbook_dir }}/../secrets/license.dat"
+          masworld_preflight_min_workers: "{{ masworld_env_config.preflight.min_workers | default(3) }}"
+          masworld_preflight_min_cpu: "{{ masworld_env_config.preflight.min_cpu | default(32) }}"
+          masworld_preflight_min_memory_gi: "{{ masworld_env_config.preflight.min_memory_gi | default(128) }}"
+          masworld_aws_access_key_id: "{{ item.aws_access_key_id }}"
+          masworld_aws_secret_access_key: "{{ item.aws_secret_access_key }}"
+          masworld_aws_region: "{{ item.aws_region | default('us-east-2') }}"
+          masworld_efs_filesystem_id: "{{ _cluster_efs_ids[item.id] | default('') }}"
+          masworld_loki_s3_bucket_name: "{{ _cluster_s3_buckets[item.id] | default('') }}"
+          masworld_loki_s3_access_key_id: "{{ item.aws_access_key_id }}"
+          masworld_loki_s3_access_key_secret: "{{ item.aws_secret_access_key }}"
+          masworld_loki_s3_region: "{{ item.aws_region | default('us-east-2') }}"
+          masworld_acm_hub_api_url: "{{ _hub_cluster.api_url | default('') }}"
+          masworld_acm_hub_admin_password: "{{ _hub_cluster.admin_password | default('') }}"
+          masworld_validate_certs: false
+          masworld_secrets_resolved: true
+      loop: "{{ masworld_enabled_clusters }}"
+      loop_control:
+        label: "{{ item.id }}"
+      no_log: true
+
+    - name: Launch parallel cluster preparation
+      ansible.builtin.command:
+        cmd: >-
+          ansible-playbook {{ playbook_dir }}/prepare-cluster.yml
+          -e @{{ _fleet_vars_dir }}/{{ item.id }}.yml
+        chdir: "{{ playbook_dir }}/.."
+      environment:
+        KUBECONFIG: "/tmp/masworld-kubeconfig-{{ item.id }}"
+        ANSIBLE_CONFIG: "{{ playbook_dir }}/../ansible.cfg"
+      async: 7200
+      poll: 0
+      register: _fleet_async_results
+      loop: "{{ masworld_enabled_clusters }}"
+      loop_control:
+        label: "{{ item.id }}"
+      no_log: true
+
+    - name: Display parallel jobs launched
+      ansible.builtin.debug:
+        msg: >-
+          Launched {{ masworld_enabled_clusters | length }} parallel preparation jobs.
+          Max async duration: 2 hours. Polling for completion...
+
+    - name: Build job tracking list
+      ansible.builtin.set_fact:
+        _fleet_jobs: >-
+          {{ _fleet_async_results.results | map(attribute='ansible_job_id') | zip(
+             masworld_enabled_clusters | map(attribute='id')) | map('list') | list }}
+
+    - name: Wait for all cluster preparations to complete
+      ansible.builtin.async_status:
+        jid: "{{ item[0] }}"
+      register: _fleet_job_results
+      until: _fleet_job_results.finished
+      retries: 360
+      delay: 20
+      loop: "{{ _fleet_jobs }}"
+      loop_control:
+        label: "{{ item[1] }}"
+      ignore_errors: true
+      no_log: true
+
+    - name: Build fleet result summary
+      ansible.builtin.set_fact:
+        masworld_fleet_results: >-
+          {{ masworld_fleet_results + [{
+            'cluster_id': item.item[1],
+            'result': 'success' if (item.rc | default(1) == 0) else 'failed',
+            'rc': item.rc | default(1)
+          }] }}
+      loop: "{{ _fleet_job_results.results }}"
+      loop_control:
+        label: "{{ item.item[1] }}"
+      when: item is not skipped
+
+    - name: Display fleet preparation results
+      ansible.builtin.debug:
+        msg: |
+          ══════════════════════════════════════════════════
+          Fleet Preparation Summary
+          ══════════════════════════════════════════════════
+          {% for r in masworld_fleet_results %}
+          {{ '  %-25s %s' | format(r.cluster_id, 'READY' if r.result == 'success' else 'FAILED') }}
+          {% endfor %}
+          ──────────────────────────────────────────────────
+          Total: {{ masworld_fleet_results | length }} clusters
+          Passed: {{ masworld_fleet_results | selectattr('result', 'equalto', 'success') | list | length }}
+          Failed: {{ masworld_fleet_results | selectattr('result', 'equalto', 'failed') | list | length }}
+          ══════════════════════════════════════════════════
+
+    - name: Clean up per-cluster secrets
+      ansible.builtin.file:
+        path: "{{ _fleet_vars_dir }}"
+        state: absent
+
+    - name: Clean up per-cluster kubeconfig files
+      ansible.builtin.file:
+        path: "/tmp/masworld-kubeconfig-{{ item.id }}"
+        state: absent
+      loop: "{{ masworld_enabled_clusters }}"
+      loop_control:
+        label: "{{ item.id }}"
+
+    - name: Report fleet failures
+      ansible.builtin.debug:
+        msg: >-
+          {{ masworld_fleet_results | selectattr('result', 'equalto', 'failed') | map(attribute='cluster_id') | list | length }}
+          cluster(s) failed preparation. Check individual cluster output above for details.
+      when: masworld_fleet_results | selectattr('result', 'equalto', 'failed') | list | length > 0

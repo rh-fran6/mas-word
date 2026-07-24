@@ -1,0 +1,7 @@
+---
+- name: Build cluster definitions from topology and credentials
+  ansible.builtin.set_fact:
+    cluster_definitions: >-
+      {{ cluster_categories | build_cluster_list(cluster_prefix, cluster_credentials, infra_state | default({})) }}
+  when: cluster_definitions is not defined
+  no_log: true

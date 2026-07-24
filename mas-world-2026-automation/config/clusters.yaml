@@ -1,6 +1,0 @@
----
-# Cluster inventory — one entry per cluster.
-# Populate with actual cluster details before use.
-# Use inventory generation tooling for large fleets:
-#   mas-world config generate-inventory --count 50 --spare 5
-clusters: []

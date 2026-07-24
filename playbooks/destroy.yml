@@ -1,0 +1,37 @@
+---
+- name: Destroy ROSA HCP Multi-Cluster Fleet
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../secrets/rosa-token.yml
+    - ../secrets/cluster-credentials.yml
+
+  pre_tasks:
+    - name: Confirm destruction
+      ansible.builtin.pause:
+        prompt: >-
+          WARNING: This will destroy ALL {{ cluster_categories | dict2items
+          | map(attribute='value.count') | sum }} clusters with prefix '{{ cluster_prefix }}'.
+          Type 'yes' to confirm
+      register: destroy_confirm
+      when: not (auto_confirm | default(false) | bool)
+
+    - name: Abort if not confirmed
+      ansible.builtin.fail:
+        msg: "Destruction aborted by user."
+      when:
+        - not (auto_confirm | default(false) | bool)
+        - destroy_confirm.user_input | default('') != 'yes'
+
+  roles:
+    - role: rosa_preflight
+
+    - role: rosa_cluster
+      vars:
+        rosa_action: destroy
+
+    - role: rosa_cluster
+      vars:
+        rosa_action: destroy_cleanup

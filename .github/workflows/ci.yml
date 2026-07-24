@@ -14,9 +14,6 @@ env:
   PYTHON_VERSION: "3.11"
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # Job 1: Linting and static validation
-  # ---------------------------------------------------------------------------
   lint-and-validate:
     name: Lint and Validate
     runs-on: ubuntu-latest
@@ -33,32 +30,30 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: lint-pip-${{ runner.os }}-${{ hashFiles('mas-world-2026-automation/pyproject.toml') }}
+          key: lint-pip-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
           restore-keys: lint-pip-${{ runner.os }}-
 
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install yamllint ruff shellcheck-py
-          pip install "ansible-core>=2.17.0,<2.18.0" "ansible-lint>=24.2,<25"
-          pip install -e mas-world-2026-automation[dev]
+          pip install -e ".[dev]"
+          ansible-galaxy install -r requirements.yml --force
 
       - name: Run yamllint
         run: yamllint -c .yamllint.yml .
 
       - name: Run ansible-lint
-        run: ansible-lint -c .ansible-lint.yml
-        working-directory: mas-world-2026-automation
+        run: ansible-lint playbooks/ roles/
 
       - name: Run ruff check
-        run: ruff check mas-world-2026-automation/
+        run: ruff check .
 
       - name: Run ruff format check
-        run: ruff format --check mas-world-2026-automation/
+        run: ruff format --check .
 
       - name: Run shellcheck
         run: |
-          shfiles=$(find . -name '*.sh' -not -path './.git/*' -not -path './.venv/*' -not -path './.claude/*')
+          shfiles=$(find . -name '*.sh' -not -path './.git/*' -not -path './.venv/*' -not -path './.claude/*' -not -path './collections/*')
           if [ -n "$shfiles" ]; then
             echo "$shfiles" | xargs shellcheck
           else
@@ -70,7 +65,7 @@ jobs:
           python -c "
           import yaml, sys, pathlib
           errors = 0
-          for f in pathlib.Path('mas-world-2026-automation/config').rglob('*.yaml'):
+          for f in pathlib.Path('config').rglob('*.yaml'):
               try:
                   yaml.safe_load(f.read_text())
                   print(f'  OK: {f}')
@@ -80,9 +75,6 @@ jobs:
           sys.exit(1 if errors else 0)
           "
 
-  # ---------------------------------------------------------------------------
-  # Job 2: Secret scanning
-  # ---------------------------------------------------------------------------
   secret-scan:
     name: Secret Scan
     runs-on: ubuntu-latest
@@ -99,15 +91,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_CONFIG: .gitleaks.toml
 
-  # ---------------------------------------------------------------------------
-  # Job 3: Unit tests
-  # ---------------------------------------------------------------------------
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: mas-world-2026-automation
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -121,28 +107,29 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: test-pip-${{ runner.os }}-${{ hashFiles('mas-world-2026-automation/pyproject.toml') }}
+          key: test-pip-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
           restore-keys: test-pip-${{ runner.os }}-
 
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install -e .[dev]
+          pip install -e ".[dev]"
+          ansible-galaxy install -r requirements.yml --force
+
+      - name: Run syntax checks
+        run: bash tests/test_syntax.sh
 
       - name: Run unit tests
-        run: pytest tests/unit/ -v --tb=short --junitxml=test-results.xml
+        run: pytest tests/ -v --tb=short --junitxml=test-results.xml
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: unit-test-results
-          path: mas-world-2026-automation/test-results.xml
+          path: test-results.xml
           retention-days: 14
 
-  # ---------------------------------------------------------------------------
-  # Job 4: Validate Kubernetes manifests
-  # ---------------------------------------------------------------------------
   validate-manifests:
     name: Validate K8s Manifests
     runs-on: ubuntu-latest
@@ -158,19 +145,16 @@ jobs:
 
       - name: Validate ACM manifests
         run: |
-          yamls=$(find mas-world-2026-acm -name '*.yaml' -o -name '*.yml' 2>/dev/null)
+          yamls=$(find acm -name '*.yaml' -o -name '*.yml' 2>/dev/null)
           if [ -n "$yamls" ]; then
             echo "$yamls" | xargs kubeconform \
               -strict \
               -ignore-missing-schemas \
               -summary
           else
-            echo "No YAML manifests found in mas-world-2026-acm/, skipping."
+            echo "No YAML manifests found in acm/, skipping."
           fi
 
-  # ---------------------------------------------------------------------------
-  # Job 5: Validate Showroom (Antora) content
-  # ---------------------------------------------------------------------------
   detect-changes:
     name: Detect Changed Paths
     runs-on: ubuntu-latest
@@ -187,7 +171,7 @@ jobs:
         with:
           filters: |
             showroom:
-              - 'mas-world-2026-showroom/**'
+              - 'showroom/**'
             docs:
               - '**/*.md'
 
@@ -210,24 +194,14 @@ jobs:
 
       - name: Build Antora site
         run: antora --fetch site.yml
-        working-directory: mas-world-2026-showroom
+        working-directory: showroom
 
       - name: Validate nav.adoc references
         run: |
-          cd mas-world-2026-showroom/content/modules/ROOT
-          # Extract page references from nav.adoc
+          cd showroom/content/modules/ROOT
           nav_refs=$(grep -oP 'xref:\K[^[]+' nav.adoc | sort)
-          # List actual pages
           actual_pages=$(ls pages/*.adoc 2>/dev/null | sed 's|pages/||' | sort)
 
-          echo "Pages referenced in nav.adoc:"
-          echo "$nav_refs"
-          echo ""
-          echo "Actual pages on disk:"
-          echo "$actual_pages"
-          echo ""
-
-          # Check for pages in nav that don't exist
           missing=0
           for ref in $nav_refs; do
             if [ ! -f "pages/$ref" ]; then
@@ -236,18 +210,8 @@ jobs:
             fi
           done
 
-          # Warn about pages not in nav (informational, not a failure)
-          for page in $actual_pages; do
-            if ! echo "$nav_refs" | grep -qx "$page"; then
-              echo "WARNING: pages/$page exists but is not in nav.adoc"
-            fi
-          done
-
           exit $missing
 
-  # ---------------------------------------------------------------------------
-  # Job 6: Check documentation links
-  # ---------------------------------------------------------------------------
   docs-links:
     name: Check Documentation Links
     runs-on: ubuntu-latest
@@ -260,27 +224,22 @@ jobs:
       - name: Check for broken relative links in Markdown
         run: |
           errors=0
-          # Find all Markdown files
           while IFS= read -r mdfile; do
             dir=$(dirname "$mdfile")
-            # Extract relative links: [text](path) but not http/https/mailto/# links
             grep -oP '\[([^\]]*)\]\(\K([^)]+)' "$mdfile" 2>/dev/null | \
               grep -v '^http' | grep -v '^mailto:' | grep -v '^#' | \
               while IFS= read -r link; do
-                # Strip anchor fragments
                 target="${link%%#*}"
                 if [ -n "$target" ] && [ ! -e "$dir/$target" ]; then
                   echo "BROKEN LINK in $mdfile: $link"
-                  # Signal error via temp file since we're in a subshell
                   echo 1 > /tmp/link_error
                 fi
               done
-          done < <(find . -name '*.md' -not -path './.git/*' -not -path './.venv/*' -not -path './.claude/*' -not -path './node_modules/*')
+          done < <(find . -name '*.md' -not -path './.git/*' -not -path './.venv/*' -not -path './.claude/*' -not -path './collections/*' -not -path './node_modules/*')
 
           if [ -f /tmp/link_error ]; then
-            echo ""
-            echo "Broken relative links detected. Please fix them."
+            echo "Broken relative links detected."
             exit 1
           else
-            echo "All relative links in Markdown files are valid."
+            echo "All relative links valid."
           fi

@@ -1,0 +1,5 @@
+---
+scenario_valid_scenarios:
+  - greenfield
+  - aws-ready
+  - cluster-ready

@@ -1,0 +1,42 @@
+---
+- name: Include build_definitions
+  ansible.builtin.include_tasks: build_definitions.yml
+
+- name: Get cluster status
+  ansible.builtin.shell: |
+    set -o pipefail
+    rosa describe cluster --cluster={{ item.name }} --output json 2>/dev/null \
+      | python3 -c "
+    import sys, json
+    d = json.load(sys.stdin)
+    state = d.get('status', {}).get('state', 'unknown')
+    api = d.get('api', {}).get('url', 'n/a')
+    console = d.get('console', {}).get('url', 'n/a')
+    version = d.get('openshift_version', 'n/a')
+    print(f'{state}|{api}|{console}|{version}')
+    " || echo "not_found|||"
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: status_results
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Display fleet status
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.name }} ({{ item.item.category }}):
+      state={{ (item.stdout | default('unknown|||')).split('|')[0] }},
+      api={{ (item.stdout | default('unknown|||')).split('|')[1] }},
+      console={{ (item.stdout | default('unknown|||')).split('|')[2] }},
+      version={{ (item.stdout | default('unknown|||')).split('|')[3] }}
+  loop: "{{ status_results.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"

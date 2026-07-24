@@ -1,0 +1,280 @@
+---
+# Scenario 3: Cluster Ready — ROSA clusters running, add autoscaler + app
+# Required inputs: cluster credentials with api_url, ROSA token, workshop_machinepool_instance_type
+
+- name: "CLUSTER-READY PREFLIGHT — Phase 1: CLI Tools"
+  ansible.builtin.debug:
+    msg: "Checking required CLI tools..."
+
+- name: Verify rosa CLI is installed
+  ansible.builtin.command: rosa version
+  register: _cr_rosa_version
+  changed_when: false
+  failed_when: _cr_rosa_version.rc != 0
+
+- name: Check for oc CLI
+  ansible.builtin.command: oc version --client
+  register: _cr_oc_version
+  changed_when: false
+  failed_when: false
+
+- name: Check for kubectl CLI (fallback)
+  ansible.builtin.command: kubectl version --client
+  register: _cr_kubectl_version
+  changed_when: false
+  failed_when: false
+  when: _cr_oc_version.rc != 0
+
+- name: Fail if neither oc nor kubectl available
+  ansible.builtin.fail:
+    msg: "Either 'oc' or 'kubectl' CLI is required for cluster-ready scenario"
+  when: _cr_oc_version.rc != 0 and (_cr_kubectl_version.rc | default(1)) != 0
+
+- name: Display CLI versions
+  ansible.builtin.debug:
+    msg: >-
+      CLI tools OK — rosa {{ _cr_rosa_version.stdout_lines[0] | default('?') }},
+      {{ 'oc ' + _cr_oc_version.stdout_lines[0] | default('?') if _cr_oc_version.rc == 0
+         else 'kubectl ' + (_cr_kubectl_version.stdout_lines[0] | default('?')) }}
+
+- name: "CLUSTER-READY PREFLIGHT — Phase 2: Configuration"
+  ansible.builtin.debug:
+    msg: "Validating configuration and machinepool parameters..."
+
+- name: Validate required variables
+  ansible.builtin.assert:
+    that:
+      - cluster_prefix is defined and cluster_prefix | length > 0
+      - cluster_categories is defined
+      - cluster_credentials is defined
+      - rosa_token is defined
+    fail_msg: "Required variables missing: cluster_prefix, cluster_categories, cluster_credentials, rosa_token"
+
+- name: Validate facilitator count is exactly 1
+  ansible.builtin.assert:
+    that:
+      - cluster_categories.facilitator is defined
+      - cluster_categories.facilitator.count == 1
+    fail_msg: "Facilitator category must exist with count=1"
+
+- name: Validate cluster credentials have api_url populated
+  ansible.builtin.assert:
+    that:
+      - item.value.api_url is defined
+      - item.value.api_url | length > 0
+    fail_msg: >
+      Cluster '{{ item.key }}' is missing 'api_url'. For cluster-ready scenario,
+      all clusters must have api_url populated (set by 'make provision' or manually).
+    quiet: true
+  loop: "{{ cluster_credentials | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  no_log: true
+
+- name: Validate cluster credentials have admin_password populated
+  ansible.builtin.assert:
+    that:
+      - item.value.admin_password is defined
+      - item.value.admin_password | length > 0
+    fail_msg: >
+      Cluster '{{ item.key }}' is missing 'admin_password'. For cluster-ready scenario,
+      all clusters must have admin_password populated (set by 'make provision' or manually).
+    quiet: true
+  loop: "{{ cluster_credentials | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  no_log: true
+
+- name: Validate workshop machinepool instance type is specified
+  ansible.builtin.assert:
+    that:
+      - workshop_machinepool_instance_type is defined
+      - workshop_machinepool_instance_type | length > 0
+    fail_msg: >
+      workshop_machinepool_instance_type is required for cluster-ready scenario.
+      Usage: make deploy-cluster-ready INSTANCE_TYPE=m5.2xlarge
+
+- name: Display machinepool configuration
+  ansible.builtin.debug:
+    msg: >-
+      Workshop machinepool: name={{ workshop_machinepool_name }},
+      instance_type={{ workshop_machinepool_instance_type }},
+      autoscaling={{ workshop_machinepool_min_replicas }}-{{ workshop_machinepool_max_replicas }} replicas
+
+- name: Build cluster definitions for preflight
+  ansible.builtin.set_fact:
+    cluster_definitions: >-
+      {{ cluster_categories | build_cluster_list(cluster_prefix, cluster_credentials, infra_state | default({})) }}
+  no_log: true
+
+- name: "CLUSTER-READY PREFLIGHT — Phase 3: ROSA Authentication"
+  ansible.builtin.debug:
+    msg: "Validating ROSA login..."
+
+- name: Log in to ROSA
+  ansible.builtin.command: rosa login --token={{ rosa_token }}
+  changed_when: false
+  no_log: true
+  environment:
+    OCM_TOKEN: "{{ rosa_token }}"
+
+- name: Confirm ROSA login
+  ansible.builtin.debug:
+    msg: "ROSA login verified successfully."
+
+- name: "CLUSTER-READY PREFLIGHT — Phase 4: Cluster Existence & Health"
+  ansible.builtin.debug:
+    msg: "Validating {{ cluster_definitions | length }} clusters are running..."
+
+- name: Check cluster state via ROSA
+  ansible.builtin.shell: |
+    set -o pipefail
+    rosa describe cluster --cluster={{ item.name }} --output json 2>/dev/null \
+      | python3 -c "
+    import sys, json
+    c = json.load(sys.stdin)
+    state = c.get('status', {}).get('state', 'unknown')
+    api = c.get('api', {}).get('url', '')
+    version = c.get('openshift_version', '?')
+    print(f'{state}|{api}|{version}')
+    "
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _cr_cluster_state
+  failed_when: false
+  changed_when: false
+  no_log: true
+
+- name: Display cluster status
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.name }}:
+      state={{ (item.stdout | default('unknown||')).split('|')[0] }},
+      version={{ (item.stdout | default('||?')).split('|')[2] }}
+      {{ '— OK' if (item.stdout | default('')).split('|')[0] == 'ready' else '— NOT READY' }}
+  loop: "{{ _cr_cluster_state.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Collect clusters not in ready state
+  ansible.builtin.set_fact:
+    _cr_not_ready: >-
+      {{ _cr_cluster_state.results
+         | rejectattr('rc', 'equalto', 0)
+         | map(attribute='item.name')
+         | list
+         + _cr_cluster_state.results
+         | selectattr('rc', 'equalto', 0)
+         | rejectattr('stdout', 'search', '^ready\|')
+         | map(attribute='item.name')
+         | list }}
+
+- name: Fail if any clusters are not ready
+  ansible.builtin.fail:
+    msg: >
+      Clusters not in ready state: {{ _cr_not_ready | join(', ') }}.
+      All clusters must be running for the cluster-ready scenario.
+      Use 'make status' to check cluster states.
+  when: _cr_not_ready | length > 0
+
+- name: "CLUSTER-READY PREFLIGHT — Phase 5: Cluster API Reachability"
+  ansible.builtin.debug:
+    msg: "Checking cluster API endpoints..."
+
+- name: Extract API URLs from cluster state
+  ansible.builtin.set_fact:
+    _cr_api_urls: >-
+      {{ _cr_api_urls | default({}) | combine({
+        item.item.name: (item.stdout | default('|')).split('|')[1]
+      }) }}
+  loop: "{{ _cr_cluster_state.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  no_log: true
+
+- name: Test cluster API reachability
+  ansible.builtin.uri:
+    url: "{{ _cr_api_urls[item.name] }}/.well-known/oauth-authorization-server"
+    method: GET
+    validate_certs: false
+    timeout: 15
+    status_code: [200, 401, 403]
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _cr_api_check
+  failed_when: false
+  when: _cr_api_urls[item.name] | default('') | length > 0
+
+- name: Display API reachability
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.name }}: API
+      {{ 'reachable' if item.status | default(0) in [200, 401, 403] else 'UNREACHABLE' }}
+  loop: "{{ _cr_api_check.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name | default('n/a') }}"
+  when: item is not skipped
+
+- name: "CLUSTER-READY PREFLIGHT — Phase 6: Existing Machinepool Check"
+  ansible.builtin.debug:
+    msg: "Checking for existing workshop machinepools..."
+
+- name: List machinepools per cluster
+  ansible.builtin.shell: |
+    set -o pipefail
+    rosa list machinepools --cluster={{ item.name }} --output json 2>/dev/null \
+      | python3 -c "import sys,json; pools=json.load(sys.stdin); print(' '.join(p['id'] for p in pools))"
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _cr_pool_check
+  failed_when: false
+  changed_when: false
+  no_log: true
+
+- name: Display machinepool status
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.name }}: machinepools=[{{ item.stdout | default('none') | trim }}]
+      {{ ' — workshop pool already exists, will be skipped'
+         if workshop_machinepool_name in (item.stdout | default(''))
+         else '' }}
+  loop: "{{ _cr_pool_check.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: "CLUSTER-READY PREFLIGHT — Phase 7: Phase 2 Field Validation"
+  ansible.builtin.debug:
+    msg: "Validating Phase 2 required fields (purpose, seat_number)..."
+
+- name: Validate Phase 2 fields
+  ansible.builtin.include_tasks: _validate-phase2-fields.yml
+
+- name: "CLUSTER-READY PREFLIGHT — Summary"
+  ansible.builtin.debug:
+    msg: |
+      ══════════════════════════════════════════════════════════════
+        CLUSTER-READY PREFLIGHT PASSED
+      ══════════════════════════════════════════════════════════════
+        Fleet: {{ cluster_definitions | length }} clusters (all ready)
+        Workshop Pool: {{ workshop_machinepool_name }}
+          Instance Type: {{ workshop_machinepool_instance_type }}
+          Autoscaling: {{ workshop_machinepool_min_replicas }}-{{ workshop_machinepool_max_replicas }}
+
+        Pipeline: Verify Clusters → Workshop Machinepool
+                  → Demo Application
+      ══════════════════════════════════════════════════════════════

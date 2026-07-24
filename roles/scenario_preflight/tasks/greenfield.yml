@@ -1,0 +1,202 @@
+---
+# Scenario 1: Greenfield — fresh AWS accounts, build everything from scratch
+# Required inputs: AWS access keys + secret keys per account, ROSA token
+
+- name: "GREENFIELD PREFLIGHT — Phase 1: CLI Tools"
+  ansible.builtin.debug:
+    msg: "Checking required CLI tools..."
+
+- name: Verify rosa CLI is installed
+  ansible.builtin.command: rosa version
+  register: _gf_rosa_version
+  changed_when: false
+  failed_when: _gf_rosa_version.rc != 0
+
+- name: Verify aws CLI is installed
+  ansible.builtin.command: aws --version
+  register: _gf_aws_version
+  changed_when: false
+  failed_when: _gf_aws_version.rc != 0
+
+- name: Verify python3 is available
+  ansible.builtin.command: python3 --version
+  register: _gf_python_version
+  changed_when: false
+  failed_when: _gf_python_version.rc != 0
+
+- name: Display CLI versions
+  ansible.builtin.debug:
+    msg: >-
+      CLI tools OK — rosa {{ _gf_rosa_version.stdout_lines[0] | default('?') }},
+      {{ _gf_aws_version.stdout_lines[0] | default('?') }},
+      {{ _gf_python_version.stdout_lines[0] | default('?') }}
+
+- name: "GREENFIELD PREFLIGHT — Phase 2: Credentials & Configuration"
+  ansible.builtin.debug:
+    msg: "Validating credentials and configuration..."
+
+- name: Validate required variables
+  ansible.builtin.assert:
+    that:
+      - cluster_prefix is defined and cluster_prefix | length > 0
+      - cluster_categories is defined and cluster_categories | length > 0
+      - cluster_credentials is defined
+      - rosa_token is defined
+    fail_msg: >
+      Required variables missing. Need: cluster_prefix, cluster_categories,
+      cluster_credentials (secrets/cluster-credentials.yml), rosa_token (secrets/rosa-token.yml)
+
+- name: Validate facilitator count is exactly 1
+  ansible.builtin.assert:
+    that:
+      - cluster_categories.facilitator is defined
+      - cluster_categories.facilitator.count == 1
+    fail_msg: "Facilitator category must exist with count=1"
+
+- name: Validate minimum replicas per category
+  ansible.builtin.assert:
+    that:
+      - item.value.initial_replicas | int >= 2
+    fail_msg: "Category '{{ item.key }}' must have at least 2 initial replicas (ROSA HCP minimum)"
+  loop: "{{ cluster_categories | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Build cluster definitions for preflight
+  ansible.builtin.set_fact:
+    cluster_definitions: >-
+      {{ cluster_categories | build_cluster_list(cluster_prefix, cluster_credentials, infra_state | default({})) }}
+  no_log: true
+
+- name: "GREENFIELD PREFLIGHT — Phase 3: ROSA Authentication"
+  ansible.builtin.debug:
+    msg: "Validating ROSA login..."
+
+- name: Log in to ROSA
+  ansible.builtin.command: rosa login --token={{ rosa_token }}
+  changed_when: false
+  no_log: true
+  environment:
+    OCM_TOKEN: "{{ rosa_token }}"
+
+- name: Verify ROSA login
+  ansible.builtin.command: rosa whoami
+  register: _gf_whoami
+  changed_when: false
+  no_log: true
+
+- name: Confirm ROSA login
+  ansible.builtin.debug:
+    msg: "ROSA login verified successfully."
+
+- name: "GREENFIELD PREFLIGHT — Phase 4: AWS Account Validation"
+  ansible.builtin.debug:
+    msg: "Validating AWS credentials for {{ cluster_definitions | length }} accounts..."
+
+- name: Validate AWS credentials per account
+  ansible.builtin.shell: |
+    set -o pipefail
+    aws sts get-caller-identity --output json
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _gf_aws_identity
+  changed_when: false
+  no_log: true
+
+- name: Display validated AWS accounts
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.name }}: AWS credentials valid
+      (account {{ (item.stdout | from_json).Account | regex_replace('^(.{4}).*(.{4})$', '\\1****\\2') }},
+      region {{ item.item.aws_region }})
+  loop: "{{ _gf_aws_identity.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: "GREENFIELD PREFLIGHT — Phase 5: VPC Conflict Check"
+  ansible.builtin.debug:
+    msg: "Checking for existing VPC conflicts..."
+
+- name: Check for existing project VPCs
+  ansible.builtin.shell: |
+    set -o pipefail
+    aws ec2 describe-vpcs \
+      --filters "Name=tag:Project,Values={{ aws_infra_tags.Project | default('rosa-hcp-multi-build') }}" \
+      --query "Vpcs[].VpcId" --output text 2>/dev/null || echo ""
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _gf_vpc_check
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Warn about existing VPCs
+  ansible.builtin.debug:
+    msg: "WARNING: {{ item.item.name }} already has project VPC(s) — setup-infra will reuse them (idempotent)"
+  loop: "{{ _gf_vpc_check.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: item.stdout | default('') | trim | length > 0
+
+- name: "GREENFIELD PREFLIGHT — Phase 6: ROSA Quota Check"
+  ansible.builtin.debug:
+    msg: "Checking ROSA quotas (advisory)..."
+
+- name: Check ROSA quota per account
+  ansible.builtin.command: rosa verify quota
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _gf_quota_check
+  failed_when: false
+  changed_when: false
+  no_log: true
+
+- name: Display ROSA quota results
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.name }}: ROSA quota
+      {{ 'OK' if item.rc == 0 else 'WARNING — quota check failed (non-blocking)' }}
+  loop: "{{ _gf_quota_check.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: "GREENFIELD PREFLIGHT — Phase 7: Phase 2 Field Validation"
+  ansible.builtin.debug:
+    msg: "Validating Phase 2 required fields (purpose, seat_number)..."
+
+- name: Validate Phase 2 fields
+  ansible.builtin.include_tasks: _validate-phase2-fields.yml
+
+- name: "GREENFIELD PREFLIGHT — Summary"
+  ansible.builtin.debug:
+    msg: |
+      ══════════════════════════════════════════════════════════════
+        GREENFIELD PREFLIGHT PASSED
+      ══════════════════════════════════════════════════════════════
+        Fleet: {{ cluster_definitions | length }} clusters
+        Categories: {{ cluster_categories.keys() | list | join(', ') }}
+        Prefix: {{ cluster_prefix }}
+        Region: {{ cluster_definitions[0].aws_region }}
+
+        Pipeline: AWS Infra → ROSA Enrollment → Cluster Provision
+                  → Workshop Machinepool → Demo Application
+      ══════════════════════════════════════════════════════════════

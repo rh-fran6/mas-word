@@ -1,0 +1,8 @@
+---
+masworld_efs_performance_mode: generalPurpose
+masworld_efs_throughput_mode: bursting
+masworld_efs_encrypted: true
+masworld_efs_vpc_cidr: "10.0.0.0/16"
+masworld_efs_tags:
+  Project: masworld
+  ManagedBy: ansible

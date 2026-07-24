@@ -1,0 +1,32 @@
+---
+- name: Destroy AWS Infrastructure for ROSA HCP Fleet
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../secrets/rosa-token.yml
+    - ../secrets/cluster-credentials.yml
+
+  pre_tasks:
+    - name: Confirm infrastructure destruction
+      ansible.builtin.pause:
+        prompt: >-
+          WARNING: This will destroy ALL VPCs, subnets, NAT gateways, and route tables
+          for {{ cluster_categories | dict2items | map(attribute='value.count') | sum }} accounts
+          with prefix '{{ cluster_prefix }}'.
+          Type 'yes' to confirm
+      register: destroy_infra_confirm
+      when: not (auto_confirm | default(false) | bool)
+
+    - name: Abort if not confirmed
+      ansible.builtin.fail:
+        msg: "Infrastructure destruction aborted by user."
+      when:
+        - not (auto_confirm | default(false) | bool)
+        - destroy_infra_confirm.user_input | default('') != 'yes'
+
+  roles:
+    - role: aws_infra
+      vars:
+        infra_action: destroy

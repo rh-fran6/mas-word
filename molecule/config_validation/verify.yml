@@ -1,0 +1,158 @@
+---
+# Verify: assert that config_validation produced the expected results.
+- name: Verify — config_validation outcomes
+  hosts: instance
+  gather_facts: false
+  vars:
+    # Re-supply the valid configuration so the role can be re-invoked
+    masworld_event_id: "mas-world-2026"
+    masworld_cluster_name: "test-cluster-01"
+    masworld_base_domain: "example.com"
+    masworld_cluster_api_url: "https://api.test-cluster-01.example.com:6443"
+    masworld_kubeconfig: "/tmp/fake-kubeconfig"
+    masworld_ibm_entitlement_ref: "secret://mas-world/ibm/entitlement-key"
+    masworld_mas_license_file: "secret://mas-world/ibm/license"
+    masworld_mas_core_enabled: true
+    masworld_manage_enabled: true
+    masworld_config_validation_strict: true
+    masworld_config_validation_fail_on_warning: false
+
+  tasks:
+    # ── Test 1: Valid config produces PASS ──────────────────────────────
+    - name: Run config_validation with valid data
+      ansible.builtin.include_role:
+        name: config_validation
+
+    - name: Assert validation passed
+      ansible.builtin.assert:
+        that:
+          - config_validation_result is defined
+          - config_validation_result == 'pass'
+          - config_validation_errors | length == 0
+        fail_msg: >-
+          Expected config_validation_result == 'pass' with zero errors,
+          got result={{ config_validation_result | default('undefined') }},
+          errors={{ config_validation_errors | default([]) }}.
+
+    # ── Test 2: Missing required key produces FAIL ─────────────────────
+    - name: Run config_validation with missing masworld_event_id
+      vars:
+        masworld_config_validation_strict: false  # prevent fail task from firing
+      block:
+        - name: Clear previous results
+          ansible.builtin.set_fact:
+            config_validation_result: ""
+            config_validation_errors: []
+            config_validation_warnings: []
+
+        - name: Include config_validation with a required key undefined
+          ansible.builtin.include_role:
+            name: config_validation
+          vars:
+            # Override required keys list to include one we have NOT defined
+            masworld_config_required_keys:
+              - masworld_event_id
+              - masworld_cluster_name
+              - masworld_base_domain
+              - masworld_nonexistent_key_for_test
+
+        - name: Assert validation detected the missing key
+          ansible.builtin.assert:
+            that:
+              - config_validation_result == 'fail'
+              - config_validation_errors | length > 0
+              - config_validation_errors | select('search', 'masworld_nonexistent_key_for_test') | list | length > 0
+            fail_msg: >-
+              Expected validation to fail on missing key
+              'masworld_nonexistent_key_for_test'.
+              Result={{ config_validation_result }},
+              errors={{ config_validation_errors }}.
+
+    # ── Test 3: Bad credential format produces error ───────────────────
+    - name: Run config_validation with invalid credential format
+      vars:
+        masworld_config_validation_strict: false
+      block:
+        - name: Clear previous results again
+          ansible.builtin.set_fact:
+            config_validation_result: ""
+            config_validation_errors: []
+            config_validation_warnings: []
+
+        - name: Include config_validation with plaintext credential
+          ansible.builtin.include_role:
+            name: config_validation
+          vars:
+            masworld_ibm_entitlement_ref: "plaintext-value-not-secret-ref"
+            masworld_config_validation_strict: true
+
+      rescue:
+        # The role calls ansible.builtin.fail in strict mode, so we
+        # catch it here and verify the error was about credential format.
+        - name: Assert the failure was about credential format
+          ansible.builtin.assert:
+            that:
+              - config_validation_errors | select('search', 'secret://') | list | length > 0
+            fail_msg: >-
+              Expected a credential-format error mentioning 'secret://'
+              but got errors={{ config_validation_errors }}.
+
+    # ── Test 4: Non-boolean component flag produces warning ────────────
+    - name: Run config_validation with non-boolean component flag
+      vars:
+        masworld_config_validation_strict: false
+        masworld_config_validation_fail_on_warning: false
+        masworld_mas_core_enabled: "yes-string"
+      block:
+        - name: Clear previous results
+          ansible.builtin.set_fact:
+            config_validation_result: ""
+            config_validation_errors: []
+            config_validation_warnings: []
+
+        - name: Include config_validation with string component flag
+          ansible.builtin.include_role:
+            name: config_validation
+
+        - name: Assert a warning was generated for non-boolean flag
+          ansible.builtin.assert:
+            that:
+              - config_validation_warnings | length > 0
+              - config_validation_warnings | select('search', 'boolean') | list | length > 0
+            fail_msg: >-
+              Expected a warning about non-boolean component flag.
+              Warnings={{ config_validation_warnings }}.
+
+    # ── Test 5: fail_on_warning promotes warnings to errors ────────────
+    - name: Run config_validation with fail_on_warning enabled
+      vars:
+        masworld_config_validation_strict: false
+        masworld_config_validation_fail_on_warning: true
+        masworld_mas_core_enabled: "yes-string"
+      block:
+        - name: Clear previous results
+          ansible.builtin.set_fact:
+            config_validation_result: ""
+            config_validation_errors: []
+            config_validation_warnings: []
+
+        - name: Include config_validation with fail_on_warning
+          ansible.builtin.include_role:
+            name: config_validation
+
+        - name: Assert warnings were promoted to errors
+          ansible.builtin.assert:
+            that:
+              - config_validation_result == 'fail'
+              - config_validation_errors | select('search', 'boolean') | list | length > 0
+            fail_msg: >-
+              Expected warnings promoted to errors when
+              fail_on_warning is true.
+              Result={{ config_validation_result }},
+              errors={{ config_validation_errors }}.
+
+    # ── Cleanup ────────────────────────────────────────────────────────
+    - name: Remove test fixture directory
+      ansible.builtin.file:
+        path: /tmp/masworld-molecule-config-validation
+        state: absent

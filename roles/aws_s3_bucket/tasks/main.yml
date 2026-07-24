@@ -1,0 +1,149 @@
+---
+# aws_s3_bucket: Create an S3 bucket for Loki log backend per cluster.
+# Idempotent: checks for existing bucket before creating.
+#
+# Required variables:
+#   masworld_aws_access_key_id, masworld_aws_secret_access_key, masworld_aws_region
+#   masworld_s3_bucket_name, masworld_cluster_id
+
+- name: "{{ masworld_cluster_id }} | Provision S3 bucket for Loki"
+  block:
+    - name: "{{ masworld_cluster_id }} | Check if S3 bucket exists"
+      ansible.builtin.shell: |
+        set -o pipefail
+        aws s3api head-bucket --bucket "{{ masworld_s3_bucket_name }}" 2>&1 && echo "exists" || echo "not_found"
+      args:
+        executable: /bin/bash
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ masworld_aws_access_key_id }}"
+        AWS_SECRET_ACCESS_KEY: "{{ masworld_aws_secret_access_key }}"
+        AWS_DEFAULT_REGION: "{{ masworld_aws_region }}"
+      register: _s3_bucket_check
+      changed_when: false
+      no_log: true
+
+    - name: "{{ masworld_cluster_id }} | Create S3 bucket"
+      ansible.builtin.shell: |
+        set -o pipefail
+        aws s3api create-bucket \
+          --bucket "{{ masworld_s3_bucket_name }}" \
+          --create-bucket-configuration LocationConstraint={{ masworld_aws_region }} \
+          --query 'Location' --output text
+      args:
+        executable: /bin/bash
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ masworld_aws_access_key_id }}"
+        AWS_SECRET_ACCESS_KEY: "{{ masworld_aws_secret_access_key }}"
+        AWS_DEFAULT_REGION: "{{ masworld_aws_region }}"
+      when: "'not_found' in _s3_bucket_check.stdout"
+      no_log: true
+
+    - name: "{{ masworld_cluster_id }} | Enable bucket encryption"
+      ansible.builtin.shell: |
+        set -o pipefail
+        aws s3api put-bucket-encryption \
+          --bucket "{{ masworld_s3_bucket_name }}" \
+          --server-side-encryption-configuration '{
+            "Rules": [{
+              "ApplyServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "{{ masworld_s3_encryption }}"
+              }
+            }]
+          }'
+      args:
+        executable: /bin/bash
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ masworld_aws_access_key_id }}"
+        AWS_SECRET_ACCESS_KEY: "{{ masworld_aws_secret_access_key }}"
+        AWS_DEFAULT_REGION: "{{ masworld_aws_region }}"
+      changed_when: false
+      no_log: true
+
+    - name: "{{ masworld_cluster_id }} | Block public access"
+      ansible.builtin.shell: |
+        set -o pipefail
+        aws s3api put-public-access-block \
+          --bucket "{{ masworld_s3_bucket_name }}" \
+          --public-access-block-configuration '{
+            "BlockPublicAcls": true,
+            "IgnorePublicAcls": true,
+            "BlockPublicPolicy": true,
+            "RestrictPublicBuckets": true
+          }'
+      args:
+        executable: /bin/bash
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ masworld_aws_access_key_id }}"
+        AWS_SECRET_ACCESS_KEY: "{{ masworld_aws_secret_access_key }}"
+        AWS_DEFAULT_REGION: "{{ masworld_aws_region }}"
+      changed_when: false
+      no_log: true
+
+    - name: "{{ masworld_cluster_id }} | Apply lifecycle policy"
+      ansible.builtin.shell: |
+        set -o pipefail
+        aws s3api put-bucket-lifecycle-configuration \
+          --bucket "{{ masworld_s3_bucket_name }}" \
+          --lifecycle-configuration '{
+            "Rules": [{
+              "ID": "loki-log-expiration",
+              "Status": "Enabled",
+              "Filter": {"Prefix": ""},
+              "Expiration": {"Days": {{ masworld_s3_lifecycle_expiration_days }}}
+            }]
+          }'
+      args:
+        executable: /bin/bash
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ masworld_aws_access_key_id }}"
+        AWS_SECRET_ACCESS_KEY: "{{ masworld_aws_secret_access_key }}"
+        AWS_DEFAULT_REGION: "{{ masworld_aws_region }}"
+      changed_when: false
+      no_log: true
+
+    - name: "{{ masworld_cluster_id }} | Tag S3 bucket"
+      ansible.builtin.shell: |
+        set -o pipefail
+        aws s3api put-bucket-tagging \
+          --bucket "{{ masworld_s3_bucket_name }}" \
+          --tagging '{
+            "TagSet": [
+              {"Key": "Cluster", "Value": "{{ masworld_cluster_id }}"},
+              {"Key": "Project", "Value": "{{ masworld_s3_tags.Project }}"},
+              {"Key": "ManagedBy", "Value": "{{ masworld_s3_tags.ManagedBy }}"},
+              {"Key": "Purpose", "Value": "loki-log-backend"}
+            ]
+          }'
+      args:
+        executable: /bin/bash
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ masworld_aws_access_key_id }}"
+        AWS_SECRET_ACCESS_KEY: "{{ masworld_aws_secret_access_key }}"
+        AWS_DEFAULT_REGION: "{{ masworld_aws_region }}"
+      changed_when: false
+      no_log: true
+
+    - name: "{{ masworld_cluster_id }} | Set S3 result fact"
+      ansible.builtin.set_fact:
+        _cluster_s3_buckets: >-
+          {{ _cluster_s3_buckets | default({}) | combine({
+            masworld_cluster_id: masworld_s3_bucket_name
+          }) }}
+        s3_provisioning_result: "success"
+
+    - name: "{{ masworld_cluster_id }} | Report S3 success"
+      ansible.builtin.debug:
+        msg: "S3 bucket {{ masworld_s3_bucket_name }} ready in {{ masworld_aws_region }}"
+
+  rescue:
+    - name: "{{ masworld_cluster_id }} | Set S3 failure fact"
+      ansible.builtin.set_fact:
+        _cluster_s3_buckets: >-
+          {{ _cluster_s3_buckets | default({}) | combine({
+            masworld_cluster_id: ''
+          }) }}
+        s3_provisioning_result: "failed"
+
+    - name: "{{ masworld_cluster_id }} | Report S3 failure"
+      ansible.builtin.debug:
+        msg: "S3 bucket provisioning failed for {{ masworld_cluster_id }}: {{ ansible_failed_result.msg | default('unknown error') }}"

@@ -1,0 +1,105 @@
+---
+- name: Verify rosa CLI is installed
+  ansible.builtin.command: rosa version
+  register: rosa_version_result
+  changed_when: false
+  failed_when: rosa_version_result.rc != 0
+
+- name: Display rosa CLI version
+  ansible.builtin.debug:
+    msg: "ROSA CLI version: {{ rosa_version_result.stdout_lines[0] }}"
+
+- name: Verify aws CLI is installed
+  ansible.builtin.command: aws --version
+  register: aws_version_result
+  changed_when: false
+  failed_when: aws_version_result.rc != 0
+
+- name: Display AWS CLI version
+  ansible.builtin.debug:
+    msg: "AWS CLI version: {{ aws_version_result.stdout_lines[0] }}"
+
+- name: Log in to ROSA with offline token
+  ansible.builtin.command: rosa login --token={{ rosa_token }}
+  register: rosa_login_result
+  changed_when: false
+  failed_when: rosa_login_result.rc != 0
+  no_log: true
+  environment:
+    OCM_TOKEN: "{{ rosa_token }}"
+
+- name: Verify required variables are defined
+  ansible.builtin.assert:
+    that:
+      - cluster_prefix is defined
+      - cluster_prefix | length > 0
+      - cluster_categories is defined
+      - cluster_categories | length > 0
+      - cluster_credentials is defined
+      - rosa_token is defined
+    fail_msg: "Required variables are missing. See docs/configuration-guide.md"
+
+- name: Validate facilitator count is exactly 1
+  ansible.builtin.assert:
+    that:
+      - cluster_categories.facilitator is defined
+      - cluster_categories.facilitator.count == 1
+    fail_msg: "Facilitator category must exist with count=1"
+
+- name: Validate minimum replicas per category
+  ansible.builtin.assert:
+    that:
+      - item.value.initial_replicas | int >= 2
+    fail_msg: "Category '{{ item.key }}' must have at least 2 initial replicas"
+  loop: "{{ cluster_categories | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Build cluster definitions
+  ansible.builtin.set_fact:
+    cluster_definitions: >-
+      {{ cluster_categories | build_cluster_list(cluster_prefix, cluster_credentials, infra_state | default({})) }}
+  no_log: true
+
+- name: Display planned cluster fleet
+  ansible.builtin.debug:
+    msg: "Will provision {{ cluster_definitions | length }} clusters: {{ cluster_definitions | map(attribute='name') | list }}"
+
+- name: Verify ROSA login is valid
+  ansible.builtin.command: rosa whoami
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_definitions[0].aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_definitions[0].aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_definitions[0].aws_region }}"
+  register: rosa_whoami_result
+  changed_when: false
+  failed_when: rosa_whoami_result.rc != 0
+  no_log: true
+
+- name: Confirm ROSA login is valid
+  ansible.builtin.debug:
+    msg: "ROSA login verified successfully."
+
+- name: Validate AWS credentials for each cluster
+  ansible.builtin.shell: |
+    set -o pipefail
+    aws sts get-caller-identity --output json
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: aws_identity_results
+  changed_when: false
+  no_log: true
+
+- name: Display validated AWS accounts
+  ansible.builtin.debug:
+    msg: "{{ item.item.name }}: AWS credentials validated (account {{ (item.stdout | from_json).Account | regex_replace('^(.{4}).*(.{4})$', '\\1****\\2') }})"
+  loop: "{{ aws_identity_results.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"

@@ -1,0 +1,175 @@
+---
+# MAS World 2026 -- Common Variables
+#
+# Shared defaults for all environments. Environment-specific files
+# (development.yml, rehearsal.yml, event.yml) override these values.
+#
+# Variable names are kept consistent with the Pydantic schema in:
+#   cli/config/schema.py
+#
+# No credentials, entitlement keys, passwords, tokens, or kubeconfigs
+# are stored here. All sensitive values use secret:// references.
+
+# ---------------------------------------------------------------------------
+# Event metadata
+# ---------------------------------------------------------------------------
+event_id: mas-world-2026
+event_name: "MAS World 2026"
+event_date: "2026-08-17"
+event_timezone: America/Chicago
+
+# ---------------------------------------------------------------------------
+# Fleet sizing -- overridden per environment
+# ---------------------------------------------------------------------------
+fleet_attendee_count: 1
+fleet_spare_count: 0
+fleet_facilitator_count: 1
+fleet_require_exact_counts: false
+
+# Fleet orchestration
+fleet_max_concurrent_clusters: 5
+fleet_per_cluster_timeout_minutes: 240
+fleet_retry_count: 3
+fleet_retry_backoff_base_seconds: 30
+
+# Seat assignment
+fleet_first_seat_number: 1
+fleet_seat_number_padding: 2
+fleet_automatically_assign_spares: false
+
+# ---------------------------------------------------------------------------
+# Component versions -- pinned, no floating channels or "latest"
+# Sourced from docs/compatibility-matrix.md
+# ---------------------------------------------------------------------------
+
+# OpenShift
+ocp_version: "4.21"
+
+# IBM Maximo Application Suite
+mas_version: "9.1.x"
+mas_channel: "9.1.x"
+mas_catalog_tag: "v9-260625-amd64"
+mas_catalog_image: "icr.io/cpopen/ibm-maximo-operator-catalog:v9-260625-amd64"
+mas_catalog_source: ibm-operator-catalog
+mas_install_core: true
+mas_install_manage: true
+
+# OpenShift Logging
+logging_channel: "stable-6.6"
+logging_collector: vector
+logging_collect_application: true
+logging_collect_infrastructure: true
+logging_collect_audit: true
+
+# Loki
+loki_channel: "stable-6.6"
+loki_api_version: "loki.grafana.com/v1"
+loki_size: "1x.extra-small"
+loki_object_storage_mode: bucket-per-cluster
+loki_retention_days: 7
+
+# ACM
+acm_version: "2.16"
+
+# GitOps
+gitops_channel: "gitops-1.21"
+
+# MongoDB
+mongodb_version: "7.0"
+
+# IBM SLS
+sls_channel: "3.x"
+
+# IBM Db2
+db2_version: "11.5"
+
+# Keycloak / Identity
+keycloak_deployment_mode: per-cluster
+keycloak_realm_name: mas-world
+
+# MAS Edge -- disabled by default
+mas_edge_enabled: false
+
+# Showroom
+showroom_enabled: true
+showroom_template: nookbag
+showroom_theme_version: "v2.0.3"
+showroom_title: "MAS World 2026 -- Maximo on OpenShift Workshop"
+showroom_content_repo: "https://github.com/rhpds/mas-world-2026-showroom.git"
+showroom_content_ref: main
+
+# ACM registration
+acm_registration_enabled: false
+
+# ---------------------------------------------------------------------------
+# AWS configuration
+# ---------------------------------------------------------------------------
+aws_default_region: us-east-2
+aws_s3_bucket_prefix: "mas-world-2026"
+aws_s3_encryption: AES256
+aws_s3_lifecycle_expiration_days: 30
+
+# ---------------------------------------------------------------------------
+# Student credentials
+# ---------------------------------------------------------------------------
+student_credential_profile: attendee-default
+student_username_template: "user{{ seat_number | pad(2) }}"
+student_display_name_template: "MAS World Attendee {{ seat_number }}"
+student_authentication_provider: htpasswd
+student_password_mode: generated
+student_password_length: 18
+student_password_secret_ref_template: "secret://mas-world/students/seat-{{ seat_number | pad(2) }}"
+student_rotate_before_event: true
+student_expire_after_event: true
+student_allow_shared_password: false
+
+# Student RBAC
+student_cluster_role: basic-user
+student_namespace_template: "student-{{ seat_number | pad(2) }}"
+student_namespace_role: admin
+student_allow_cluster_admin: false
+student_allow_acm_access: false
+student_allow_other_student_namespaces: false
+student_allow_protected_secret_read: false
+
+# ---------------------------------------------------------------------------
+# Secret provider -- overridden per environment
+# ---------------------------------------------------------------------------
+secret_provider: env
+secret_provider_config: {}
+
+# ---------------------------------------------------------------------------
+# Credential references -- always secret:// URIs, never actual values
+# ---------------------------------------------------------------------------
+ibm_entitlement_key_ref: "secret://mas-world/ibm/entitlement-key"
+ibm_license_ref: "secret://mas-world/ibm/license"
+aws_access_key_id_ref: "secret://mas-world/AWS_ACCESS_KEY_ID"
+aws_secret_access_key_ref: "secret://mas-world/AWS_ACCESS_KEY_SECRET"
+# ACM hub credentials come from the cluster inventory (hub_cluster_id).
+# No separate hub kubeconfig reference needed.
+container_registry_pull_secret_ref: "secret://mas-world/registry/pull-secret"
+
+# ---------------------------------------------------------------------------
+# Logging and diagnostics
+# ---------------------------------------------------------------------------
+logging_log_level: info
+logging_structured: true
+logging_per_cluster_log_dir: logs/clusters
+logging_redact_secrets: true
+
+# ---------------------------------------------------------------------------
+# ACM labels -- applied to every managed cluster
+# ---------------------------------------------------------------------------
+acm_labels:
+  event: mas-world-2026
+  workload: maximo
+  environment: workshop
+  logging: enabled
+  idp: preconfigured
+
+# ---------------------------------------------------------------------------
+# Automation collection reference
+# ---------------------------------------------------------------------------
+automation_collection_namespace: masworld
+automation_collection_name: automation
+automation_collection_version: "0.1.0"

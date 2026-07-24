@@ -1,0 +1,117 @@
+---
+# efs_csi_driver: Install the AWS EFS CSI Driver Operator via OLM and create the
+# efs StorageClass for dynamic RWX provisioning using EFS access points.
+# Idempotent: checks for existing StorageClass before acting.
+#
+# Required variables:
+#   masworld_efs_filesystem_id — EFS filesystem ID from aws_efs role
+#   masworld_aws_access_key_id, masworld_aws_secret_access_key — for controller credentials
+
+- name: "EFS CSI Driver — Install and configure"
+  when: masworld_efs_filesystem_id | default('') | length > 0
+  block:
+    - name: Check if efs StorageClass already exists
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ masworld_efs_storageclass_name }}"
+      register: _efs_sc_existing
+
+    - name: Install EFS CSI Driver Operator
+      when: _efs_sc_existing.resources | length == 0
+      block:
+        - name: Create openshift-cluster-csi-drivers namespace
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: openshift-cluster-csi-drivers
+
+        - name: Create AllNamespaces OperatorGroup for EFS CSI
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: operators.coreos.com/v1
+              kind: OperatorGroup
+              metadata:
+                name: openshift-cluster-csi-drivers
+                namespace: openshift-cluster-csi-drivers
+              spec: {}
+
+        - name: Create AWS credentials secret for EFS CSI controller
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: aws-efs-cloud-credentials
+                namespace: openshift-cluster-csi-drivers
+              type: Opaque
+              stringData:
+                aws_access_key_id: "{{ masworld_aws_access_key_id }}"
+                aws_secret_access_key: "{{ masworld_aws_secret_access_key }}"
+          no_log: true
+
+        - name: Create EFS CSI Driver Operator Subscription
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: operators.coreos.com/v1alpha1
+              kind: Subscription
+              metadata:
+                name: aws-efs-csi-driver-operator
+                namespace: openshift-cluster-csi-drivers
+              spec:
+                channel: "{{ masworld_efs_csi_operator_channel }}"
+                installPlanApproval: Automatic
+                name: aws-efs-csi-driver-operator
+                source: "{{ masworld_efs_csi_operator_source }}"
+                sourceNamespace: "{{ masworld_efs_csi_operator_source_namespace }}"
+
+        - name: Create ClusterCSIDriver for EFS
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: operator.openshift.io/v1
+              kind: ClusterCSIDriver
+              metadata:
+                name: efs.csi.aws.com
+              spec:
+                managementState: Managed
+
+        - name: Wait for efs.csi.aws.com CSIDriver to appear
+          kubernetes.core.k8s_info:
+            api_version: storage.k8s.io/v1
+            kind: CSIDriver
+            name: efs.csi.aws.com
+          register: _efs_csi_driver
+          until: _efs_csi_driver.resources | length > 0
+          retries: "{{ masworld_efs_csi_driver_ready_retries }}"
+          delay: "{{ masworld_efs_csi_driver_ready_delay }}"
+
+    - name: Create efs StorageClass
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: "{{ masworld_efs_storageclass_name }}"
+          provisioner: efs.csi.aws.com
+          parameters:
+            provisioningMode: efs-ap
+            fileSystemId: "{{ masworld_efs_filesystem_id }}"
+            directoryPerms: "{{ masworld_efs_directory_perms }}"
+          reclaimPolicy: Delete
+          volumeBindingMode: Immediate
+
+    - name: Verify efs StorageClass exists
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ masworld_efs_storageclass_name }}"
+      register: _efs_sc_verify
+      failed_when: _efs_sc_verify.resources | length == 0

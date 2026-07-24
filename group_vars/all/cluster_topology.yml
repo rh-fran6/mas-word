@@ -1,0 +1,36 @@
+---
+# Naming prefix for all clusters in this fleet
+cluster_prefix: "lab"
+
+# Cluster categories — each has uniform worker node sizing within the category.
+# Adjust 'count' and 'instance_type' per your deployment needs.
+cluster_categories:
+  facilitator:
+    count: 1
+    instance_type: "m6a.4xlarge"
+    initial_replicas: 2
+    autoscaling:
+      enabled: true
+      min_replicas: 2
+      max_replicas: 4
+      machinepool_name: "autoscale-workers"
+
+  hub:
+    count: 1
+    instance_type: "m5.2xlarge"
+    initial_replicas: 2
+    autoscaling:
+      enabled: true
+      min_replicas: 2
+      max_replicas: 6
+      machinepool_name: "autoscale-workers"
+
+  seat:
+    count: 8
+    instance_type: "m6a.4xlarge"
+    initial_replicas: 2
+    autoscaling:
+      enabled: true
+      min_replicas: 2
+      max_replicas: 4
+      machinepool_name: "autoscale-workers"

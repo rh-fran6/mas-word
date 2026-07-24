@@ -1,0 +1,49 @@
+---
+profile: production
+
+exclude_paths:
+  - .claude/
+  - .venv/
+  - collections/
+  - molecule/
+  - showroom/runtime-automation/
+  - agnosticv/
+  - playbooks/_*.yml
+
+skip_list:
+  - yaml[line-length]
+  - name[missing]
+  - name[template]
+  - jinja[spacing]
+  - var-naming[no-role-prefix]
+  - galaxy[no-changelog]
+  - galaxy[tags]
+  - galaxy[no-runtime]
+  - no-changed-when
+  - command-instead-of-module
+  - ignore-errors
+  - key-order[task]
+
+warn_list: []
+
+mock_roles:
+  - config_validation
+  - cluster_preflight
+  - event_metadata
+  - acm_registration
+  - mas_prerequisites
+  - mas_core
+  - maximo_manage
+  - logging_operator
+  - loki_stack
+  - log_forwarding
+  - identity_demo
+  - mas_edge
+  - student_accounts
+  - sample_workloads
+  - showroom
+  - event_readiness
+  - environment_report
+
+use_default_rules: true
+offline: true

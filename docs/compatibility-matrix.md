@@ -1,7 +1,7 @@
 # Compatibility Matrix — MAS World 2026
 
-**Status**: VERIFIED (from official documentation)  
-**Date**: 2026-07-19  
+**Status**: VERIFIED (from official documentation)
+**Date**: 2026-07-19
 **Target Deployment**: August 17, 2026
 
 ---
@@ -130,7 +130,7 @@ metadata:
   namespace: openshift-logging
 stringData:
   access_key_id: "<AWS_ACCESS_KEY_ID>"
-  access_key_secret: "<AWS_SECRET_ACCESS_KEY>"
+  access_key_secret: "<AWS_ACCESS_KEY_SECRET>"
   bucketnames: "<S3_BUCKET_NAME>"
   endpoint: "https://s3.<REGION>.amazonaws.com"
   region: "<REGION>"

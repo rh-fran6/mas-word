@@ -1,0 +1,257 @@
+---
+# Destroys all AWS networking infrastructure for a single account.
+# Reverse order of creation. All steps tolerate already-deleted resources.
+
+- name: "{{ cluster_item.name }} | Find VPC"
+  ansible.builtin.shell: |
+    set -o pipefail
+    aws ec2 describe-vpcs \
+      --filters "Name=tag:Cluster,Values={{ cluster_item.name }}" \
+                "Name=tag:Project,Values={{ aws_infra_tags.Project }}" \
+      --query 'Vpcs[0].VpcId' --output text
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  register: vpc_lookup
+  changed_when: false
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Skip if no VPC found"
+  ansible.builtin.debug:
+    msg: "No VPC found for {{ cluster_item.name }}, skipping."
+  when: vpc_lookup.stdout in ['None', '']
+
+- name: "{{ cluster_item.name }} | Set VPC ID for teardown"
+  ansible.builtin.set_fact:
+    teardown_vpc_id: "{{ vpc_lookup.stdout | trim }}"
+  when: vpc_lookup.stdout not in ['None', '']
+
+# --- Delete NAT Gateways ---
+
+- name: "{{ cluster_item.name }} | Find NAT Gateways"
+  ansible.builtin.shell: |
+    set -o pipefail
+    aws ec2 describe-nat-gateways \
+      --filter "Name=vpc-id,Values={{ teardown_vpc_id }}" \
+               "Name=state,Values=available,pending" \
+      --query 'NatGateways[].NatGatewayId' --output json
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  register: nat_list
+  changed_when: false
+  when: vpc_lookup.stdout not in ['None', '']
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Delete NAT Gateways"
+  ansible.builtin.shell: |
+    aws ec2 delete-nat-gateway --nat-gateway-id {{ item }}
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  loop: "{{ (nat_list.stdout | default('[]') | from_json) }}"
+  loop_control:
+    label: "{{ item }}"
+  failed_when: false
+  when: vpc_lookup.stdout not in ['None', '']
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Wait for NAT Gateways to be deleted"
+  ansible.builtin.shell: |
+    set -o pipefail
+    PENDING=$(aws ec2 describe-nat-gateways \
+      --filter "Name=vpc-id,Values={{ teardown_vpc_id }}" \
+               "Name=state,Values=available,pending,deleting" \
+      --query 'NatGateways | length(@)' --output text)
+    echo "$PENDING"
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  register: nat_wait
+  until: (nat_wait.stdout | trim | int) == 0
+  retries: "{{ aws_nat_gateway_retries }}"
+  delay: "{{ aws_nat_gateway_delay }}"
+  changed_when: false
+  when: vpc_lookup.stdout not in ['None', '']
+  no_log: true
+
+# --- Release Elastic IPs ---
+
+- name: "{{ cluster_item.name }} | Find Elastic IPs"
+  ansible.builtin.shell: |
+    set -o pipefail
+    aws ec2 describe-addresses \
+      --filters "Name=tag:Cluster,Values={{ cluster_item.name }}" \
+                "Name=tag:Project,Values={{ aws_infra_tags.Project }}" \
+      --query 'Addresses[].AllocationId' --output json
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  register: eip_list
+  changed_when: false
+  when: vpc_lookup.stdout not in ['None', '']
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Release Elastic IPs"
+  ansible.builtin.shell: |
+    aws ec2 release-address --allocation-id {{ item }}
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  loop: "{{ (eip_list.stdout | default('[]') | from_json) }}"
+  loop_control:
+    label: "{{ item }}"
+  failed_when: false
+  when: vpc_lookup.stdout not in ['None', '']
+  no_log: true
+
+# --- Delete Route Table Associations and Route Tables ---
+
+- name: "{{ cluster_item.name }} | Find non-main route tables"
+  ansible.builtin.shell: |
+    set -o pipefail
+    aws ec2 describe-route-tables \
+      --filters "Name=vpc-id,Values={{ teardown_vpc_id }}" \
+                "Name=tag:Project,Values={{ aws_infra_tags.Project }}" \
+      --query 'RouteTables[].{Id:RouteTableId,Assocs:Associations[?!Main].RouteTableAssociationId}' \
+      --output json
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  register: rt_list
+  changed_when: false
+  when: vpc_lookup.stdout not in ['None', '']
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Disassociate and delete route tables"
+  ansible.builtin.shell: |
+    set -o pipefail
+    RT_DATA='{{ rt_list.stdout | default("[]") }}'
+    for rt in $(echo "$RT_DATA" | python3 -c "
+    import sys, json
+    data = json.load(sys.stdin)
+    for rt in data:
+        for assoc in rt.get('Assocs', []) or []:
+            print(f'DISASSOC {assoc}')
+        print(f'DELETE {rt[\"Id\"]}')
+    "); do
+      ACTION=$(echo "$rt" | cut -d' ' -f1)
+      ID=$(echo "$rt" | cut -d' ' -f2)
+      if [ "$ACTION" = "DISASSOC" ]; then
+        aws ec2 disassociate-route-table --association-id "$ID" 2>/dev/null || true
+      elif [ "$ACTION" = "DELETE" ]; then
+        aws ec2 delete-route-table --route-table-id "$ID" 2>/dev/null || true
+      fi
+    done
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  failed_when: false
+  when: vpc_lookup.stdout not in ['None', '']
+  no_log: true
+
+# --- Delete Subnets ---
+
+- name: "{{ cluster_item.name }} | Find all subnets in VPC"
+  ansible.builtin.shell: |
+    set -o pipefail
+    aws ec2 describe-subnets \
+      --filters "Name=vpc-id,Values={{ teardown_vpc_id }}" \
+      --query 'Subnets[].SubnetId' --output json
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  register: subnet_list
+  changed_when: false
+  when: vpc_lookup.stdout not in ['None', '']
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Delete subnets"
+  ansible.builtin.shell: |
+    aws ec2 delete-subnet --subnet-id {{ item }}
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  loop: "{{ (subnet_list.stdout | default('[]') | from_json) }}"
+  loop_control:
+    label: "{{ item }}"
+  failed_when: false
+  when: vpc_lookup.stdout not in ['None', '']
+  no_log: true
+
+# --- Detach and Delete Internet Gateway ---
+
+- name: "{{ cluster_item.name }} | Find Internet Gateway"
+  ansible.builtin.shell: |
+    set -o pipefail
+    aws ec2 describe-internet-gateways \
+      --filters "Name=attachment.vpc-id,Values={{ teardown_vpc_id }}" \
+      --query 'InternetGateways[0].InternetGatewayId' --output text
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  register: igw_lookup
+  changed_when: false
+  when: vpc_lookup.stdout not in ['None', '']
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Detach and delete Internet Gateway"
+  ansible.builtin.shell: |
+    aws ec2 detach-internet-gateway \
+      --internet-gateway-id {{ igw_lookup.stdout | trim }} \
+      --vpc-id {{ teardown_vpc_id }}
+    aws ec2 delete-internet-gateway \
+      --internet-gateway-id {{ igw_lookup.stdout | trim }}
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  failed_when: false
+  when:
+    - vpc_lookup.stdout not in ['None', '']
+    - igw_lookup.stdout | default('None') not in ['None', '']
+  no_log: true
+
+# --- Delete VPC ---
+
+- name: "{{ cluster_item.name }} | Delete VPC"
+  ansible.builtin.shell: |
+    aws ec2 delete-vpc --vpc-id {{ teardown_vpc_id }}
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  failed_when: false
+  when: vpc_lookup.stdout not in ['None', '']
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Infrastructure destroyed"
+  ansible.builtin.debug:
+    msg: "All infrastructure removed for {{ cluster_item.name }}"

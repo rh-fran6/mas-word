@@ -1,0 +1,145 @@
+---
+# MAS Prerequisites: Certificate Manager, MongoDB, SLS
+- name: Install MAS prerequisites
+  block:
+    # ── Resolve IBM Entitlement Key ──────────────────────────────────────
+    - name: Resolve IBM entitlement key
+      ansible.builtin.set_fact:
+        _masworld_ibm_entitlement_key: >-
+          {{ masworld_ibm_entitlement_key
+             | default(lookup('ansible.builtin.env', 'IBM_ENTITLEMENT_KEY'), true)
+             | default(lookup('ansible.builtin.env', 'MAS_IBM_ENTITLEMENT_KEY'), true) }}
+      no_log: true
+
+    - name: Validate IBM entitlement key is present
+      ansible.builtin.assert:
+        that:
+          - _masworld_ibm_entitlement_key | length > 0
+        fail_msg: >-
+          IBM entitlement key not found. Pass masworld_ibm_entitlement_key,
+          set IBM_ENTITLEMENT_KEY environment variable, or configure
+          the secret reference in credentials.yaml.
+        quiet: true
+      no_log: true
+
+    # ── Ensure Namespace ────────────────────────────────────────────────
+    - name: Ensure ibm-common-services namespace exists
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ masworld_ibm_common_services_namespace }}"
+        state: present
+
+    # ── Create Entitlement Key Secret ───────────────────────────────────
+    - name: Build docker config JSON
+      ansible.builtin.set_fact:
+        _docker_config_json: >-
+          {{ {'auths': {'cp.icr.io': {'username': 'cp', 'password': _masworld_ibm_entitlement_key | trim }}} | to_json }}
+      no_log: true
+
+    - name: Create IBM entitlement key Secret
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: ibm-entitlement-key
+            namespace: "{{ masworld_ibm_common_services_namespace }}"
+          type: kubernetes.io/dockerconfigjson
+          data:
+            .dockerconfigjson: "{{ _docker_config_json | b64encode }}"
+      no_log: true
+
+    # ── Create MAS config directory for inter-role data ───────────────
+    - name: Create persistent MAS config directory
+      ansible.builtin.file:
+        path: "/tmp/masworld-config-{{ masworld_cluster_name }}"
+        state: directory
+        mode: "0700"
+
+    - name: Set masworld config dir fact
+      ansible.builtin.set_fact:
+        _masworld_config_dir: "/tmp/masworld-config-{{ masworld_cluster_name }}"
+
+    # ── Configure IBM Operator Catalog ─────────────────────────────────
+    - name: Configure IBM Operator Catalog source
+      ansible.builtin.include_role:
+        name: ibm.mas_devops.ibm_catalogs
+      vars:
+        mas_catalog_version: "{{ masworld_mas_catalog_source }}"
+
+    # ── Install IBM Cert Manager ────────────────────────────────────────
+    - name: Install IBM Certificate Manager via ibm.mas_devops
+      ansible.builtin.include_role:
+        name: ibm.mas_devops.cert_manager
+      vars:
+        cert_manager_version: "{{ masworld_cert_manager_version | default(omit, true) }}"
+
+    # ── Install MongoDB ─────────────────────────────────────────────────
+    - name: Install MongoDB via ibm.mas_devops
+      ansible.builtin.include_role:
+        name: ibm.mas_devops.mongodb
+      vars:
+        mongodb_version: "{{ masworld_mongodb_version }}"
+        mas_instance_id: "{{ masworld_mas_instance_id | default('inst1') }}"
+        mas_config_dir: "{{ _masworld_config_dir }}"
+
+    # ── Install SLS ─────────────────────────────────────────────────────
+    - name: Install Suite License Service via ibm.mas_devops
+      ansible.builtin.include_role:
+        name: ibm.mas_devops.sls
+      vars:
+        sls_version: "{{ masworld_sls_version | default(omit, true) }}"
+        sls_mongodb_cfg_file: "{{ _masworld_config_dir }}/mongo-mongoce.yml"
+        mas_instance_id: "{{ masworld_mas_instance_id | default('inst1') }}"
+        mas_config_dir: "{{ _masworld_config_dir }}"
+
+    # ── Install DRO (generates BasCfg for MAS) ──────────────────────────
+    - name: Install Data Reporter Operator via ibm.mas_devops
+      ansible.builtin.include_role:
+        name: ibm.mas_devops.dro
+      vars:
+        mas_instance_id: "{{ masworld_mas_instance_id | default('inst1') }}"
+        mas_config_dir: "{{ _masworld_config_dir }}"
+        ibm_entitlement_key: "{{ _masworld_ibm_entitlement_key }}"
+        dro_contact:
+          email: "{{ masworld_dro_contact_email | default('noreply@example.com') }}"
+          first_name: "{{ masworld_dro_contact_first | default('MAS') }}"
+          last_name: "{{ masworld_dro_contact_last | default('World') }}"
+
+    # ── Wait for Prerequisite CRDs ──────────────────────────────────────
+    - name: Wait for prerequisite CRDs to be available
+      kubernetes.core.k8s_info:
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: "{{ item }}"
+      register: _masworld_crd_check
+      until:
+        - _masworld_crd_check.resources | length > 0
+        - _masworld_crd_check.resources[0].status.conditions | default([])
+          | selectattr('type', 'equalto', 'Established')
+          | selectattr('status', 'equalto', 'True')
+          | list | length > 0
+      retries: "{{ masworld_prerequisites_crd_retries }}"
+      delay: "{{ masworld_prerequisites_crd_delay }}"
+      loop:
+        - certmanagers.operator.openshift.io
+        - mongodbcommunity.mongodbcommunity.mongodb.com
+        - licenseservices.sls.ibm.com
+
+    # ── Set Success Fact ────────────────────────────────────────────────
+    - name: Set MAS prerequisites ready fact
+      ansible.builtin.set_fact:
+        mas_prerequisites_ready: true
+
+  rescue:
+    - name: Set MAS prerequisites failed fact
+      ansible.builtin.set_fact:
+        mas_prerequisites_ready: false
+
+    - name: Report MAS prerequisites failure
+      ansible.builtin.fail:
+        msg: >-
+          MAS prerequisites installation failed: {{ ansible_failed_result.msg | default('unknown error') }}.
+          Review the error above and retry.

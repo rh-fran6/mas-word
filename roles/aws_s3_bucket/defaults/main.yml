@@ -1,0 +1,7 @@
+---
+masworld_s3_encryption: AES256
+masworld_s3_lifecycle_expiration_days: 30
+masworld_s3_bucket_prefix: "mas-world-2026"
+masworld_s3_tags:
+  Project: masworld
+  ManagedBy: ansible

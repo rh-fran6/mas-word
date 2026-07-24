@@ -1,0 +1,72 @@
+---
+- name: Include build_definitions
+  ansible.builtin.include_tasks: build_definitions.yml
+
+- name: Check for existing machinepools
+  ansible.builtin.shell: |
+    set -o pipefail
+    rosa list machinepools --cluster={{ item.name }} --output json 2>/dev/null \
+      | python3 -c "import sys,json; pools=json.load(sys.stdin); print(' '.join(p['id'] for p in pools))"
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ cluster_definitions | selectattr('autoscaling.enabled') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: existing_pools_check
+  failed_when: false
+  changed_when: false
+  no_log: true
+
+- name: Build list of clusters needing machinepool
+  no_log: true
+  ansible.builtin.set_fact:
+    clusters_needing_machinepool: >-
+      {{ clusters_needing_machinepool | default([]) +
+         ( [item.0] if (item.0.autoscaling.machinepool_name | default('autoscale-workers')) not in (item.1.stdout | default(''))
+           else [] ) }}
+  loop: "{{ (cluster_definitions | selectattr('autoscaling.enabled') | list) | zip(existing_pools_check.results) | list }}"
+  loop_control:
+    label: "{{ item.0.name }}"
+
+- name: Report existing machinepools (will be skipped)
+  ansible.builtin.debug:
+    msg: "MachinePool already exists on {{ item.0.name }} (pools: {{ item.1.stdout | default('none') | trim }}), skipping"
+  loop: "{{ (cluster_definitions | selectattr('autoscaling.enabled') | list) | zip(existing_pools_check.results) | list }}"
+  loop_control:
+    label: "{{ item.0.name }}"
+  when: (item.0.autoscaling.machinepool_name | default('autoscale-workers')) in (item.1.stdout | default(''))
+
+- name: Create autoscaling machine pool for each cluster
+  ansible.builtin.shell: |
+    set -o pipefail
+    rosa create machinepool \
+      --cluster={{ item.name }} \
+      --name={{ item.autoscaling.machinepool_name | default('autoscale-workers') }} \
+      --instance-type={{ item.instance_type }} \
+      --enable-autoscaling \
+      --min-replicas={{ item.autoscaling.min_replicas }} \
+      --max-replicas={{ item.autoscaling.max_replicas }} \
+      --autorepair 2>&1
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ clusters_needing_machinepool | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: machinepool_results
+  no_log: true
+
+- name: Report machinepool creation results
+  ansible.builtin.debug:
+    msg: "MachinePool created for {{ item.item.name }}: {{ item.stdout_lines | default(['OK']) | last }}"
+  loop: "{{ machinepool_results.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name | default('n/a') }}"
+  when: item is not skipped

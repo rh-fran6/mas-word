@@ -1,0 +1,111 @@
+---
+# acm_hub: Install ACM operator and deploy MultiClusterHub on the hub cluster.
+# Idempotent: checks for existing MultiClusterHub before acting.
+# Should only run against the hub cluster (purpose == 'hub').
+
+- name: ACM Hub — Install and configure
+  block:
+    - name: Check if MultiClusterHub already exists
+      kubernetes.core.k8s_info:
+        api_version: operator.open-cluster-management.io/v1
+        kind: MultiClusterHub
+        namespace: "{{ masworld_acm_namespace }}"
+      register: _acm_mch_existing
+      ignore_errors: true
+
+    - name: Install ACM operator
+      when: _acm_mch_existing.resources | default([]) | length == 0
+      block:
+        - name: Create open-cluster-management namespace
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: "{{ masworld_acm_namespace }}"
+
+        - name: Create OperatorGroup for ACM
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: operators.coreos.com/v1
+              kind: OperatorGroup
+              metadata:
+                name: open-cluster-management
+                namespace: "{{ masworld_acm_namespace }}"
+              spec:
+                targetNamespaces:
+                  - "{{ masworld_acm_namespace }}"
+
+        - name: Create ACM operator Subscription
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: operators.coreos.com/v1alpha1
+              kind: Subscription
+              metadata:
+                name: advanced-cluster-management
+                namespace: "{{ masworld_acm_namespace }}"
+              spec:
+                channel: "{{ masworld_acm_operator_channel }}"
+                installPlanApproval: Automatic
+                name: advanced-cluster-management
+                source: "{{ masworld_acm_operator_source }}"
+                sourceNamespace: "{{ masworld_acm_operator_source_namespace }}"
+
+        - name: Wait for ACM operator deployment
+          kubernetes.core.k8s_info:
+            api_version: apps/v1
+            kind: Deployment
+            namespace: "{{ masworld_acm_namespace }}"
+            label_selectors:
+              - "app=multiclusterhub-operator"
+          register: _acm_operator_deploy
+          until:
+            - _acm_operator_deploy.resources | length > 0
+            - _acm_operator_deploy.resources[0].status.availableReplicas | default(0) | int > 0
+          retries: 60
+          delay: 15
+
+    - name: Create MultiClusterHub
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: operator.open-cluster-management.io/v1
+          kind: MultiClusterHub
+          metadata:
+            name: multiclusterhub
+            namespace: "{{ masworld_acm_namespace }}"
+          spec:
+            availabilityConfig: High
+
+    - name: Wait for MultiClusterHub to be Running
+      kubernetes.core.k8s_info:
+        api_version: operator.open-cluster-management.io/v1
+        kind: MultiClusterHub
+        name: multiclusterhub
+        namespace: "{{ masworld_acm_namespace }}"
+      register: _acm_mch_status
+      until:
+        - _acm_mch_status.resources | length > 0
+        - _acm_mch_status.resources[0].status.phase | default('') == 'Running'
+      retries: "{{ masworld_acm_hub_ready_retries }}"
+      delay: "{{ masworld_acm_hub_ready_delay }}"
+
+    - name: Set ACM hub ready fact
+      ansible.builtin.set_fact:
+        acm_hub_ready: true
+
+    - name: Report ACM hub success
+      ansible.builtin.debug:
+        msg: "ACM MultiClusterHub is Running in {{ masworld_acm_namespace }}"
+
+  rescue:
+    - name: Set ACM hub failure fact
+      ansible.builtin.set_fact:
+        acm_hub_ready: false
+
+    - name: Report ACM hub failure
+      ansible.builtin.debug:
+        msg: "ACM Hub installation failed: {{ ansible_failed_result.msg | default('unknown error') }}"

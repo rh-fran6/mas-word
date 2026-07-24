@@ -1,0 +1,19 @@
+---
+- name: Validate deployment scenario
+  ansible.builtin.assert:
+    that:
+      - deployment_scenario is defined
+      - deployment_scenario in scenario_valid_scenarios
+    fail_msg: >
+      Invalid deployment_scenario '{{ deployment_scenario | default("undefined") }}'.
+      Must be one of: {{ scenario_valid_scenarios | join(', ') }}
+
+- name: Display deployment scenario
+  ansible.builtin.debug:
+    msg: |
+      ╔══════════════════════════════════════════════════════════════╗
+      ║  Deployment Scenario: {{ deployment_scenario | upper | center(36) }}  ║
+      ╚══════════════════════════════════════════════════════════════╝
+
+- name: Run scenario-specific preflight checks
+  ansible.builtin.include_tasks: "{{ deployment_scenario }}.yml"

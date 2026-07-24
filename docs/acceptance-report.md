@@ -25,7 +25,7 @@ project specification:
 | 3 | Failed run can resume | SCAFFOLDED | Stage-tracking model defined in `config/` schema; resume logic scaffolded in orchestrator but untested |
 | 4 | Configuration-driven cluster count | IMPLEMENTED_AND_TESTED | Fleet size read from `config/environments/*.yaml`; unit tests confirm 1, 5, and 50 cluster configs parse correctly |
 | 5 | Changing 50 to 5 requires config only | IMPLEMENTED_AND_TESTED | `attendee_cluster_count` in environment YAML; no code changes required; unit tests validate |
-| 6 | Adding/removing cluster requires inventory only | IMPLEMENTED_AND_TESTED | `config/clusters.yaml` is the sole cluster source; inventory parser unit-tested |
+| 6 | Adding/removing cluster requires inventory only | IMPLEMENTED_AND_TESTED | `secrets/cluster-credentials.yml` is the sole cluster source; inventory parser unit-tested |
 | 7 | Distinct admin credentials per cluster | IMPLEMENTED_AND_TESTED | Each cluster entry carries its own `admin_secret_ref`; schema enforces uniqueness; unit tests pass |
 | 8 | Admin credentials retrieved at runtime only | IMPLEMENTED_NOT_TESTED | Secret-provider abstraction resolves `secret://` URIs at runtime; not tested against a live secret store |
 | 9 | Student usernames from configurable templates | IMPLEMENTED_AND_TESTED | `username_template` in credential profiles; Jinja2 rendering tested with multiple seat numbers |

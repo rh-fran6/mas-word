@@ -1,0 +1,8 @@
+---
+masworld_efs_storageclass_name: efs
+masworld_efs_csi_operator_channel: stable
+masworld_efs_csi_operator_source: redhat-operators
+masworld_efs_csi_operator_source_namespace: openshift-marketplace
+masworld_efs_csi_driver_ready_retries: 30
+masworld_efs_csi_driver_ready_delay: 10
+masworld_efs_directory_perms: "700"

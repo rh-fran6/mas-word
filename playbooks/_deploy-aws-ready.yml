@@ -1,0 +1,104 @@
+---
+# Scenario 2: AWS Ready — AWS infra exists, provision ROSA + app
+# Called by deploy.yml after scenario_preflight passes
+
+- name: "=== AWS-READY Step 1/4: Verify AWS Infrastructure ==="
+  ansible.builtin.debug:
+    msg: "Confirming existing AWS infrastructure for {{ cluster_definitions | length }} accounts..."
+
+- name: Verify AWS infrastructure
+  ansible.builtin.include_role:
+    name: aws_infra
+  vars:
+    infra_action: verify
+
+- name: "=== AWS-READY Step 2/4: ROSA Account Enrollment & Cluster Provisioning ==="
+  ansible.builtin.debug:
+    msg: "Initializing ROSA accounts and provisioning clusters..."
+
+- name: Setup ROSA accounts
+  ansible.builtin.include_role:
+    name: rosa_account_setup
+
+- name: Create clusters
+  ansible.builtin.include_role:
+    name: rosa_cluster
+  vars:
+    rosa_action: create
+
+- name: Wait for clusters to be ready
+  ansible.builtin.include_role:
+    name: rosa_cluster
+  vars:
+    rosa_action: wait_ready
+
+- name: Create cluster admin users
+  ansible.builtin.include_role:
+    name: rosa_cluster
+  vars:
+    rosa_action: create_admin
+
+- name: Save cluster credentials
+  ansible.builtin.include_role:
+    name: rosa_cluster
+  vars:
+    rosa_action: save_credentials
+
+- name: "=== AWS-READY Step 3/4: Configure Cluster Autoscaler ==="
+  ansible.builtin.debug:
+    msg: "Creating autoscaling machine pools..."
+
+- name: Create topology-defined machine pools
+  ansible.builtin.include_role:
+    name: rosa_cluster
+  vars:
+    rosa_action: machinepool
+
+- name: Create workshop machine pools
+  ansible.builtin.include_role:
+    name: rosa_cluster
+  vars:
+    rosa_action: workshop_machinepool
+  when: workshop_machinepool_instance_type is defined
+
+- name: Verify all clusters
+  ansible.builtin.include_role:
+    name: rosa_cluster
+  vars:
+    rosa_action: verify
+
+- name: "=== AWS-READY Step 4/4: Deploy Demo Application ==="
+  ansible.builtin.debug:
+    msg: "Preparing fleet for workshop..."
+
+- name: Reload cluster credentials after provisioning
+  ansible.builtin.include_vars:
+    file: "../secrets/cluster-credentials.yml"
+  no_log: true
+
+- name: Build enabled cluster list for Phase 2
+  ansible.builtin.set_fact:
+    masworld_enabled_clusters: "{{ cluster_credentials | to_cluster_list }}"
+  no_log: true
+
+- name: Prepare each cluster
+  ansible.builtin.include_tasks: _prepare-single-cluster.yml
+  loop: "{{ masworld_enabled_clusters }}"
+  loop_control:
+    loop_var: cluster
+    label: "{{ cluster.id }}"
+
+- name: Validate each cluster
+  ansible.builtin.include_tasks: _validate-single-cluster.yml
+  loop: "{{ masworld_enabled_clusters }}"
+  loop_control:
+    loop_var: cluster
+    label: "{{ cluster.id }}"
+
+- name: "AWS-READY deployment complete"
+  ansible.builtin.debug:
+    msg: |
+      ══════════════════════════════════════════════════════════════
+        AWS-READY DEPLOYMENT COMPLETE
+        {{ cluster_definitions | length }} clusters provisioned and prepared
+      ══════════════════════════════════════════════════════════════

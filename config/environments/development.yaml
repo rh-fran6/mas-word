@@ -1,0 +1,23 @@
+---
+fleet:
+  attendee_cluster_count: 1
+  spare_cluster_count: 0
+  facilitator_cluster_count: 1
+  require_exact_cluster_counts: false
+  preparation:
+    max_concurrent_clusters: 1
+
+student_credentials:
+  allow_shared_password: true
+
+secrets:
+  provider: file
+
+logging_config:
+  log_level: debug
+
+# Relaxed preflight thresholds for development clusters
+preflight:
+  min_workers: 2
+  min_cpu: 4
+  min_memory_gi: 16

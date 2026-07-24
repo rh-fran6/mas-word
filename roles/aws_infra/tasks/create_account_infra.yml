@@ -1,0 +1,588 @@
+---
+# Creates all AWS networking infrastructure for a single account.
+# Uses 'cluster_item' as the loop variable (set by create.yml outer loop).
+
+- name: "{{ cluster_item.name }} | Get available availability zones"
+  ansible.builtin.shell: |
+    set -o pipefail
+    aws ec2 describe-availability-zones \
+      --filters "Name=state,Values=available" "Name=zone-type,Values=availability-zone" \
+      --region {{ cluster_item.aws_region }} \
+      --query 'AvailabilityZones[].ZoneName' \
+      --output json
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  register: az_result
+  changed_when: false
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Set AZ list"
+  ansible.builtin.set_fact:
+    account_azs: "{{ az_result.stdout | from_json }}"
+
+# --- VPC ---
+
+- name: "{{ cluster_item.name }} | Check for existing VPC"
+  ansible.builtin.shell: |
+    set -o pipefail
+    aws ec2 describe-vpcs \
+      --filters "Name=tag:Cluster,Values={{ cluster_item.name }}" \
+                "Name=tag:Project,Values={{ aws_infra_tags.Project }}" \
+      --query 'Vpcs[0].VpcId' --output text
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  register: existing_vpc
+  changed_when: false
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Create VPC"
+  ansible.builtin.shell: |
+    set -o pipefail
+    aws ec2 create-vpc \
+      --cidr-block {{ aws_vpc_cidr }} \
+      --query 'Vpc.VpcId' --output text
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  register: new_vpc
+  when: existing_vpc.stdout in ['None', '']
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Set VPC ID"
+  ansible.builtin.set_fact:
+    vpc_id: "{{ existing_vpc.stdout if existing_vpc.stdout not in ['None', ''] else new_vpc.stdout | trim }}"
+
+- name: "{{ cluster_item.name }} | Enable DNS hostnames on VPC"
+  ansible.builtin.shell: |
+    aws ec2 modify-vpc-attribute --vpc-id {{ vpc_id }} --enable-dns-hostnames '{"Value": true}'
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  changed_when: true
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Enable DNS support on VPC"
+  ansible.builtin.shell: |
+    aws ec2 modify-vpc-attribute --vpc-id {{ vpc_id }} --enable-dns-support '{"Value": true}'
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  changed_when: true
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Tag VPC"
+  ansible.builtin.shell: |
+    aws ec2 create-tags --resources {{ vpc_id }} --tags \
+      Key=Name,Value=rosa-{{ cluster_item.name }}-vpc \
+      Key=Project,Value={{ aws_infra_tags.Project }} \
+      Key=ManagedBy,Value={{ aws_infra_tags.ManagedBy }} \
+      Key=Cluster,Value={{ cluster_item.name }}
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  changed_when: true
+  no_log: true
+
+# --- Internet Gateway ---
+
+- name: "{{ cluster_item.name }} | Check for existing Internet Gateway"
+  ansible.builtin.shell: |
+    set -o pipefail
+    aws ec2 describe-internet-gateways \
+      --filters "Name=attachment.vpc-id,Values={{ vpc_id }}" \
+      --query 'InternetGateways[0].InternetGatewayId' --output text
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  register: existing_igw
+  changed_when: false
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Create Internet Gateway"
+  ansible.builtin.shell: |
+    set -o pipefail
+    aws ec2 create-internet-gateway \
+      --query 'InternetGateway.InternetGatewayId' --output text
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  register: new_igw
+  when: existing_igw.stdout in ['None', '']
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Set IGW ID"
+  ansible.builtin.set_fact:
+    igw_id: "{{ existing_igw.stdout if existing_igw.stdout not in ['None', ''] else new_igw.stdout | trim }}"
+
+- name: "{{ cluster_item.name }} | Attach Internet Gateway to VPC"
+  ansible.builtin.shell: |
+    aws ec2 attach-internet-gateway --internet-gateway-id {{ igw_id }} --vpc-id {{ vpc_id }}
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  when: existing_igw.stdout in ['None', '']
+  failed_when: false
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Tag Internet Gateway"
+  ansible.builtin.shell: |
+    aws ec2 create-tags --resources {{ igw_id }} --tags \
+      Key=Name,Value=rosa-{{ cluster_item.name }}-igw \
+      Key=Project,Value={{ aws_infra_tags.Project }} \
+      Key=ManagedBy,Value={{ aws_infra_tags.ManagedBy }} \
+      Key=Cluster,Value={{ cluster_item.name }}
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  changed_when: true
+  no_log: true
+
+# --- Public Subnets ---
+
+- name: "{{ cluster_item.name }} | Create public subnets"
+  ansible.builtin.shell: |
+    set -o pipefail
+    EXISTING=$(aws ec2 describe-subnets \
+      --filters "Name=vpc-id,Values={{ vpc_id }}" \
+                "Name=cidr-block,Values={{ item.cidr }}" \
+      --query 'Subnets[0].SubnetId' --output text)
+    if [ "$EXISTING" != "None" ] && [ -n "$EXISTING" ]; then
+      echo "$EXISTING"
+      exit 0
+    fi
+    aws ec2 create-subnet \
+      --vpc-id {{ vpc_id }} \
+      --cidr-block {{ item.cidr }} \
+      --availability-zone {{ account_azs[item.az_index] }} \
+      --query 'Subnet.SubnetId' --output text
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  loop: "{{ aws_public_subnets }}"
+  loop_control:
+    label: "{{ item.cidr }}"
+  register: public_subnet_results
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Set public subnet IDs"
+  ansible.builtin.set_fact:
+    public_subnet_ids: "{{ public_subnet_results.results | map(attribute='stdout') | map('trim') | list }}"
+
+- name: "{{ cluster_item.name }} | Tag public subnets"
+  ansible.builtin.shell: |
+    aws ec2 create-tags --resources {{ item.stdout | trim }} --tags \
+      Key=Name,Value=rosa-{{ cluster_item.name }}-public-{{ account_azs[item.item.az_index] }} \
+      Key=Project,Value={{ aws_infra_tags.Project }} \
+      Key=ManagedBy,Value={{ aws_infra_tags.ManagedBy }} \
+      Key=Cluster,Value={{ cluster_item.name }} \
+      Key=Tier,Value=public
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  loop: "{{ public_subnet_results.results }}"
+  loop_control:
+    label: "{{ item.item.cidr }}"
+  changed_when: true
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Enable auto-assign public IP on public subnets"
+  ansible.builtin.shell: |
+    aws ec2 modify-subnet-attribute \
+      --subnet-id {{ item }} \
+      --map-public-ip-on-launch
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  loop: "{{ public_subnet_ids }}"
+  loop_control:
+    label: "{{ item }}"
+  changed_when: true
+  no_log: true
+
+# --- Private Subnets ---
+
+- name: "{{ cluster_item.name }} | Create private subnets"
+  ansible.builtin.shell: |
+    set -o pipefail
+    EXISTING=$(aws ec2 describe-subnets \
+      --filters "Name=vpc-id,Values={{ vpc_id }}" \
+                "Name=cidr-block,Values={{ item.cidr }}" \
+      --query 'Subnets[0].SubnetId' --output text)
+    if [ "$EXISTING" != "None" ] && [ -n "$EXISTING" ]; then
+      echo "$EXISTING"
+      exit 0
+    fi
+    aws ec2 create-subnet \
+      --vpc-id {{ vpc_id }} \
+      --cidr-block {{ item.cidr }} \
+      --availability-zone {{ account_azs[item.az_index] }} \
+      --query 'Subnet.SubnetId' --output text
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  loop: "{{ aws_private_subnets }}"
+  loop_control:
+    label: "{{ item.cidr }}"
+  register: private_subnet_results
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Set private subnet IDs"
+  ansible.builtin.set_fact:
+    private_subnet_ids: "{{ private_subnet_results.results | map(attribute='stdout') | map('trim') | list }}"
+
+- name: "{{ cluster_item.name }} | Tag private subnets"
+  ansible.builtin.shell: |
+    aws ec2 create-tags --resources {{ item.stdout | trim }} --tags \
+      Key=Name,Value=rosa-{{ cluster_item.name }}-private-{{ account_azs[item.item.az_index] }} \
+      Key=Project,Value={{ aws_infra_tags.Project }} \
+      Key=ManagedBy,Value={{ aws_infra_tags.ManagedBy }} \
+      Key=Cluster,Value={{ cluster_item.name }} \
+      Key=Tier,Value=private
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  loop: "{{ private_subnet_results.results }}"
+  loop_control:
+    label: "{{ item.item.cidr }}"
+  changed_when: true
+  no_log: true
+
+# --- Elastic IP ---
+
+- name: "{{ cluster_item.name }} | Check for existing Elastic IP"
+  ansible.builtin.shell: |
+    set -o pipefail
+    aws ec2 describe-addresses \
+      --filters "Name=tag:Cluster,Values={{ cluster_item.name }}" \
+                "Name=tag:Project,Values={{ aws_infra_tags.Project }}" \
+      --query 'Addresses[0].AllocationId' --output text
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  register: existing_eip
+  changed_when: false
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Allocate Elastic IP"
+  ansible.builtin.shell: |
+    set -o pipefail
+    aws ec2 allocate-address --domain vpc \
+      --query 'AllocationId' --output text
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  register: new_eip
+  when: existing_eip.stdout in ['None', '']
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Set EIP allocation ID"
+  ansible.builtin.set_fact:
+    eip_alloc_id: "{{ existing_eip.stdout if existing_eip.stdout not in ['None', ''] else new_eip.stdout | trim }}"
+
+- name: "{{ cluster_item.name }} | Tag Elastic IP"
+  ansible.builtin.shell: |
+    aws ec2 create-tags --resources {{ eip_alloc_id }} --tags \
+      Key=Name,Value=rosa-{{ cluster_item.name }}-eip \
+      Key=Project,Value={{ aws_infra_tags.Project }} \
+      Key=ManagedBy,Value={{ aws_infra_tags.ManagedBy }} \
+      Key=Cluster,Value={{ cluster_item.name }}
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  changed_when: true
+  no_log: true
+
+# --- NAT Gateway ---
+
+- name: "{{ cluster_item.name }} | Check for existing NAT Gateway"
+  ansible.builtin.shell: |
+    set -o pipefail
+    aws ec2 describe-nat-gateways \
+      --filter "Name=vpc-id,Values={{ vpc_id }}" \
+               "Name=state,Values=available,pending" \
+      --query 'NatGateways[0].NatGatewayId' --output text
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  register: existing_nat
+  changed_when: false
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Create NAT Gateway"
+  ansible.builtin.shell: |
+    set -o pipefail
+    aws ec2 create-nat-gateway \
+      --subnet-id {{ public_subnet_ids[0] }} \
+      --allocation-id {{ eip_alloc_id }} \
+      --query 'NatGateway.NatGatewayId' --output text
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  register: new_nat
+  when: existing_nat.stdout in ['None', '']
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Set NAT Gateway ID"
+  ansible.builtin.set_fact:
+    nat_gw_id: "{{ existing_nat.stdout if existing_nat.stdout not in ['None', ''] else new_nat.stdout | trim }}"
+
+- name: "{{ cluster_item.name }} | Tag NAT Gateway"
+  ansible.builtin.shell: |
+    aws ec2 create-tags --resources {{ nat_gw_id }} --tags \
+      Key=Name,Value=rosa-{{ cluster_item.name }}-nat \
+      Key=Project,Value={{ aws_infra_tags.Project }} \
+      Key=ManagedBy,Value={{ aws_infra_tags.ManagedBy }} \
+      Key=Cluster,Value={{ cluster_item.name }}
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  changed_when: true
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Wait for NAT Gateway to become available"
+  ansible.builtin.shell: |
+    set -o pipefail
+    aws ec2 describe-nat-gateways \
+      --nat-gateway-ids {{ nat_gw_id }} \
+      --query 'NatGateways[0].State' --output text
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  register: nat_state
+  until: nat_state.stdout | trim == 'available'
+  retries: "{{ aws_nat_gateway_retries }}"
+  delay: "{{ aws_nat_gateway_delay }}"
+  changed_when: false
+  no_log: true
+
+# --- Public Route Table ---
+
+- name: "{{ cluster_item.name }} | Check for existing public route table"
+  ansible.builtin.shell: |
+    set -o pipefail
+    aws ec2 describe-route-tables \
+      --filters "Name=tag:Name,Values=rosa-{{ cluster_item.name }}-public-rt" \
+                "Name=vpc-id,Values={{ vpc_id }}" \
+      --query 'RouteTables[0].RouteTableId' --output text
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  register: existing_public_rt
+  changed_when: false
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Create public route table"
+  ansible.builtin.shell: |
+    set -o pipefail
+    aws ec2 create-route-table --vpc-id {{ vpc_id }} \
+      --query 'RouteTable.RouteTableId' --output text
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  register: new_public_rt
+  when: existing_public_rt.stdout in ['None', '']
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Set public route table ID"
+  ansible.builtin.set_fact:
+    public_rt_id: "{{ existing_public_rt.stdout if existing_public_rt.stdout not in ['None', ''] else new_public_rt.stdout | trim }}"
+
+- name: "{{ cluster_item.name }} | Tag public route table"
+  ansible.builtin.shell: |
+    aws ec2 create-tags --resources {{ public_rt_id }} --tags \
+      Key=Name,Value=rosa-{{ cluster_item.name }}-public-rt \
+      Key=Project,Value={{ aws_infra_tags.Project }} \
+      Key=ManagedBy,Value={{ aws_infra_tags.ManagedBy }} \
+      Key=Cluster,Value={{ cluster_item.name }}
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  changed_when: true
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Add IGW route to public route table"
+  ansible.builtin.shell: |
+    aws ec2 create-route \
+      --route-table-id {{ public_rt_id }} \
+      --destination-cidr-block 0.0.0.0/0 \
+      --gateway-id {{ igw_id }}
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  failed_when: false
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Associate public subnets with public route table"
+  ansible.builtin.shell: |
+    aws ec2 associate-route-table \
+      --route-table-id {{ public_rt_id }} \
+      --subnet-id {{ item }}
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  loop: "{{ public_subnet_ids }}"
+  loop_control:
+    label: "{{ item }}"
+  failed_when: false
+  no_log: true
+
+# --- Private Route Table ---
+
+- name: "{{ cluster_item.name }} | Check for existing private route table"
+  ansible.builtin.shell: |
+    set -o pipefail
+    aws ec2 describe-route-tables \
+      --filters "Name=tag:Name,Values=rosa-{{ cluster_item.name }}-private-rt" \
+                "Name=vpc-id,Values={{ vpc_id }}" \
+      --query 'RouteTables[0].RouteTableId' --output text
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  register: existing_private_rt
+  changed_when: false
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Create private route table"
+  ansible.builtin.shell: |
+    set -o pipefail
+    aws ec2 create-route-table --vpc-id {{ vpc_id }} \
+      --query 'RouteTable.RouteTableId' --output text
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  register: new_private_rt
+  when: existing_private_rt.stdout in ['None', '']
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Set private route table ID"
+  ansible.builtin.set_fact:
+    private_rt_id: "{{ existing_private_rt.stdout if existing_private_rt.stdout not in ['None', ''] else new_private_rt.stdout | trim }}"
+
+- name: "{{ cluster_item.name }} | Tag private route table"
+  ansible.builtin.shell: |
+    aws ec2 create-tags --resources {{ private_rt_id }} --tags \
+      Key=Name,Value=rosa-{{ cluster_item.name }}-private-rt \
+      Key=Project,Value={{ aws_infra_tags.Project }} \
+      Key=ManagedBy,Value={{ aws_infra_tags.ManagedBy }} \
+      Key=Cluster,Value={{ cluster_item.name }}
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  changed_when: true
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Add NAT route to private route table"
+  ansible.builtin.shell: |
+    aws ec2 create-route \
+      --route-table-id {{ private_rt_id }} \
+      --destination-cidr-block 0.0.0.0/0 \
+      --nat-gateway-id {{ nat_gw_id }}
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  failed_when: false
+  no_log: true
+
+- name: "{{ cluster_item.name }} | Associate private subnets with private route table"
+  ansible.builtin.shell: |
+    aws ec2 associate-route-table \
+      --route-table-id {{ private_rt_id }} \
+      --subnet-id {{ item }}
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_item.aws_region }}"
+  loop: "{{ private_subnet_ids }}"
+  loop_control:
+    label: "{{ item }}"
+  failed_when: false
+  no_log: true
+
+# --- Register state ---
+
+- name: "{{ cluster_item.name }} | Register infrastructure state"
+  ansible.builtin.set_fact:
+    infra_state_collector: >-
+      {{ infra_state_collector | combine({
+        cluster_item.name: {
+          'vpc_id': vpc_id,
+          'igw_id': igw_id,
+          'nat_gateway_id': nat_gw_id,
+          'eip_allocation_id': eip_alloc_id,
+          'public_subnet_ids': public_subnet_ids | join(','),
+          'private_subnet_ids': private_subnet_ids | join(','),
+          'public_route_table_id': public_rt_id,
+          'private_route_table_id': private_rt_id,
+        }
+      }) }}
+
+- name: "{{ cluster_item.name }} | Infrastructure created successfully"
+  ansible.builtin.debug:
+    msg: >-
+      VPC={{ vpc_id }}, IGW={{ igw_id }}, NAT={{ nat_gw_id }},
+      Private subnets={{ private_subnet_ids | join(',') }}

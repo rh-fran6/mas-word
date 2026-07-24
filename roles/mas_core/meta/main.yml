@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  author: MAS World 2026
+  description: MAS World workshop automation role
+  license: Apache-2.0
+  min_ansible_version: "2.14"
+  platforms:
+    - name: GenericUNIX
+      versions:
+        - all
+
+dependencies: []

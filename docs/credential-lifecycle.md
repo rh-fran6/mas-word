@@ -1,6 +1,6 @@
 # Credential Lifecycle Design — MAS World 2026
 
-**Status**: DRAFT — Phase 0  
+**Status**: DRAFT — Phase 0
 **Date**: 2026-07-19
 
 ---
@@ -13,7 +13,7 @@
 |-----------|-------|----------|---------|
 | Cluster kubeconfig | Per cluster | Provisioning → teardown | Secret provider |
 | Cluster-admin token | Per cluster | Generated per operation | In-memory only |
-| ACM hub kubeconfig | Hub cluster | Provisioning → teardown | Secret provider |
+| ACM hub admin password | Hub cluster (optional) | Provisioning → teardown | Secret provider |
 | AWS IAM credentials | Per account/role | Rotation schedule | Secret provider |
 | IBM Entitlement Key | Global | IBM-managed | Secret provider |
 | MAS License | Global | IBM-managed | Secret provider |
@@ -93,8 +93,8 @@ Examples:
 secret://mas-world/clusters/seat-01/admin-kubeconfig
 secret://mas-world/students/seat-01/password
 secret://mas-world/ibm/entitlement-key
-secret://mas-world/aws/s3/seat-01/access-key
-secret://mas-world/aws/s3/seat-01/secret-key
+secret://mas-world/clusters/seat-01/AWS_ACCESS_KEY_ID
+secret://mas-world/clusters/seat-01/AWS_ACCESS_KEY_SECRET
 secret://mas-world/facilitators/facilitator1/password
 ```
 
@@ -110,7 +110,7 @@ secret://mas-world/facilitators/facilitator1/password
 Provider is selected via configuration:
 ```yaml
 secrets:
-  provider: env  # env | k8s | aws-sm | vault
+  provider: env  # env | file | k8s | aws-sm | vault
   config:
     # Provider-specific options
     aws_region: us-east-2

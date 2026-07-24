@@ -1,0 +1,117 @@
+---
+event:
+  id: mas-world-2026
+  name: "MAS World 2026"
+  date: "2026-08-17"
+  timezone: America/Chicago
+
+fleet:
+  attendee_cluster_count: 1
+  spare_cluster_count: 0
+  facilitator_cluster_count: 1
+  require_exact_cluster_counts: false
+  preparation:
+    max_concurrent_clusters: 1
+    per_cluster_timeout_minutes: 240
+    retry_count: 3
+    retry_backoff_base_seconds: 30
+  assignment:
+    first_seat_number: 1
+    seat_number_padding: 2
+    automatically_assign_spares: false
+
+components:
+  mas:
+    enabled: true
+    version: "9.1.x"
+    channel: "9.1.x"
+    install_core: true
+    install_manage: true
+    catalog_source: ibm-operator-catalog
+  logging:
+    enabled: true
+    collector: vector
+    collect_application: true
+    collect_infrastructure: true
+    collect_audit: true
+  loki:
+    enabled: true
+    object_storage_mode: bucket-per-cluster
+    size: "1x.extra-small"
+    retention_days: 7
+  keycloak:
+    enabled: true
+    deployment_mode: per-cluster
+    realm_name: mas-world
+  mas_edge:
+    enabled: false
+  showroom:
+    enabled: true
+  acm_registration:
+    enabled: false
+    hub_cluster_id: ""
+
+secrets:
+  provider: file
+  config:
+    secrets_dir: secrets
+
+student_credentials:
+  allow_shared_password: false
+  default_profile: attendee-default
+
+student_credential_profiles:
+  attendee-default:
+    username_template: "user{{ seat_number | pad(2) }}"
+    display_name_template: "MAS World Attendee {{ seat_number }}"
+    authentication_provider: htpasswd
+    password:
+      mode: generated
+      length: 18
+      secret_ref_template: "secret://mas-world/students/seat-{{ seat_number | pad(2) }}"
+      rotate_before_event: true
+      expire_after_event: true
+    access:
+      cluster_role: basic-user
+      additional_cluster_roles: []
+      namespaces:
+        - name_template: "student-{{ seat_number | pad(2) }}"
+          role: admin
+    restrictions:
+      allow_cluster_admin: false
+      allow_acm_access: false
+      allow_other_student_namespaces: false
+      allow_protected_secret_read: false
+
+  facilitator:
+    username_template: "facilitator{{ index }}"
+    display_name_template: "MAS World Facilitator"
+    authentication_provider: htpasswd
+    password:
+      mode: generated
+      length: 24
+      secret_ref_template: "secret://mas-world/facilitators/{{ username }}"
+      rotate_before_event: true
+      expire_after_event: true
+    access:
+      cluster_role: cluster-admin
+      cluster_roles:
+        - cluster-admin
+      namespaces: []
+    restrictions:
+      allow_cluster_admin: true
+      allow_acm_access: true
+      allow_other_student_namespaces: true
+      allow_protected_secret_read: true
+
+aws:
+  default_region: us-east-2
+  s3_bucket_prefix: "mas-world-2026"
+  s3_encryption: AES256
+  s3_lifecycle_expiration_days: 30
+
+logging_config:
+  log_level: info
+  structured: true
+  per_cluster_log_dir: logs/clusters
+  redact_secrets: true

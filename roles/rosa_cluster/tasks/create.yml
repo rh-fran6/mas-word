@@ -1,0 +1,223 @@
+---
+- name: Include build_definitions
+  ansible.builtin.include_tasks: build_definitions.yml
+
+- name: Resolve exact ROSA version from prefix
+  ansible.builtin.shell: |
+    set -o pipefail
+    rosa list versions --channel-group={{ rosa_channel_group }} --hosted-cp -o json 2>/dev/null \
+      | python3 -c "
+    import sys, json
+    versions = json.load(sys.stdin)
+    prefix = '{{ rosa_version }}'
+    matches = [v['raw_id'] for v in versions if v['raw_id'].startswith(prefix + '.') or v['raw_id'] == prefix]
+    if matches:
+        matches.sort(key=lambda v: [int(x) for x in v.split('.')], reverse=True)
+        print(matches[0])
+    else:
+        print('NONE')
+    "
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ cluster_definitions[0].aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ cluster_definitions[0].aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ cluster_definitions[0].aws_region }}"
+  register: rosa_version_resolved
+  changed_when: false
+  no_log: true
+
+- name: Fail if no matching ROSA version found
+  ansible.builtin.fail:
+    msg: >
+      No ROSA HCP version found matching prefix '{{ rosa_version }}'
+      in channel group '{{ rosa_channel_group }}'.
+      Run 'rosa list versions --channel-group={{ rosa_channel_group }} --hosted-cp' to see available versions.
+  when: rosa_version_resolved.stdout | trim == 'NONE' or rosa_version_resolved.rc != 0
+
+- name: Set resolved ROSA version
+  ansible.builtin.set_fact:
+    rosa_version_exact: "{{ rosa_version_resolved.stdout | trim }}"
+
+- name: Display resolved ROSA version
+  ansible.builtin.debug:
+    msg: "Resolved ROSA version: {{ rosa_version }} → {{ rosa_version_exact }}"
+
+- name: Discover billing account IDs via STS
+  ansible.builtin.shell: |
+    aws sts get-caller-identity --query Account --output text 2>/dev/null
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: sts_account_ids
+  changed_when: false
+  no_log: true
+
+- name: Discover OIDC config IDs per account
+  ansible.builtin.shell: |
+    set -o pipefail
+    rosa list oidc-config -o json 2>/dev/null \
+      | python3 -c "import sys,json; configs=json.load(sys.stdin); print(configs[0]['id'] if configs else 'NONE')"
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: oidc_config_ids
+  failed_when: false
+  changed_when: false
+  no_log: true
+
+- name: Build cluster definitions with billing and OIDC
+  ansible.builtin.set_fact:
+    cluster_definitions_enriched: >-
+      {{ cluster_definitions_enriched | default([]) +
+         [item.0 | combine({
+           'billing_account': item.0.aws_account_id | default('') | ternary(item.0.aws_account_id | default(''), item.1.stdout | default('') | trim),
+           'oidc_config_id': item.2.stdout | default('NONE') | trim
+         })] }}
+  loop: "{{ cluster_definitions | zip(sts_account_ids.results, oidc_config_ids.results) | list }}"
+  loop_control:
+    label: "{{ item.0.name }}"
+  no_log: true
+
+- name: Display discovered account details
+  ansible.builtin.debug:
+    msg: "{{ item.name }}: billing=****{{ item.billing_account[-4:] | default('????') }}, oidc={{ item.oidc_config_id[:8] | default('n/a') }}..."
+  loop: "{{ cluster_definitions_enriched }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Check for existing clusters
+  ansible.builtin.shell: |
+    set -o pipefail
+    rosa describe cluster --cluster={{ item.name }} --output json 2>/dev/null \
+      | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',{}).get('state','unknown'))"
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ cluster_definitions_enriched }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: existing_cluster_check
+  failed_when: false
+  changed_when: false
+  no_log: true
+
+- name: Report existing clusters (will be skipped)
+  ansible.builtin.debug:
+    msg: "Cluster {{ item.item.name }} already exists (state: {{ item.stdout | default('unknown') | trim }}), skipping creation"
+  loop: "{{ existing_cluster_check.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: item.rc == 0
+
+- name: Build list of clusters to create
+  ansible.builtin.set_fact:
+    clusters_to_create: >-
+      {{ cluster_definitions_enriched | zip(existing_cluster_check.results)
+         | rejectattr('1.rc', 'equalto', 0)
+         | map(attribute='0') | list }}
+  no_log: true
+
+- name: Skip creation when all clusters exist
+  ansible.builtin.debug:
+    msg: "All {{ cluster_definitions_enriched | length }} clusters already exist. Nothing to create."
+  when: clusters_to_create | length == 0
+
+- name: Create ROSA HCP clusters (async)
+  ansible.builtin.shell: |
+    set -o pipefail
+    rosa create cluster \
+      --cluster-name={{ item.name }} \
+      --hosted-cp \
+      --sts \
+      --mode={{ rosa_mode }} \
+      --region={{ item.aws_region }} \
+      --version={{ rosa_version_exact }} \
+      --channel-group={{ rosa_channel_group }} \
+      --compute-machine-type={{ item.instance_type }} \
+      --replicas={{ item.initial_replicas }} \
+      --subnet-ids={{ item.subnet_ids }} \
+      --billing-account={{ item.billing_account }} \
+      --oidc-config-id={{ item.oidc_config_id }} \
+      --yes 2>&1
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ clusters_to_create }}"
+  loop_control:
+    label: "{{ item.name }}"
+  async: "{{ rosa_create_async_timeout }}"
+  poll: 0
+  register: cluster_create_jobs
+  no_log: true
+  when: clusters_to_create | length > 0
+
+- name: Display initiated cluster creation jobs
+  ansible.builtin.debug:
+    msg: "Initiated creation of {{ item.item.name }} (job_id: {{ item.ansible_job_id }})"
+  loop: "{{ cluster_create_jobs.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name | default('n/a') }}"
+  when: cluster_create_jobs.results is defined and item is not skipped
+
+- name: Wait for rosa create commands to complete
+  ansible.builtin.async_status:
+    jid: "{{ item.ansible_job_id }}"
+  loop: "{{ cluster_create_jobs.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name | default('n/a') }}"
+  register: cluster_create_results
+  until: cluster_create_results.finished
+  retries: "{{ rosa_create_async_retries }}"
+  delay: "{{ rosa_create_async_delay }}"
+  when: cluster_create_jobs.results is defined and item is not skipped
+  failed_when: false
+  no_log: true
+
+- name: Report cluster creation results
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.item.name | default('unknown') }}:
+      {% if (item.rc | default(0)) == 0 %}OK
+      {% else %}FAILED —
+      {{ item.stdout | default('') | regex_search('ERR:.*|Error:.*|error:.*') | default('', true)
+         or item.stderr | default('') | regex_search('ERR:.*|Error:.*|error:.*') | default('', true)
+         or 'check cluster logs for details' }}
+      {% endif %}
+  loop: "{{ cluster_create_results.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.item.name | default('n/a') }}"
+  when: item is not skipped
+
+- name: Fail if any cluster creation failed
+  ansible.builtin.fail:
+    msg: >
+      Cluster creation FAILED for {{ failed_clusters | join(', ') }}.
+      Re-run 'make provision' to retry (existing clusters will be skipped).
+  vars:
+    failed_clusters: >-
+      {{ cluster_create_results.results | default([])
+         | rejectattr('skipped', 'defined')
+         | selectattr('rc', 'defined')
+         | selectattr('rc', 'ne', 0)
+         | map(attribute='item.item.name')
+         | list }}
+  when: failed_clusters | length > 0

@@ -1,0 +1,125 @@
+---
+- name: Decommission MAS World 2026 workshop environment
+  hosts: "{{ target_cluster | default('localhost') }}"
+  gather_facts: false
+  vars:
+    masworld_cluster_id: "{{ cluster_id | mandatory }}"
+    masworld_cluster_purpose: "{{ cluster_purpose | default('attendee') }}"
+    masworld_decommission_confirm: "{{ confirm | default(false) | bool }}"
+    masworld_decommission_keep_mas: "{{ keep_mas | default(false) | bool }}"
+
+  pre_tasks:
+    - name: Require explicit confirmation
+      ansible.builtin.fail:
+        msg: >-
+          Decommission requires explicit confirmation.
+          Run with -e confirm=true to proceed.
+          This will remove workshop resources from {{ masworld_cluster_id }}.
+      when: not masworld_decommission_confirm
+
+    - name: Display decommission plan
+      ansible.builtin.debug:
+        msg: >-
+          Decommissioning {{ masworld_cluster_id }} (purpose: {{ masworld_cluster_purpose }}).
+          Keep MAS: {{ masworld_decommission_keep_mas }}.
+          {{ 'Hub cluster — only ACM and event metadata will be removed.' if masworld_cluster_purpose == 'hub' else '' }}
+
+  tasks:
+    - name: Remove Showroom
+      kubernetes.core.k8s:
+        state: absent
+        kind: Namespace
+        name: showroom
+      ignore_errors: true
+      when: masworld_cluster_purpose != 'hub'
+
+    - name: Remove exercise workloads
+      kubernetes.core.k8s:
+        state: absent
+        kind: Namespace
+        name: masworld-exercises
+      ignore_errors: true
+      when: masworld_cluster_purpose != 'hub'
+
+    - name: Remove student accounts
+      when: masworld_cluster_purpose != 'hub'
+      block:
+        - name: Remove student namespaces
+          kubernetes.core.k8s:
+            state: absent
+            kind: Namespace
+            name: "student-{{ item | pad(2) }}"
+          loop: "{{ range(1, 51) | list }}"
+          ignore_errors: true
+
+        - name: Remove htpasswd identity provider from OAuth
+          ansible.builtin.debug:
+            msg: "OAuth htpasswd provider removal requires manual verification"
+
+    - name: Remove identity demo
+      kubernetes.core.k8s:
+        state: absent
+        kind: Namespace
+        name: masworld-keycloak
+      ignore_errors: true
+      when: masworld_cluster_purpose != 'hub'
+
+    - name: Remove log forwarding
+      kubernetes.core.k8s:
+        state: absent
+        kind: ClusterLogForwarder
+        namespace: openshift-logging
+        name: masworld-log-forwarder
+        api_version: observability.openshift.io/v1
+      ignore_errors: true
+      when: masworld_cluster_purpose != 'hub'
+
+    - name: Remove LokiStack
+      kubernetes.core.k8s:
+        state: absent
+        kind: LokiStack
+        namespace: openshift-logging
+        name: masworld-loki
+        api_version: loki.grafana.com/v1
+      ignore_errors: true
+      when: masworld_cluster_purpose != 'hub'
+
+    - name: Remove event metadata
+      block:
+        - name: Remove event namespace
+          kubernetes.core.k8s:
+            state: absent
+            kind: Namespace
+            name: masworld-system
+          ignore_errors: true
+
+        - name: Remove event labels from nodes
+          ansible.builtin.debug:
+            msg: "Node label removal should be done manually to avoid disrupting workloads"
+
+    - name: Revoke S3 credentials
+      ansible.builtin.debug:
+        msg: "S3 credential revocation delegated to secret provider cleanup"
+      when: masworld_cluster_purpose != 'hub'
+
+    - name: Remove ACM registration
+      when: masworld_acm_enabled | default(false) | bool
+      block:
+        - name: Remove cluster from ManagedClusterSet
+          ansible.builtin.debug:
+            msg: "ACM deregistration requires hub cluster access"
+
+    - name: Remove MAS (if not keeping)
+      when:
+        - not masworld_decommission_keep_mas
+        - masworld_cluster_purpose != 'hub'
+      ansible.builtin.debug:
+        msg: "MAS removal should use ibm.mas_devops.suite_uninstall if available"
+
+  post_tasks:
+    - name: Display decommission summary
+      ansible.builtin.debug:
+        msg: >-
+          Decommission of {{ masworld_cluster_id }} ({{ masworld_cluster_purpose }}) complete.
+          {{ 'Hub cluster — only event metadata and ACM removed.' if masworld_cluster_purpose == 'hub'
+             else 'Manual steps remaining: S3 bucket cleanup, ACM deregistration, DNS cleanup.' }}

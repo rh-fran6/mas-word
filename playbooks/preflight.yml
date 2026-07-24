@@ -1,0 +1,12 @@
+---
+- name: Run ROSA HCP Preflight Checks
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../secrets/rosa-token.yml
+    - ../secrets/cluster-credentials.yml
+
+  roles:
+    - role: rosa_preflight

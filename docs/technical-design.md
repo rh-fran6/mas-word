@@ -85,7 +85,7 @@ graph TB
     DEFAULTS["defaults.yaml<br/>(base values)"]
     ENV["environments/development.yaml<br/>environments/rehearsal.yaml<br/>environments/event.yaml"]
     EVENT["event.yaml<br/>(event-specific)"]
-    CLUSTER["clusters.yaml<br/>(per-cluster overrides)"]
+    CLUSTER["cluster-credentials.yml<br/>(per-cluster identity)"]
     CMDLINE["Command-line flags<br/>(--option value)"]
 
     DEFAULTS --> ENV
@@ -101,7 +101,7 @@ graph TB
 | 1 - Defaults | `config/defaults.yaml` | Base values for all settings |
 | 2 - Environment | `config/environments/{env}.yaml` | Fleet size, concurrency, feature flags |
 | 3 - Event | `config/event.yaml` | Event-specific metadata, date, timezone |
-| 4 - Cluster | `config/clusters.yaml` | Per-cluster connection, endpoints, overrides |
+| 4 - Cluster | `secrets/cluster-credentials.yml` | Per-cluster identity and credentials |
 | 5 - CLI | `--option value` | Runtime overrides for specific invocations |
 
 **Deep merge strategy**: Dictionaries are recursively merged (lower layer keys
@@ -127,7 +127,7 @@ The configuration model is defined in `cli/config/schema.py` using Pydantic v2
 | `LoggingComponentConfig` | Logging settings | collector, collect_application/infrastructure/audit |
 | `LokiComponentConfig` | Loki settings | object_storage_mode, size, retention_days |
 | `StudentCredentialProfile` | Account template | username_template, password config, access, restrictions |
-| `SecretProviderConfig` | Secret backend | provider type (env, k8s, aws-sm, vault), backend config |
+| `SecretProviderConfig` | Secret backend | provider type (env, file, k8s, aws-sm, vault), backend config |
 | `AWSConfig` | AWS settings | region, s3_bucket_prefix, encryption, lifecycle |
 
 **Cross-field validation** is enforced at the `MASWorldConfig` level:
@@ -188,8 +188,8 @@ Secret references use the URI scheme `secret://namespace/path`:
 ```text
 secret://mas-world/clusters/seat-01/admin-kubeconfig
 secret://mas-world/students/seat-01
-secret://mas-world/ibm/entitlement
-secret://mas-world/aws/s3/seat-01
+secret://mas-world/ibm/entitlement-key
+secret://mas-world/clusters/seat-01/AWS_ACCESS_KEY_ID
 ```
 
 ### 4.2 Secret Resolution Flow
@@ -420,7 +420,7 @@ Every command that requires configuration follows this sequence:
 2. Load `defaults.yaml`.
 3. Load `environments/{env}.yaml` based on `--env`.
 4. Load `event.yaml`.
-5. Load `clusters.yaml`.
+5. Load cluster inventory from `secrets/cluster-credentials.yml`.
 6. Deep-merge all layers.
 7. Apply command-line overrides.
 8. Validate through `MASWorldConfig`.
@@ -735,7 +735,7 @@ graph LR
         DEFAULTS["defaults.yaml"]
         ENVCONF["environment.yaml"]
         EVENT["event.yaml"]
-        CLUSTERS["clusters.yaml"]
+        CLUSTERS["cluster-credentials.yml"]
     end
 
     subgraph "CLI Layer"
@@ -844,7 +844,7 @@ sequenceDiagram
 ## Appendix A. Directory Structure Reference
 
 ```text
-mas-world-2026-automation/
+
   ansible.cfg
   galaxy.yml
   requirements.yml
@@ -853,7 +853,6 @@ mas-world-2026-automation/
   config/
     defaults.yaml
     event.yaml
-    clusters.yaml
     credentials.yaml
     components.yaml
     aws.yaml

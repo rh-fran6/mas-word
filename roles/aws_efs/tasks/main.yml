@@ -1,0 +1,254 @@
+---
+# aws_efs: Provision EFS filesystem, security group, and mount targets per cluster.
+# Uses AWS CLI with per-cluster credentials passed via environment variables.
+# Idempotent: checks for existing resources before creating.
+#
+# Required variables:
+#   masworld_aws_access_key_id, masworld_aws_secret_access_key, masworld_aws_region
+#   masworld_cluster_id
+# Optional (auto-discovered if not set):
+#   masworld_vpc_id, masworld_private_subnet_ids (comma-separated)
+
+- name: "{{ masworld_cluster_id }} | Provision EFS storage"
+  block:
+    # ── Auto-discover VPC and subnets if not provided ─────────────────
+    - name: "{{ masworld_cluster_id }} | Discover ROSA VPC"
+      ansible.builtin.shell: |
+        set -o pipefail
+        aws ec2 describe-vpcs \
+          --filters "Name=cidr,Values={{ masworld_efs_vpc_cidr }}" \
+          --query 'Vpcs[0].VpcId' --output text
+      args:
+        executable: /bin/bash
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ masworld_aws_access_key_id }}"
+        AWS_SECRET_ACCESS_KEY: "{{ masworld_aws_secret_access_key }}"
+        AWS_DEFAULT_REGION: "{{ masworld_aws_region }}"
+      register: _efs_discovered_vpc
+      changed_when: false
+      when: masworld_vpc_id | default('') | length == 0
+      no_log: true
+
+    - name: "{{ masworld_cluster_id }} | Set VPC ID"
+      ansible.builtin.set_fact:
+        _efs_vpc_id: "{{ masworld_vpc_id | default(_efs_discovered_vpc.stdout | default('') | trim, true) }}"
+
+    - name: "{{ masworld_cluster_id }} | Discover private subnets"
+      ansible.builtin.shell: |
+        set -o pipefail
+        aws ec2 describe-subnets \
+          --filters "Name=vpc-id,Values={{ _efs_vpc_id }}" "Name=tag:Name,Values=*private*,*Private*" \
+          --query 'Subnets[].SubnetId' --output text
+      args:
+        executable: /bin/bash
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ masworld_aws_access_key_id }}"
+        AWS_SECRET_ACCESS_KEY: "{{ masworld_aws_secret_access_key }}"
+        AWS_DEFAULT_REGION: "{{ masworld_aws_region }}"
+      register: _efs_discovered_subnets
+      changed_when: false
+      when: masworld_private_subnet_ids | default('') | length == 0
+      no_log: true
+
+    - name: "{{ masworld_cluster_id }} | Set private subnet IDs"
+      ansible.builtin.set_fact:
+        _efs_private_subnets: "{{ masworld_private_subnet_ids | default(_efs_discovered_subnets.stdout | default('') | trim | regex_replace('\t', ','), true) }}"
+
+    # ── Check for existing EFS filesystem ─────────────────────────────
+    - name: "{{ masworld_cluster_id }} | Check for existing EFS filesystem"
+      ansible.builtin.shell: |
+        set -o pipefail
+        aws efs describe-file-systems \
+          --query "FileSystems[?Tags[?Key=='Cluster' && Value=='{{ masworld_cluster_id }}']].FileSystemId | [0]" \
+          --output text
+      args:
+        executable: /bin/bash
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ masworld_aws_access_key_id }}"
+        AWS_SECRET_ACCESS_KEY: "{{ masworld_aws_secret_access_key }}"
+        AWS_DEFAULT_REGION: "{{ masworld_aws_region }}"
+      register: _efs_existing
+      changed_when: false
+      no_log: true
+
+    # ── Create EFS filesystem ─────────────────────────────────────────
+    - name: "{{ masworld_cluster_id }} | Create EFS filesystem"
+      ansible.builtin.shell: |
+        set -o pipefail
+        aws efs create-file-system \
+          --performance-mode {{ masworld_efs_performance_mode }} \
+          --throughput-mode {{ masworld_efs_throughput_mode }} \
+          {{ '--encrypted' if masworld_efs_encrypted | bool else '' }} \
+          --tags Key=Name,Value=masworld-efs-{{ masworld_cluster_id }} \
+                 Key=Cluster,Value={{ masworld_cluster_id }} \
+                 Key=Project,Value={{ masworld_efs_tags.Project }} \
+                 Key=ManagedBy,Value={{ masworld_efs_tags.ManagedBy }} \
+          --query 'FileSystemId' --output text
+      args:
+        executable: /bin/bash
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ masworld_aws_access_key_id }}"
+        AWS_SECRET_ACCESS_KEY: "{{ masworld_aws_secret_access_key }}"
+        AWS_DEFAULT_REGION: "{{ masworld_aws_region }}"
+      register: _efs_created
+      when: _efs_existing.stdout in ['None', '']
+      no_log: true
+
+    - name: "{{ masworld_cluster_id }} | Set EFS filesystem ID"
+      ansible.builtin.set_fact:
+        _efs_filesystem_id: "{{ _efs_created.stdout | default(_efs_existing.stdout) | trim }}"
+
+    - name: "{{ masworld_cluster_id }} | Wait for EFS filesystem to be available"
+      ansible.builtin.shell: |
+        set -o pipefail
+        aws efs describe-file-systems \
+          --file-system-id {{ _efs_filesystem_id }} \
+          --query 'FileSystems[0].LifeCycleState' --output text
+      args:
+        executable: /bin/bash
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ masworld_aws_access_key_id }}"
+        AWS_SECRET_ACCESS_KEY: "{{ masworld_aws_secret_access_key }}"
+        AWS_DEFAULT_REGION: "{{ masworld_aws_region }}"
+      register: _efs_state
+      until: _efs_state.stdout == 'available'
+      retries: 30
+      delay: 10
+      changed_when: false
+      no_log: true
+
+    # ── Create NFS security group ─────────────────────────────────────
+    - name: "{{ masworld_cluster_id }} | Check for existing EFS security group"
+      ansible.builtin.shell: |
+        set -o pipefail
+        aws ec2 describe-security-groups \
+          --filters "Name=tag:Cluster,Values={{ masworld_cluster_id }}" \
+                    "Name=tag:Name,Values=masworld-efs-{{ masworld_cluster_id }}" \
+          --query 'SecurityGroups[0].GroupId' --output text
+      args:
+        executable: /bin/bash
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ masworld_aws_access_key_id }}"
+        AWS_SECRET_ACCESS_KEY: "{{ masworld_aws_secret_access_key }}"
+        AWS_DEFAULT_REGION: "{{ masworld_aws_region }}"
+      register: _efs_sg_existing
+      changed_when: false
+      no_log: true
+
+    - name: "{{ masworld_cluster_id }} | Create EFS security group"
+      ansible.builtin.shell: |
+        set -o pipefail
+        SG_ID=$(aws ec2 create-security-group \
+          --group-name "masworld-efs-{{ masworld_cluster_id }}" \
+          --description "NFS access for EFS - {{ masworld_cluster_id }}" \
+          --vpc-id {{ _efs_vpc_id }} \
+          --query 'GroupId' --output text)
+        aws ec2 create-tags --resources "$SG_ID" \
+          --tags Key=Name,Value=masworld-efs-{{ masworld_cluster_id }} \
+                 Key=Cluster,Value={{ masworld_cluster_id }} \
+                 Key=Project,Value={{ masworld_efs_tags.Project }} \
+                 Key=ManagedBy,Value={{ masworld_efs_tags.ManagedBy }}
+        aws ec2 authorize-security-group-ingress \
+          --group-id "$SG_ID" \
+          --protocol tcp --port 2049 \
+          --cidr {{ masworld_efs_vpc_cidr }}
+        echo "$SG_ID"
+      args:
+        executable: /bin/bash
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ masworld_aws_access_key_id }}"
+        AWS_SECRET_ACCESS_KEY: "{{ masworld_aws_secret_access_key }}"
+        AWS_DEFAULT_REGION: "{{ masworld_aws_region }}"
+      register: _efs_sg_created
+      when: _efs_sg_existing.stdout in ['None', '']
+      no_log: true
+
+    - name: "{{ masworld_cluster_id }} | Set EFS security group ID"
+      ansible.builtin.set_fact:
+        _efs_sg_id: "{{ _efs_sg_created.stdout_lines | default([_efs_sg_existing.stdout]) | last | trim }}"
+
+    # ── Create mount targets ──────────────────────────────────────────
+    - name: "{{ masworld_cluster_id }} | Check existing mount targets"
+      ansible.builtin.shell: |
+        set -o pipefail
+        aws efs describe-mount-targets \
+          --file-system-id {{ _efs_filesystem_id }} \
+          --query 'MountTargets[].SubnetId' --output json
+      args:
+        executable: /bin/bash
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ masworld_aws_access_key_id }}"
+        AWS_SECRET_ACCESS_KEY: "{{ masworld_aws_secret_access_key }}"
+        AWS_DEFAULT_REGION: "{{ masworld_aws_region }}"
+      register: _efs_existing_mts
+      changed_when: false
+      no_log: true
+
+    - name: "{{ masworld_cluster_id }} | Parse existing mount target subnets"
+      ansible.builtin.set_fact:
+        _efs_mt_subnets: "{{ _efs_existing_mts.stdout | from_json }}"
+
+    - name: "{{ masworld_cluster_id }} | Create mount target in each private subnet"
+      ansible.builtin.shell: |
+        set -o pipefail
+        aws efs create-mount-target \
+          --file-system-id {{ _efs_filesystem_id }} \
+          --subnet-id {{ subnet_id }} \
+          --security-groups {{ _efs_sg_id }} \
+          --query 'MountTargetId' --output text
+      args:
+        executable: /bin/bash
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ masworld_aws_access_key_id }}"
+        AWS_SECRET_ACCESS_KEY: "{{ masworld_aws_secret_access_key }}"
+        AWS_DEFAULT_REGION: "{{ masworld_aws_region }}"
+      loop: "{{ _efs_private_subnets.split(',') }}"
+      loop_control:
+        loop_var: subnet_id
+        label: "{{ subnet_id }}"
+      when: subnet_id not in _efs_mt_subnets
+      no_log: true
+
+    - name: "{{ masworld_cluster_id }} | Wait for all mount targets to be available"
+      ansible.builtin.shell: |
+        set -o pipefail
+        aws efs describe-mount-targets \
+          --file-system-id {{ _efs_filesystem_id }} \
+          --query "MountTargets[?LifeCycleState!='available'].LifeCycleState" --output json
+      args:
+        executable: /bin/bash
+      environment:
+        AWS_ACCESS_KEY_ID: "{{ masworld_aws_access_key_id }}"
+        AWS_SECRET_ACCESS_KEY: "{{ masworld_aws_secret_access_key }}"
+        AWS_DEFAULT_REGION: "{{ masworld_aws_region }}"
+      register: _efs_mt_states
+      until: (_efs_mt_states.stdout | from_json | length) == 0
+      retries: 30
+      delay: 10
+      changed_when: false
+      no_log: true
+
+    - name: "{{ masworld_cluster_id }} | Set EFS result fact"
+      ansible.builtin.set_fact:
+        _cluster_efs_ids: >-
+          {{ _cluster_efs_ids | default({}) | combine({
+            masworld_cluster_id: _efs_filesystem_id
+          }) }}
+        efs_provisioning_result: "success"
+
+    - name: "{{ masworld_cluster_id }} | Report EFS success"
+      ansible.builtin.debug:
+        msg: "EFS filesystem {{ _efs_filesystem_id }} ready with mount targets in {{ _efs_private_subnets }}"
+
+  rescue:
+    - name: "{{ masworld_cluster_id }} | Set EFS failure fact"
+      ansible.builtin.set_fact:
+        _cluster_efs_ids: >-
+          {{ _cluster_efs_ids | default({}) | combine({
+            masworld_cluster_id: ''
+          }) }}
+        efs_provisioning_result: "failed"
+
+    - name: "{{ masworld_cluster_id }} | Report EFS failure"
+      ansible.builtin.debug:
+        msg: "EFS provisioning failed for {{ masworld_cluster_id }}: {{ ansible_failed_result.msg | default('unknown error') }}"

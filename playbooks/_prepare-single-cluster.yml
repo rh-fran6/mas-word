@@ -1,0 +1,154 @@
+---
+# Fleet inner loop: prepare a single cluster with purpose-based component gating.
+# Called by prepare-fleet.yml and _deploy-*.yml scenarios.
+#
+# Expects loop_var 'cluster' with: id, purpose, seat_number, api_url,
+# admin_password, and other credential fields from cluster-credentials.yml.
+
+- name: Set per-cluster connection variables for {{ cluster.id }}
+  ansible.builtin.set_fact:
+    masworld_cluster_id: "{{ cluster.id }}"
+    masworld_cluster_name: "{{ cluster.id }}"
+    masworld_cluster_api_url: "{{ cluster.api_url | default('') }}"
+    masworld_admin_password: "{{ cluster.admin_password | default('') }}"
+    masworld_seat_number: "{{ cluster.seat_number | default('') }}"
+    masworld_cluster_purpose: "{{ cluster.purpose | default('attendee') }}"
+    masworld_event_id: "{{ masworld_env_config.event.id | default('mas-world-2026') }}"
+    masworld_base_domain: "{{ cluster.api_url | default('') | regex_replace('^https?://api\\.', '') | regex_replace(':.*$', '') }}"
+    masworld_preflight_min_workers: "{{ masworld_env_config.preflight.min_workers | default(3) }}"
+    masworld_preflight_min_cpu: "{{ masworld_env_config.preflight.min_cpu | default(32) }}"
+    masworld_preflight_min_memory_gi: "{{ masworld_env_config.preflight.min_memory_gi | default(128) }}"
+  no_log: true
+
+- name: Resolve component profile for {{ cluster.id }}
+  ansible.builtin.include_tasks: _resolve-cluster-profile.yml
+
+- name: Obtain API token for {{ cluster.id }}
+  when:
+    - masworld_admin_password | length > 0
+    - masworld_cluster_api_url | length > 0
+  block:
+    - name: "{{ cluster.id }} — Discover OAuth server URL"
+      ansible.builtin.uri:
+        url: "{{ masworld_cluster_api_url }}/.well-known/oauth-authorization-server"
+        method: GET
+        validate_certs: false
+        status_code: [200]
+      register: _fleet_oauth_metadata
+
+    - name: "{{ cluster.id }} — Request OAuth token"
+      ansible.builtin.uri:
+        url: "{{ _fleet_oauth_metadata.json.authorization_endpoint }}?response_type=token&client_id=openshift-challenging-client"
+        method: GET
+        user: "{{ masworld_admin_username | default('cluster-admin') }}"
+        password: "{{ masworld_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        follow_redirects: none
+        status_code: [302]
+      register: _fleet_oauth_response
+      no_log: true
+
+    - name: "{{ cluster.id }} — Extract bearer token"
+      ansible.builtin.set_fact:
+        masworld_api_token: "{{ _fleet_oauth_response.location | regex_search('access_token=([^&]+)', '\\1') | first }}"
+      no_log: true
+
+- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — efs_csi_driver"
+  ansible.builtin.include_role:
+    name: efs_csi_driver
+  when: masworld_efs_filesystem_id | default('') | length > 0
+
+- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — config_validation"
+  ansible.builtin.include_role:
+    name: config_validation
+  vars:
+    masworld_config_validation_strict: false
+
+- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — cluster_preflight"
+  ansible.builtin.include_role:
+    name: cluster_preflight
+
+- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — event_metadata"
+  ansible.builtin.include_role:
+    name: event_metadata
+
+- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — acm_hub"
+  ansible.builtin.include_role:
+    name: acm_hub
+  when:
+    - masworld_cluster_purpose | default('attendee') == 'hub'
+    - masworld_acm_hub_enabled | default(true) | bool
+
+- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — acm_registration"
+  ansible.builtin.include_role:
+    name: acm_registration
+  when: masworld_acm_enabled | bool
+
+- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — mas_prerequisites"
+  ansible.builtin.include_role:
+    name: mas_prerequisites
+  when: masworld_mas_prerequisites_enabled | bool
+
+- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — mas_core"
+  ansible.builtin.include_role:
+    name: mas_core
+  when: masworld_mas_core_enabled | bool
+
+- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — maximo_manage"
+  ansible.builtin.include_role:
+    name: maximo_manage
+  when: masworld_manage_enabled | bool
+
+- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — logging_operator"
+  ansible.builtin.include_role:
+    name: logging_operator
+  when: masworld_logging_enabled | bool
+
+- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — loki_stack"
+  ansible.builtin.include_role:
+    name: loki_stack
+  when: masworld_loki_enabled | bool
+
+- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — log_forwarding"
+  ansible.builtin.include_role:
+    name: log_forwarding
+  when: masworld_log_forwarding_enabled | bool
+
+- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — identity_demo"
+  ansible.builtin.include_role:
+    name: identity_demo
+  when: masworld_identity_enabled | bool
+
+- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — mas_edge"
+  ansible.builtin.include_role:
+    name: mas_edge
+  when: masworld_mas_edge_enabled | bool
+
+- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — student_accounts"
+  ansible.builtin.include_role:
+    name: student_accounts
+  when: masworld_student_accounts_enabled | bool
+
+- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — sample_workloads"
+  ansible.builtin.include_role:
+    name: sample_workloads
+  when: masworld_sample_workloads_enabled | bool
+
+- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — showroom"
+  ansible.builtin.include_role:
+    name: showroom
+  when: masworld_showroom_enabled | bool
+
+- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — event_readiness"
+  ansible.builtin.include_role:
+    name: event_readiness
+
+- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — environment_report"
+  ansible.builtin.include_role:
+    name: environment_report
+
+- name: Record success for {{ cluster.id }}
+  ansible.builtin.set_fact:
+    masworld_fleet_results: >-
+      {{ masworld_fleet_results | default([]) + [{'cluster_id': cluster.id, 'purpose': _resolved_purpose, 'result': 'success', 'readiness': readiness_result | default('UNKNOWN')}] }}

@@ -1,0 +1,55 @@
+---
+# Resolve component enablement profile based on cluster purpose.
+#
+# Hub clusters:               ACM only — no MAS, Manage, Logging, etc.
+# Facilitator/Attendee/Spare: Full MAS stack — ACM disabled by default.
+#
+# Expects: cluster.purpose (or masworld_cluster_purpose) to be set by caller.
+# Sets:    masworld_*_enabled flags + masworld_readiness_checks list.
+
+- name: Determine cluster purpose
+  ansible.builtin.set_fact:
+    _resolved_purpose: "{{ cluster.purpose | default(masworld_cluster_purpose | default('attendee')) }}"
+
+- name: "Profile: {{ _resolved_purpose }} — hub cluster (ACM only)"
+  ansible.builtin.set_fact:
+    masworld_mas_prerequisites_enabled: false
+    masworld_mas_core_enabled: false
+    masworld_manage_enabled: false
+    masworld_logging_enabled: false
+    masworld_loki_enabled: false
+    masworld_log_forwarding_enabled: false
+    masworld_identity_enabled: false
+    masworld_mas_edge_enabled: false
+    masworld_student_accounts_enabled: false
+    masworld_sample_workloads_enabled: false
+    masworld_showroom_enabled: false
+    masworld_acm_enabled: true
+    masworld_readiness_checks:
+      - api
+  when: _resolved_purpose == 'hub'
+
+- name: "Profile: {{ _resolved_purpose }} — full MAS stack"
+  ansible.builtin.set_fact:
+    masworld_mas_prerequisites_enabled: true
+    masworld_mas_core_enabled: true
+    masworld_manage_enabled: true
+    masworld_logging_enabled: true
+    masworld_loki_enabled: true
+    masworld_log_forwarding_enabled: true
+    masworld_identity_enabled: true
+    masworld_mas_edge_enabled: false
+    masworld_student_accounts_enabled: true
+    masworld_sample_workloads_enabled: true
+    masworld_showroom_enabled: true
+    masworld_acm_enabled: "{{ masworld_acm_enabled | default(false) }}"
+    masworld_readiness_checks:
+      - api
+      - mas
+      - manage
+      - logging
+      - loki
+      - showroom
+      - student_access
+      - exercise_data
+  when: _resolved_purpose != 'hub'

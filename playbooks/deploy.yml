@@ -1,0 +1,61 @@
+---
+# Master deployment playbook — select a scenario to run the appropriate pipeline.
+#
+# Usage:
+#   make deploy SCENARIO=greenfield                           # Fresh AWS accounts
+#   make deploy SCENARIO=aws-ready                            # AWS infra exists
+#   make deploy-cluster-ready INSTANCE_TYPE=m5.2xlarge        # Clusters running
+#
+# Or directly:
+#   ansible-playbook playbooks/deploy.yml -e deployment_scenario=greenfield
+#   ansible-playbook playbooks/deploy.yml -e deployment_scenario=cluster-ready \
+#     -e workshop_machinepool_instance_type=m5.2xlarge
+
+- name: "MAS World 2026 — Scenario Deployment"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../secrets/rosa-token.yml
+    - ../secrets/cluster-credentials.yml
+
+  pre_tasks:
+    - name: Validate deployment scenario is specified
+      ansible.builtin.assert:
+        that:
+          - deployment_scenario is defined
+          - deployment_scenario in ['greenfield', 'aws-ready', 'cluster-ready']
+        fail_msg: >
+          deployment_scenario must be one of: greenfield, aws-ready, cluster-ready.
+          Usage: make deploy SCENARIO=greenfield
+      tags: [always]
+
+    - name: Display deployment banner
+      ansible.builtin.debug:
+        msg: |
+          ╔══════════════════════════════════════════════════════════════╗
+          ║  MAS World 2026 — Scenario Deployment                      ║
+          ║  Scenario: {{ deployment_scenario | upper | center(46) }}   ║
+          ╚══════════════════════════════════════════════════════════════╝
+      tags: [always]
+
+    - name: Load component versions
+      ansible.builtin.include_vars:
+        file: "../config/components.yaml"
+        name: masworld_components
+      tags: [always]
+
+    - name: Set rosa_version from components
+      ansible.builtin.set_fact:
+        rosa_version: "{{ masworld_components.components.openshift.version }}"
+      tags: [always]
+
+  roles:
+    - role: scenario_preflight
+      tags: [preflight]
+
+  tasks:
+    - name: Run scenario deployment pipeline
+      ansible.builtin.include_tasks: "_deploy-{{ deployment_scenario }}.yml"
+      tags: [deploy]

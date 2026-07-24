@@ -1,4 +1,150 @@
-# Threat Model — MAS World 2026
+# Threat Model
+
+> **Last updated:** 2026-07-20
+> **System:** ROSA HCP Multi-Cluster Provisioning
+> **Scope:** The automation system itself, not the provisioned clusters or underlying AWS/ROSA platforms
+
+---
+
+## System Boundaries
+
+```
++------------------------------------------------------+
+|  Operator Workstation                                |
+|  +-----------+  +----------+  +------------------+  |
+|  | Ansible   |  | rosa CLI |  | aws CLI          |  |
+|  | Playbooks |  |          |  |                  |  |
+|  +-----------+  +----------+  +------------------+  |
+|        |              |               |              |
+|  +-----v--------------v---------------v----------+  |
+|  |          secrets/ (encrypted at rest)          |  |
+|  |  rosa-token.yml  |  cluster-credentials.yml   |  |
+|  +---------------------------------------------------+
+|        |              |               |              |
++--------|--------------|---------------|--------------|
+         |              |               |
+    +----v----+   +-----v-----+   +-----v------+
+    | ROSA    |   | AWS       |   | AWS        |
+    | API     |   | Account 1 |   | Account N  |
+    +---------+   +-----------+   +------------+
+```
+
+## Assets
+
+| Asset | Sensitivity | Location |
+|---|---|---|
+| AWS Access Keys (per-cluster) | HIGH | `secrets/cluster-credentials.yml` |
+| ROSA Offline Token | HIGH | `secrets/rosa-token.yml` |
+| Cluster topology | LOW | `group_vars/all/cluster_topology.yml` |
+| Cluster API URLs | MEDIUM | `cluster-report.txt` (generated) |
+| Ansible Vault password | HIGH | Operator-managed (not on disk) |
+
+## Threat Actors
+
+| Actor | Capability | Motivation |
+|---|---|---|
+| Unauthorized workstation user | Access to the operator's machine | Credential theft, unauthorized provisioning/destruction |
+| Compromised CI/CD | Automated execution context | Supply chain attack, credential exfiltration |
+| Insider with repo access | Read access to git repo | Credential theft if secrets committed unencrypted |
+| Network eavesdropper | Network-level MITM | Credential interception during API calls |
+
+## Threats and Mitigations
+
+### T-001: Credentials Committed to Git
+
+| | |
+|---|---|
+| **Threat** | AWS keys or ROSA token committed to version control |
+| **Likelihood** | Medium (operator error) |
+| **Impact** | HIGH — full AWS account access |
+| **Mitigation** | `secrets/` in `.gitignore`; only `.example` templates committed; pre-commit hooks can add checks |
+| **Residual risk** | Operator could force-add files or bypass gitignore |
+
+### T-002: Credential Exposure in Ansible Output
+
+| | |
+|---|---|
+| **Threat** | AWS keys or ROSA token visible in Ansible task output or logs |
+| **Likelihood** | Low |
+| **Impact** | HIGH — credential leak via logs |
+| **Mitigation** | `no_log: true` on all credential-handling tasks |
+| **Residual risk** | Verbose mode (`-vvv`) may still expose some interpolated values |
+
+### T-003: Unencrypted Secrets at Rest
+
+| | |
+|---|---|
+| **Threat** | Secrets files stored unencrypted on disk |
+| **Likelihood** | High (encryption is optional, not enforced) |
+| **Impact** | MEDIUM — accessible to anyone with filesystem access |
+| **Mitigation** | `make encrypt-secrets` available; documentation recommends encryption |
+| **Residual risk** | Encryption is opt-in, not mandatory |
+
+### T-004: Cross-Account Credential Leakage
+
+| | |
+|---|---|
+| **Threat** | Task uses wrong AWS account's credentials |
+| **Likelihood** | Very Low |
+| **Impact** | HIGH — operations in wrong account |
+| **Mitigation** | Per-task `environment:` blocks scoped to loop item; `build_cluster_list()` creates deterministic mapping |
+| **Residual risk** | None with current architecture (credentials are isolated per loop iteration) |
+
+### T-005: Unauthorized Cluster Destruction
+
+| | |
+|---|---|
+| **Threat** | Clusters destroyed without authorization |
+| **Likelihood** | Low |
+| **Impact** | HIGH — workshop disruption, data loss |
+| **Mitigation** | `make destroy` requires typing "yes"; `make destroy-auto` is explicitly named |
+| **Residual risk** | Anyone with access to the workstation and secrets can run `make destroy-auto` |
+
+### T-006: Shell Injection via Cluster Names
+
+| | |
+|---|---|
+| **Threat** | Malicious `cluster_prefix` or category name injecting shell commands |
+| **Likelihood** | Very Low (operator controls topology file) |
+| **Impact** | HIGH — arbitrary command execution |
+| **Mitigation** | Cluster names are operator-defined; no external input |
+| **Residual risk** | No regex validation on `cluster_prefix` currently (see SEC-004 in security-review.md) |
+
+### T-007: ROSA Token Reuse/Theft
+
+| | |
+|---|---|
+| **Threat** | ROSA offline token stolen and reused |
+| **Likelihood** | Low |
+| **Impact** | MEDIUM — can list/modify clusters under the ROSA account |
+| **Mitigation** | Token stored in encrypted file; `no_log: true` on login task |
+| **Residual risk** | Offline tokens are long-lived by design; revocation requires console.redhat.com |
+
+### T-008: Infrastructure State File Tampering
+
+| | |
+|---|---|
+| **Threat** | The `infra_state.yml` file could be manually edited or tampered with, causing cluster provisioning to reference incorrect subnet IDs. This could result in clusters being provisioned in wrong subnets or failing to provision entirely. |
+| **Likelihood** | Low |
+| **Impact** | HIGH — clusters provisioned in wrong subnets or provisioning failure |
+| **Mitigation** | The file is auto-generated by `make setup-infra` and should not be manually edited. Running `make verify-infra` validates that the recorded state matches actual AWS infrastructure. The file is regenerated from actual AWS state on each `make setup-infra` run, so any tampering is corrected on the next infrastructure setup. |
+| **Residual risk** | If an operator tampers with the file and runs provisioning without running `make verify-infra` first |
+
+---
+
+## Recommended Improvements
+
+1. Add pre-commit hook to scan for accidental secret commits (e.g., `detect-secrets`)
+2. Add regex validation for `cluster_prefix` to prevent shell metacharacters
+3. Enforce Vault encryption by failing preflight if secrets are unencrypted
+4. Add audit logging of provisioning/destruction actions with timestamps
+5. Consider short-lived STS credentials instead of long-lived access keys
+
+
+---
+
+## Phase 2: MAS World Application Layer
+
 
 **Status**: DRAFT — Phase 7
 **Date**: 2026-07-19
@@ -234,7 +380,7 @@ consistent secret handling across all environments:
 
 | Control | Implementation |
 |---------|---------------|
-| Provider abstraction | `secret://` URI scheme resolves to configured backend (env, k8s, aws-sm, vault) |
+| Provider abstraction | `secret://` URI scheme resolves to configured backend (env, file, k8s, aws-sm, vault) |
 | Redaction patterns | CLI and Ansible output filter known secret patterns (keys, tokens, passwords, entitlement values) |
 | `no_log` enforcement | All Ansible tasks handling secrets use `no_log: true` |
 | Temp kubeconfig handling | Written to isolated temp dir, mode `0600`, deleted after use, never logged |
@@ -247,7 +393,7 @@ Secret reference examples (no real values):
 secret://mas-world/clusters/seat-01/admin-kubeconfig
 secret://mas-world/students/seat-01/password
 secret://mas-world/ibm/entitlement-key
-secret://mas-world/aws/s3/seat-01/access-key
+secret://mas-world/clusters/seat-01/AWS_ACCESS_KEY_ID
 ```
 
 ### 5.3 Network and S3 Isolation
@@ -385,5 +531,5 @@ This threat model must be updated when:
 - A security test fails during rehearsal or event preparation.
 - A security incident occurs during the event.
 
-Updates must be recorded in `docs/change-log.md` with a reference to the
+Updates must be recorded in `docs/changelog.md` with a reference to the
 affected threat IDs.

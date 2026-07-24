@@ -1,4 +1,116 @@
-# Known Limitations — MAS World 2026
+# Known Limitations
+
+> **Last updated:** 2026-07-20
+
+---
+
+## LIM-001: Maximum 99 Seat Clusters
+
+The zero-padding format (`%02d`) supports seat indices 01–99. Fleets larger than 99 seats would require changing to three-digit padding, which would also require updating credential key names.
+
+**Impact:** Low — workshops rarely exceed 99 participants.
+
+---
+
+## LIM-002: Sequential Polling Phase
+
+While cluster creation commands are fired in parallel (async/poll:0), the subsequent polling phases (async_status, wait_ready) iterate sequentially through the cluster list. For large fleets, this means the polling loop visits each cluster one at a time.
+
+**Impact:** Low — polling is lightweight (just checking status). The bottleneck is cluster provisioning time, not polling overhead.
+
+---
+
+## LIM-003: No Automatic Credential Rotation
+
+AWS access keys and ROSA tokens must be managed manually. The system has no integration with secret rotation services (AWS Secrets Manager, HashiCorp Vault, etc.).
+
+**Impact:** Medium for long-lived deployments; Low for short-lived workshops.
+
+---
+
+## LIM-004: Single ROSA Account for All Clusters
+
+All clusters are created under a single ROSA account (one offline token). Multi-tenant ROSA account support is not implemented.
+
+**Impact:** Low — workshop use case assumes a single Red Hat account.
+
+---
+
+## LIM-005: No Rolling Updates
+
+The provisioning playbook creates all clusters with the same ROSA/OpenShift version. There is no support for rolling version upgrades across the fleet.
+
+**Impact:** Low — workshops use a single version. For version upgrades, destroy and re-provision.
+
+---
+
+## LIM-006: No Custom Domain Support
+
+Clusters use ROSA-assigned domains. Custom DNS domain configuration is not automated.
+
+**Impact:** Low — demo clusters don't typically need custom domains.
+
+---
+
+## LIM-007: MachinePool Creation Not Idempotent
+
+Re-running `make provision` on an existing fleet will attempt to recreate machinepools that already exist, causing non-fatal errors. The clusters remain functional.
+
+**Impact:** Low — cosmetic errors only. See WA-003 in workarounds.md.
+
+---
+
+## LIM-008: No Fleet-Wide Health Monitoring
+
+`make status` provides a point-in-time snapshot. There is no continuous monitoring, alerting, or dashboard for fleet health.
+
+**Impact:** Medium — operator must manually check status during workshops.
+
+---
+
+## LIM-009: Localhost-Only Execution
+
+The system must run from a workstation with all CLI tools installed. There is no container image, CI/CD pipeline, or remote execution mode.
+
+**Impact:** Low — acceptable for the workshop use case where an operator runs provisioning from their machine.
+
+---
+
+## LIM-010: No Multi-Region Fleet Support
+
+All clusters within a single category share a common instance type and autoscaling config. Cross-region diversity within a category is supported (credentials can specify different regions), but there's no per-cluster sizing override.
+
+**Impact:** Low — workshop clusters are typically uniform.
+
+---
+
+## LIM-011: Single NAT Gateway per VPC
+
+The aws_infra role creates one NAT gateway per VPC rather than one per AZ. This is not HA but is acceptable for workshop and demo environments. The number of NAT gateways is configurable in aws_infra_defaults.yml for production use cases.
+
+**Impact:** Low — acceptable for non-production workshop environments.
+
+---
+
+## LIM-012: Identical CIDR Blocks Across All Accounts
+
+All AWS accounts use the same VPC CIDR (10.0.0.0/16) and subnet CIDRs. This prevents future VPC peering between accounts if that were ever needed. Acceptable because workshop accounts are fully isolated.
+
+**Impact:** Low — workshop accounts are fully isolated and do not require peering.
+
+---
+
+## LIM-013: infra_state.yml Overwritten on Each `make setup-infra` Run
+
+The infrastructure state file is regenerated from scratch on each run. Previous state is not preserved or versioned. If the file is manually edited, those changes will be lost on the next run.
+
+**Impact:** Medium — manual edits to infra_state.yml will be silently lost.
+
+
+---
+
+## Phase 2: MAS World Application Layer
+
 
 **Status**: DRAFT — Phase 0
 **Date**: 2026-07-19

@@ -204,7 +204,7 @@ mas-world --env <environment> cluster prepare <cluster_id> [--dry-run]
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `cluster_id` | yes | The cluster ID as defined in `clusters.yaml`. |
+| `cluster_id` | yes | The cluster ID as defined in `secrets/cluster-credentials.yml`. |
 
 **Options**:
 

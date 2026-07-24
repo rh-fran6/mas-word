@@ -1,0 +1,4 @@
+---
+workshop_machinepool_name: "workshop-pool"
+workshop_machinepool_min_replicas: 1
+workshop_machinepool_max_replicas: 3

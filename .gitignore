@@ -1,39 +1,10 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.egg-info/
-*.egg
-dist/
-build/
-.eggs/
-
-# Virtual environments
-.venv/
-venv/
-env/
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Ansible
-*.retry
-
-# Secrets — never commit
+# Secrets (NEVER commit)
+secrets/*.yml
+secrets/*.yaml
+!secrets/*.yml.example
+!secrets/*.yaml.example
+secrets/*.json
+secrets/*.dat
 *.pem
 *.key
 *.crt
@@ -48,10 +19,50 @@ kubeconfig*
 credentials.json
 entitlement-key*
 pull-secret*
-
-# Ansible Vault files that may contain secrets
 *vault*.yml
 !*vault*.yml.example
+
+# Ansible runtime
+*.retry
+.ansible_async/
+
+# Vendored Galaxy collections (install from requirements.yml)
+collections/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# detect-secrets baseline (DO NOT ignore — detect-secrets needs this tracked in git)
+# .secrets.baseline
+
+# Virtual environments
+venv/
+.venv/
+env/
 
 # Generated reports
 reports/
@@ -61,6 +72,9 @@ readiness-*.json
 # Molecule
 molecule/*/.molecule/
 molecule/*/molecule/.cache/
+
+# Ansible facts cache
+.cache/
 
 # Claude Code
 .claude/

@@ -1,0 +1,5 @@
+---
+rosa_action: "create"
+
+rosa_admin_password_length: 20
+rosa_admin_password_chars: "ascii_lowercase,ascii_uppercase,digits"

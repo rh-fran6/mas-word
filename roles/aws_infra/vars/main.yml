@@ -1,0 +1,5 @@
+---
+infra_valid_actions:
+  - create
+  - verify
+  - destroy

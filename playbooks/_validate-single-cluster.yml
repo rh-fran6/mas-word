@@ -1,0 +1,19 @@
+---
+# Fleet validation inner loop: resolve purpose profile then run readiness checks.
+# Hub clusters only validate API reachability; full-stack clusters validate all components.
+
+- name: Resolve component profile for {{ cluster.id }}
+  ansible.builtin.include_tasks: _resolve-cluster-profile.yml
+
+- name: Run readiness checks for {{ cluster.id }} ({{ _resolved_purpose }})
+  ansible.builtin.include_role:
+    name: event_readiness
+  vars:
+    masworld_cluster_id: "{{ cluster.id }}"
+    masworld_cluster_purpose: "{{ _resolved_purpose }}"
+    masworld_seat_number: "{{ cluster.seat_number | default('') }}"
+
+- name: Record validation result for {{ cluster.id }}
+  ansible.builtin.set_fact:
+    masworld_validation_results: >-
+      {{ masworld_validation_results | default([]) + [{'cluster_id': cluster.id, 'purpose': _resolved_purpose, 'readiness': readiness_result | default('UNKNOWN')}] }}

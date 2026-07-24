@@ -1,0 +1,109 @@
+---
+# loki_stack/tasks/main.yml
+# Deploys LokiStack CR with S3 backend for log storage.
+# Sets fact: loki_stack_ready (true/false)
+
+- name: Validate LokiStack prerequisites
+  ansible.builtin.fail:
+    msg: "masworld_loki_s3_bucket_name must be set for LokiStack deployment"
+  when: masworld_loki_s3_bucket_name | length == 0
+
+- name: Deploy LokiStack
+  block:
+    # --- Create S3 Credentials Secret ---
+    - name: Create S3 credentials Secret for LokiStack
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ masworld_loki_s3_secret_name }}"
+            namespace: "{{ masworld_loki_namespace }}"
+            labels:
+              masworld.ibm.com/component: "loki"
+              app.kubernetes.io/managed-by: "ansible"
+          type: Opaque
+          stringData:
+            access_key_id: "{{ masworld_loki_s3_access_key_id }}"
+            access_key_secret: "{{ masworld_loki_s3_access_key_secret }}"
+            bucketnames: "{{ masworld_loki_s3_bucket_name }}"
+            endpoint: "{{ masworld_loki_s3_endpoint }}"
+            region: "{{ masworld_loki_s3_region }}"
+      no_log: true
+
+    # --- Create LokiStack CR ---
+    - name: Create LokiStack custom resource
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: loki.grafana.com/v1
+          kind: LokiStack
+          metadata:
+            name: "{{ masworld_loki_stack_name }}"
+            namespace: "{{ masworld_loki_namespace }}"
+            labels:
+              masworld.ibm.com/component: "loki"
+              app.kubernetes.io/managed-by: "ansible"
+          spec:
+            size: "{{ masworld_loki_size }}"
+            storage:
+              schemas:
+                - effectiveDate: "2024-10-01"
+                  version: v13
+              secret:
+                name: "{{ masworld_loki_s3_secret_name }}"
+                type: s3
+            storageClassName: "{{ masworld_loki_storage_class }}"
+            tenants:
+              mode: openshift-logging
+
+    # --- Wait for LokiStack to be Ready ---
+    - name: Wait for LokiStack to reach Ready state
+      kubernetes.core.k8s_info:
+        api_version: loki.grafana.com/v1
+        kind: LokiStack
+        name: "{{ masworld_loki_stack_name }}"
+        namespace: "{{ masworld_loki_namespace }}"
+      register: _loki_stack_status
+      until: >-
+        _loki_stack_status.resources | length > 0 and
+        _loki_stack_status.resources[0].status is defined and
+        _loki_stack_status.resources[0].status.conditions is defined and
+        _loki_stack_status.resources[0].status.conditions
+          | selectattr('type', 'equalto', 'Ready')
+          | selectattr('status', 'equalto', 'True')
+          | list | length > 0
+      retries: "{{ masworld_loki_readiness_retries }}"
+      delay: "{{ masworld_loki_readiness_delay }}"
+
+    # --- Set Success Facts ---
+    - name: Set loki_stack_ready fact
+      ansible.builtin.set_fact:
+        loki_stack_ready: true
+        loki_stack_status: "ready"
+        loki_stack_info:
+          name: "{{ masworld_loki_stack_name }}"
+          namespace: "{{ masworld_loki_namespace }}"
+          size: "{{ masworld_loki_size }}"
+          s3_bucket: "{{ masworld_loki_s3_bucket_name }}"
+          s3_region: "{{ masworld_loki_s3_region }}"
+
+    - name: Report LokiStack ready
+      ansible.builtin.debug:
+        msg: >-
+          LokiStack '{{ masworld_loki_stack_name }}' is ready
+          (size={{ masworld_loki_size }}, bucket={{ masworld_loki_s3_bucket_name }})
+
+  rescue:
+    - name: Set LokiStack failed
+      ansible.builtin.set_fact:
+        loki_stack_ready: false
+        loki_stack_status: "failed"
+        loki_stack_error: "{{ ansible_failed_result.msg | default('Unknown LokiStack deployment error') }}"
+
+    - name: Report LokiStack failure
+      ansible.builtin.fail:
+        msg: >-
+          LokiStack deployment failed:
+          {{ loki_stack_error }}

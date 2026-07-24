@@ -1,0 +1,51 @@
+---
+- name: Validate variable schemas
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../secrets/rosa-token.yml
+    - ../secrets/cluster-credentials.yml
+
+  tasks:
+    - name: Validate cluster_categories structure
+      ansible.builtin.assert:
+        that:
+          - item.value.count is defined
+          - item.value.count | int >= 1
+          - item.value.instance_type is defined
+          - item.value.initial_replicas is defined
+          - item.value.initial_replicas | int >= 2
+        fail_msg: "Invalid config for category '{{ item.key }}'"
+      loop: "{{ cluster_categories | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    - name: Validate facilitator count is exactly 1
+      ansible.builtin.assert:
+        that:
+          - cluster_categories.facilitator.count == 1
+        fail_msg: "Facilitator count must be exactly 1"
+
+    - name: Build cluster definitions and validate credential mapping
+      ansible.builtin.set_fact:
+        cluster_definitions: >-
+          {{ cluster_categories | build_cluster_list(cluster_prefix, cluster_credentials, infra_state | default({})) }}
+
+    - name: Confirm all clusters have required credential fields
+      ansible.builtin.assert:
+        that:
+          - item.aws_access_key_id | length > 0
+          - item.aws_secret_access_key | length > 0
+          - item.aws_region | length > 0
+          - item.subnet_ids | length > 0
+        fail_msg: "Incomplete credentials for cluster '{{ item.name }}'"
+      loop: "{{ cluster_definitions }}"
+      loop_control:
+        label: "{{ item.name }}"
+      no_log: true
+
+    - name: Validation passed
+      ansible.builtin.debug:
+        msg: "All {{ cluster_definitions | length }} cluster definitions validated successfully."

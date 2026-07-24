@@ -1,4 +1,180 @@
-# Bill of Materials — MAS World 2026
+# Bill of Materials
+
+All tools, dependencies, services, and infrastructure required by the ROSA HCP Multi-Cluster Provisioning system.
+
+> **Last updated:** 2026-07-20
+
+---
+
+## CLI Tools (Operator Workstation)
+
+| Tool | Minimum Version | Purpose | Install |
+|---|---|---|---|
+| `rosa` | >= 1.2.x | ROSA cluster lifecycle management | `brew install rosa-cli` or [mirror.openshift.com](https://mirror.openshift.com/pub/openshift-v4/clients/rosa/latest/) |
+| `aws` | >= 2.x | AWS API operations (STS identity, EC2 queries) | `brew install awscli` or [aws.amazon.com/cli](https://aws.amazon.com/cli/) |
+| `ansible-playbook` | >= 2.14 | Playbook execution | `pip install ansible-core` |
+| `python3` | >= 3.9 | Filter plugin, test runner | System or `brew install python` |
+| `pre-commit` | >= 3.0 | Git hook management | `pip install pre-commit` |
+| `ansible-vault` | >= 2.14 | Secret encryption/decryption | Included with `ansible-core` |
+| `ansible-lint` | any | Playbook linting | `pip install ansible-lint` |
+| `yamllint` | any | YAML linting | `pip install yamllint` |
+| `pytest` | any | Unit test runner | `pip install pytest` |
+
+## Python Dependencies (`pyproject.toml`)
+
+| Package | Purpose |
+|---|---|
+| `ansible-core` | Ansible runtime |
+| `ansible-lint` | Playbook linting |
+| `yamllint` | YAML validation |
+| `pytest` | Unit testing for filter plugin |
+| `pre-commit` | Git hook framework |
+
+## Ansible Galaxy Dependencies (`requirements.yml`)
+
+| Collection/Role | Purpose |
+|---|---|
+| _(none currently)_ | All tasks use `ansible.builtin` modules |
+
+## AWS Services Consumed (Per Cluster Account)
+
+| Service | Usage | Cost Driver |
+|---|---|---|
+| EC2 | Worker node instances | Instance type x count x hours |
+| EBS | Worker node storage | GB provisioned |
+| ELB/NLB | Cluster API and app load balancers | Per LB + data processed |
+| NAT Gateway | Outbound internet for private subnets | Per hour + data processed |
+| Elastic IP | NAT Gateway attachment | Per EIP (free if attached) |
+| IAM | Operator roles, OIDC provider | No direct cost |
+| VPC | Networking infrastructure | No direct cost (pre-existing) |
+| Route 53 | Cluster DNS (if applicable) | Per hosted zone + queries |
+
+## Red Hat Services
+
+| Service | Purpose | Credential |
+|---|---|---|
+| ROSA (Red Hat OpenShift on AWS) | Managed OpenShift control plane | ROSA offline access token |
+| console.redhat.com | Token management, cluster visibility | Red Hat account |
+| OCM (OpenShift Cluster Manager) | Backend API for ROSA CLI | Transparent (via ROSA CLI) |
+
+## Infrastructure Prerequisites (Per AWS Account)
+
+| Resource | Requirement | Notes |
+|---|---|---|
+| VPC | 1 per account | Created by `make setup-infra` |
+| Public Subnets | 1 per AZ | Created by `make setup-infra` |
+| Private Subnets | >= 2 (multi-AZ) or >= 1 (single-AZ) | Created by `make setup-infra` |
+| Internet Gateway | 1 per VPC | Created by `make setup-infra` |
+| NAT Gateway | 1 per AZ with private subnets | Created by `make setup-infra` |
+| Route Tables | Configured for private subnet → NAT, public subnet → IGW | Created by `make setup-infra` |
+| ROSA Enrollment | `rosa init` completed | Created by `make setup-infra` (via `rosa_account_setup` role) |
+| Account Roles | HCP account-roles | Created by `make setup-infra` (via `rosa_account_setup` role) |
+| Service-Linked Roles | ELB, EFS | Created by `rosa init` |
+| EC2 Quota | Sufficient vCPUs for instance type x replicas | Per-account |
+
+## Cost Estimation (Per Workshop)
+
+Assuming 5 seat clusters + 1 hub + 1 facilitator, 8 hours:
+
+| Component | Estimate |
+|---|---|
+| 7x ROSA HCP control planes | ~$1.68/hr total ($0.24/hr each) |
+| 14x m5.large workers (seats, 2 each) | ~$1.34/hr |
+| 4x m5.xlarge workers (facilitator, 2 each) | ~$0.77/hr |
+| 4x m5.2xlarge workers (hub, 2 each) | ~$1.54/hr |
+| 7x NAT Gateways | ~$0.32/hr |
+| EBS, ELB, data transfer | ~$0.50/hr |
+| **Total (8 hours)** | **~$49** |
+
+*Estimates based on us-east-1 on-demand pricing. Actual costs vary by region and autoscaling activity.*
+
+> **NAT Gateway Cost Warning:** Each NAT gateway costs ~$0.045/hour per gateway per account, and charges accrue for the entire time the gateway exists -- not just during workshop hours. After workshop completion, run `make destroy-infra` to tear down NAT gateways and other infrastructure to avoid ongoing charges.
+
+## Project Files Inventory
+
+```
+rosa-hcp-multi-build/
+├── ansible.cfg
+├── Makefile
+├── README.md
+├── prompt.md
+├── docs/blockers.md
+├── pyproject.toml
+├── requirements.yml
+├── .gitignore
+├── .pre-commit-config.yaml
+├── .yamllint.yml
+├── playbooks/
+│   ├── provision.yml
+│   ├── destroy.yml
+│   ├── status.yml
+│   ├── preflight.yml
+│   ├── setup-infra.yml
+│   └── destroy-infra.yml
+├── roles/
+│   ├── aws_infra/
+│   │   ├── defaults/main.yml
+│   │   └── tasks/main.yml
+│   ├── rosa_account_setup/
+│   │   ├── defaults/main.yml
+│   │   └── tasks/main.yml
+│   ├── rosa_preflight/
+│   │   ├── defaults/main.yml
+│   │   └── tasks/main.yml
+│   └── rosa_cluster/
+│       ├── defaults/main.yml
+│       ├── vars/main.yml
+│       ├── templates/cluster-report.j2
+│       └── tasks/
+│           ├── main.yml
+│           ├── build_definitions.yml
+│           ├── create.yml
+│           ├── wait_ready.yml
+│           ├── machinepool.yml
+│           ├── verify.yml
+│           ├── status.yml
+│           ├── destroy.yml
+│           └── destroy_cleanup.yml
+├── plugins/filter/
+│   └── cluster_helpers.py
+├── group_vars/all/
+│   ├── aws_infra_defaults.yml
+│   ├── cluster_topology.yml
+│   ├── infra_state.yml
+│   └── rosa_defaults.yml
+├── secrets/
+│   ├── .gitkeep
+│   ├── rosa-token.yml.example
+│   └── cluster-credentials.yml.example
+├── tests/
+│   ├── test_filters.py
+│   ├── test_syntax.sh
+│   └── test_variables.yml
+├── scripts/
+│   ├── generate-credentials-template.sh
+│   └── preflight.sh
+└── docs/
+    ├── architecture.md
+    ├── aws-account-prerequisites.md
+    ├── bill-of-materials.md
+    ├── changelog.md
+    ├── configuration-guide.md
+    ├── decision-log.md
+    ├── implementation-status.md
+    ├── known-limitations.md
+    ├── risk-register.md
+    ├── security-review.md
+    ├── teardown-guide.md
+    ├── threat-model.md
+    ├── troubleshooting.md
+    └── workarounds.md
+```
+
+
+---
+
+## Phase 2: MAS World Application Layer
+
 
 **Status**: DRAFT — Phase 0
 **Date**: 2026-07-19

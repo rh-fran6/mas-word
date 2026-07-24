@@ -1,0 +1,69 @@
+---
+- name: Include build_definitions
+  ansible.builtin.include_tasks: build_definitions.yml
+
+- name: Load infrastructure state
+  ansible.builtin.include_vars:
+    file: "{{ aws_infra_state_file }}"
+  failed_when: false
+
+- name: Verify infrastructure exists per account
+  ansible.builtin.shell: |
+    set -o pipefail
+    VPC=$(aws ec2 describe-vpcs \
+      --filters "Name=tag:Cluster,Values={{ item.name }}" \
+                "Name=tag:Project,Values={{ aws_infra_tags.Project }}" \
+      --query 'Vpcs[0].VpcId' --output text)
+    if [ "$VPC" = "None" ] || [ -z "$VPC" ]; then
+      echo "MISSING: VPC for {{ item.name }}"
+      exit 1
+    fi
+
+    IGW=$(aws ec2 describe-internet-gateways \
+      --filters "Name=attachment.vpc-id,Values=$VPC" \
+      --query 'InternetGateways[0].InternetGatewayId' --output text)
+    if [ "$IGW" = "None" ] || [ -z "$IGW" ]; then
+      echo "MISSING: Internet Gateway for {{ item.name }}"
+      exit 1
+    fi
+
+    NAT=$(aws ec2 describe-nat-gateways \
+      --filter "Name=vpc-id,Values=$VPC" "Name=state,Values=available" \
+      --query 'NatGateways[0].NatGatewayId' --output text)
+    if [ "$NAT" = "None" ] || [ -z "$NAT" ]; then
+      echo "MISSING: NAT Gateway for {{ item.name }}"
+      exit 1
+    fi
+
+    PRIV_SUBNETS=$(aws ec2 describe-subnets \
+      --filters "Name=vpc-id,Values=$VPC" "Name=tag:Tier,Values=private" \
+      --query 'Subnets[].SubnetId' --output text | wc -w | tr -d ' ')
+    if [ "$PRIV_SUBNETS" -lt 2 ]; then
+      echo "MISSING: Need at least 2 private subnets, found $PRIV_SUBNETS for {{ item.name }}"
+      exit 1
+    fi
+
+    echo "OK: VPC=$VPC IGW=$IGW NAT=$NAT PrivateSubnets=$PRIV_SUBNETS"
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: verify_results
+  changed_when: false
+  no_log: true
+
+- name: Display verification results
+  ansible.builtin.debug:
+    msg: "{{ item.item.name }}: {{ item.stdout }}"
+  loop: "{{ verify_results.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: All infrastructure verified
+  ansible.builtin.debug:
+    msg: "All {{ cluster_definitions | length }} accounts have required infrastructure."

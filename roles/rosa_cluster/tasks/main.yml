@@ -1,0 +1,9 @@
+---
+- name: Validate rosa_action
+  ansible.builtin.assert:
+    that:
+      - rosa_action in rosa_valid_actions
+    fail_msg: "Invalid rosa_action '{{ rosa_action }}'. Must be one of: {{ rosa_valid_actions | join(', ') }}"
+
+- name: "Include {{ rosa_action }} tasks"
+  ansible.builtin.include_tasks: "{{ rosa_action }}.yml"

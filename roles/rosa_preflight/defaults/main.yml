@@ -1,0 +1,2 @@
+---
+# No defaults — all required variables come from group_vars and secrets

@@ -1,0 +1,15 @@
+ROSA HCP Cluster Fleet Report
+==============================
+
+Total clusters: {{ cluster_report | length }}
+
+{% for cluster in cluster_report %}
+Cluster: {{ cluster.name }}
+  Category:    {{ cluster.category }}
+  State:       {{ cluster.state }}
+  Version:     {{ cluster.version }}
+  Region:      {{ cluster.region }}
+  API URL:     {{ cluster.api_url }}
+  Console URL: {{ cluster.console_url }}
+
+{% endfor %}

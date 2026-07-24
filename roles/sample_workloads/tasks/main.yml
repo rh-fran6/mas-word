@@ -1,0 +1,196 @@
+---
+# Sample Workloads: exercise data and workloads for the workshop
+- name: Deploy sample workloads
+  block:
+    # ── Resolve Run ID ──────────────────────────────────────────────────
+    - name: Generate run ID if not provided
+      ansible.builtin.set_fact:
+        _masworld_run_id: >-
+          {{ masworld_logging_exercise_run_id
+             | default(lookup('ansible.builtin.pipe', 'date +%Y%m%d%H%M%S'), true) }}
+
+    # ── Create Exercises Namespace ──────────────────────────────────────
+    - name: Create exercises namespace
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ masworld_sample_namespace }}"
+            labels:
+              masworld.redhat.com/component: exercises
+              masworld.redhat.com/purpose: workshop-exercises
+
+    # ── Deploy Logging Exercise Workload ────────────────────────────────
+    - name: Deploy logging exercise pod
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: "log-generator-seat-{{ masworld_seat_number | pad(2) }}"
+            namespace: "{{ masworld_sample_namespace }}"
+            labels:
+              app: log-generator
+              masworld.redhat.com/component: logging-exercise
+              masworld.redhat.com/seat-number: "{{ masworld_seat_number | string }}"
+              masworld.redhat.com/run-id: "{{ _masworld_run_id }}"
+          spec:
+            restartPolicy: Always
+            containers:
+              - name: log-generator
+                image: "{{ masworld_logging_exercise_image }}"
+                command:
+                  - /bin/sh
+                  - -c
+                args:
+                  - |
+                    while true; do
+                      TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+                      SEQ=$((++i))
+                      echo "{\"timestamp\":\"${TS}\",\"level\":\"info\",\
+                    \"seat_number\":\"{{ masworld_seat_number }}\",\
+                    \"run_id\":\"{{ _masworld_run_id }}\",\
+                    \"message\":\"Workshop log entry from seat {{ masworld_seat_number }}\",\
+                    \"exercise\":\"logging\",\"counter\":\"${SEQ}\"}"
+                      sleep {{ masworld_logging_exercise_interval }}
+                    done
+                resources:
+                  requests:
+                    cpu: 10m
+                    memory: 32Mi
+                  limits:
+                    cpu: 50m
+                    memory: 64Mi
+
+    # ── Deploy Navigation Exercise Resources ────────────────────────────
+    - name: Deploy navigation exercise deployment
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: nav-exercise
+            namespace: "{{ masworld_sample_namespace }}"
+            labels:
+              app: "{{ masworld_navigation_exercise_app_label }}"
+              masworld.redhat.com/component: navigation-exercise
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: "{{ masworld_navigation_exercise_app_label }}"
+            template:
+              metadata:
+                labels:
+                  app: "{{ masworld_navigation_exercise_app_label }}"
+                  masworld.redhat.com/component: navigation-exercise
+              spec:
+                containers:
+                  - name: httpd
+                    image: "{{ masworld_logging_exercise_image }}"
+                    command:
+                      - /bin/sh
+                      - -c
+                    args:
+                      - |
+                        echo "MAS World Navigation Exercise - Running" > /tmp/index.html
+                        while true; do sleep 3600; done
+                    resources:
+                      requests:
+                        cpu: 10m
+                        memory: 32Mi
+                      limits:
+                        cpu: 50m
+                        memory: 64Mi
+
+    - name: Deploy navigation exercise service
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: nav-exercise
+            namespace: "{{ masworld_sample_namespace }}"
+            labels:
+              app: "{{ masworld_navigation_exercise_app_label }}"
+          spec:
+            selector:
+              app: "{{ masworld_navigation_exercise_app_label }}"
+            ports:
+              - port: 8080
+                targetPort: 8080
+                protocol: TCP
+
+    # ── Create Exercise ConfigMaps ──────────────────────────────────────
+    - name: Create logging exercise expected outputs ConfigMap
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: exercise-expected-outputs
+            namespace: "{{ masworld_sample_namespace }}"
+            labels:
+              masworld.redhat.com/component: exercises
+          data:
+            logging-exercise-query: |
+              {seat_number="{{ masworld_seat_number }}"} |= "Workshop log entry"
+            logging-exercise-expected-fields: |
+              timestamp, level, seat_number, run_id, message, exercise, counter
+            logging-exercise-run-id: "{{ _masworld_run_id }}"
+            navigation-exercise-service: "nav-exercise.{{ masworld_sample_namespace }}.svc:8080"
+
+    - name: Create exercise instructions ConfigMap
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: exercise-instructions
+            namespace: "{{ masworld_sample_namespace }}"
+            labels:
+              masworld.redhat.com/component: exercises
+          data:
+            logging-exercise.txt: |
+              Logging Exercise Instructions
+              ============================
+              1. Navigate to the OpenShift Console logging section
+              2. Query for logs from your seat using the label: seat_number={{ masworld_seat_number }}
+              3. Verify you see structured JSON log entries
+              4. Expected fields: timestamp, level, seat_number, run_id, message
+              5. Run ID for this session: {{ _masworld_run_id }}
+            navigation-exercise.txt: |
+              Navigation Exercise Instructions
+              ================================
+              1. Locate the nav-exercise deployment in the {{ masworld_sample_namespace }} namespace
+              2. Examine the pod, service, and deployment resources
+              3. Verify the service endpoint is accessible
+
+    # ── Set Success Fact ────────────────────────────────────────────────
+    - name: Set sample workloads ready fact
+      ansible.builtin.set_fact:
+        sample_workloads_ready: true
+
+    - name: Report sample workloads success
+      ansible.builtin.debug:
+        msg: >-
+          Sample workloads deployed in {{ masworld_sample_namespace }}.
+          Logging exercise run_id: {{ _masworld_run_id }}.
+
+  rescue:
+    - name: Set sample workloads failed fact
+      ansible.builtin.set_fact:
+        sample_workloads_ready: false
+
+    - name: Report sample workloads failure
+      ansible.builtin.fail:
+        msg: >-
+          Sample workloads deployment failed: {{ ansible_failed_result.msg | default('unknown error') }}.
+          Check resources in namespace {{ masworld_sample_namespace }}.

@@ -1,0 +1,28 @@
+---
+- name: Check ROSA HCP Cluster Fleet Status
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../secrets/rosa-token.yml
+    - ../secrets/cluster-credentials.yml
+
+  pre_tasks:
+    - name: Log in to ROSA
+      ansible.builtin.command: rosa login --token={{ rosa_token }}
+      changed_when: false
+      no_log: true
+      environment:
+        OCM_TOKEN: "{{ rosa_token }}"
+
+    - name: Build cluster definitions
+      ansible.builtin.set_fact:
+        cluster_definitions: >-
+          {{ cluster_categories | build_cluster_list(cluster_prefix, cluster_credentials, infra_state | default({})) }}
+      no_log: true
+
+  roles:
+    - role: rosa_cluster
+      vars:
+        rosa_action: status

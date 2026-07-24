@@ -49,12 +49,12 @@ The monorepo contains the following top-level directories:
 
 ```text
 maximo-world/
-├── mas-world-2026-automation/   # Ansible roles, playbooks, CLI
-├── mas-world-2026-showroom/     # Attendee workshop content
-├── mas-world-2026-public-content/
-├── mas-world-2026-acm/          # ACM policies and fleet metadata
-├── mas-world-2026-agnosticv/    # RHDP catalog configuration
-├── mas-world-2026-operations/   # Runbooks and operational tooling
+├──    # Ansible roles, playbooks, CLI
+├── showroom/     # Attendee workshop content
+├── public-content/
+├── acm/          # ACM policies and fleet metadata
+├── agnosticv/    # RHDP catalog configuration
+├── operations/   # Runbooks and operational tooling
 ├── config/                      # Shared configuration files
 └── docs/                        # Project documentation
 ```
@@ -145,11 +145,12 @@ ansible-galaxy collection list | grep -E '(kubernetes|redhat|amazon|community|ib
 The automation never stores secret values in configuration files. All
 secrets are accessed at runtime through a pluggable provider abstraction.
 
-Four providers are available:
+Five providers are available:
 
 | Provider | Config value | Use case | Backend |
 |---|---|---|---|
-| Environment variables | `env` | Local development | Shell environment |
+| File-based secrets | `file` | Local development (recommended) | Files in `secrets/` directory, referenced via `file://` in `secrets/masworld-secrets.yml` |
+| Environment variables | `env` | Local development (alternative) | Shell environment |
 | Kubernetes Secrets | `k8s` | In-cluster execution | Kubernetes API |
 | AWS Secrets Manager | `aws-sm` | Rehearsal and event | AWS Secrets Manager |
 | HashiCorp Vault | `vault` | Optional enterprise | Vault KV v2 |
@@ -186,10 +187,8 @@ ibm:
 
 aws:
   default_region: us-east-2
-  credentials_ref: "secret://mas-world/aws/credentials"
-
-acm:
-  hub_kubeconfig_ref: "secret://mas-world/acm/hub-kubeconfig"
+  access_key_id_ref: "secret://mas-world/aws/access-key-id"
+  secret_access_key_ref: "secret://mas-world/aws/secret-access-key"
 
 container_registry:
   pull_secret_ref: "secret://mas-world/registry/pull-secret"
@@ -216,8 +215,9 @@ uppercasing and replacing `/` and `-` with `_`:
 # secret://mas-world/ibm/entitlement-key  ->  MAS_WORLD_IBM_ENTITLEMENT_KEY
 export MAS_WORLD_IBM_ENTITLEMENT_KEY="<YOUR_IBM_ENTITLEMENT_KEY>"
 export MAS_WORLD_IBM_LICENSE="<YOUR_IBM_LICENSE_CONTENT>"
-export MAS_WORLD_AWS_CREDENTIALS="<YOUR_AWS_CREDENTIALS_JSON>"
-export MAS_WORLD_ACM_HUB_KUBECONFIG="<YOUR_ACM_HUB_KUBECONFIG>"
+export MAS_WORLD_AWS_ACCESS_KEY_ID="<YOUR_AWS_ACCESS_KEY_ID>"
+export MAS_WORLD_AWS_ACCESS_KEY_SECRET="<YOUR_AWS_ACCESS_KEY_SECRET>"
+export MAS_WORLD_ACM_HUB_KUBECONFIG="<YOUR_ACM_HUB_KUBECONFIG>"  # Optional; only if ACM registration is enabled
 export MAS_WORLD_REGISTRY_PULL_SECRET="<YOUR_PULL_SECRET_JSON>"
 export MAS_WORLD_CLUSTERS_SEAT_01_ADMIN_KUBECONFIG="<YOUR_KUBECONFIG>"
 ```
@@ -252,15 +252,15 @@ aws secretsmanager create-secret \
 Configuration is merged in this order. Later layers override earlier ones:
 
 ```text
-config/defaults.yaml                 <- Base defaults for all environments
+config/defaults.yaml                           <- Base defaults for all environments
    |
-config/environments/<env>.yaml       <- Environment-specific overrides
+config/environments/<env>.yaml                 <- Environment-specific overrides
    |
-config/event.yaml                    <- Event-level overrides
+config/event.yaml                              <- Event-level overrides
    |
-config/clusters.yaml (per-cluster)   <- Cluster-specific overrides
+secrets/cluster-credentials.yml (per-cluster)  <- Cluster identity and credentials
    |
-CLI arguments                        <- Runtime overrides (--env, --cluster, etc.)
+CLI arguments                                  <- Runtime overrides (--env, --cluster, etc.)
 ```
 
 The merge is deep: nested keys are merged, not replaced, unless the value
@@ -291,8 +291,7 @@ Component versions and enablement are defined in `config/components.yaml`:
 ```yaml
 components:
   openshift:
-    minimum_version: "4.18"
-    maximum_version: "4.22"
+    version: "4.21"
   mas:
     version: "9.1.x"
     channel: "9.1.x"
@@ -319,75 +318,50 @@ components:
 
 ## 7. Populate the Cluster Inventory
 
-Edit `config/clusters.yaml` to register each cluster. The file ships
-empty:
+All per-cluster data lives in `secrets/cluster-credentials.yml` under
+the `cluster_credentials:` key. This Ansible Vault encrypted file is the
+single source of truth for cluster identity and credentials (AWS keys,
+account IDs, purpose, seat_number, enabled, api_url, admin_password).
+
+Each entry key matches the generated cluster name pattern:
+`{cluster_prefix}-{category}-{index}` (e.g., `lab-seat-01`).
+
+Edit `secrets/cluster-credentials.yml` to register each cluster:
 
 ```yaml
-clusters: []
-```
-
-Add one entry per cluster:
-
-```yaml
-clusters:
-  - id: seat-01
+cluster_credentials:
+  lab-seat-01:
+    aws_access_key_id: "<YOUR_AWS_ACCESS_KEY_ID>"
+    aws_secret_access_key: "<YOUR_AWS_SECRET_ACCESS_KEY>"
+    aws_region: us-east-2
     enabled: true
     purpose: attendee
     seat_number: 1
-    connection:
-      api_url: https://api.seat-01.example.com:6443
-      admin_auth_method: kubeconfig
-      admin_secret_ref: "secret://mas-world/clusters/seat-01/admin-kubeconfig"
-    platform:
-      provider: aws
-      aws_account_id: "<YOUR_AWS_ACCOUNT_ID>"
-      aws_region: us-east-2
-    endpoints:
-      console_url: null
-      mas_url: null
-      showroom_url: null
-      logging_url: null
-    credentials:
-      student_credential_profile: attendee-default
-    metadata:
-      event: mas-world-2026
-      environment: workshop
+    api_url: "https://api.lab-seat-01.example.com:6443"
+    admin_password: "<YOUR_ADMIN_PASSWORD>"
 
-  - id: facilitator-01
+  lab-facilitator-1:
+    aws_access_key_id: "<YOUR_AWS_ACCESS_KEY_ID>"
+    aws_secret_access_key: "<YOUR_AWS_SECRET_ACCESS_KEY>"
+    aws_region: us-east-2
     enabled: true
     purpose: facilitator
-    connection:
-      api_url: https://api.facilitator-01.example.com:6443
-      admin_auth_method: kubeconfig
-      admin_secret_ref: "secret://mas-world/clusters/facilitator-01/admin-kubeconfig"
-    platform:
-      provider: aws
-      aws_account_id: "<YOUR_AWS_ACCOUNT_ID>"
-      aws_region: us-east-2
-    credentials:
-      student_credential_profile: facilitator
+    api_url: "https://api.lab-facilitator-1.example.com:6443"
+    admin_password: "<YOUR_ADMIN_PASSWORD>"
 
-  - id: spare-01
+  lab-spare-01:
+    aws_access_key_id: "<YOUR_AWS_ACCESS_KEY_ID>"
+    aws_secret_access_key: "<YOUR_AWS_SECRET_ACCESS_KEY>"
+    aws_region: us-east-2
     enabled: true
     purpose: spare
-    connection:
-      api_url: https://api.spare-01.example.com:6443
-      admin_auth_method: kubeconfig
-      admin_secret_ref: "secret://mas-world/clusters/spare-01/admin-kubeconfig"
-    platform:
-      provider: aws
-      aws_account_id: "<YOUR_AWS_ACCOUNT_ID>"
-      aws_region: us-east-2
+    api_url: "https://api.lab-spare-01.example.com:6443"
+    admin_password: "<YOUR_ADMIN_PASSWORD>"
 ```
 
-For large fleets, use the inventory generation helper:
-
-```bash
-mas-world config generate-inventory --count 50 --spare 5
-```
-
-Each cluster must have a corresponding administrative secret stored in
-the configured secret provider. See section 5.
+Event-level defaults (admin_username, auth_method,
+student_credential_profile) are defined in `config/defaults.yaml` and
+do not need to be repeated per cluster.
 
 ---
 
@@ -599,7 +573,7 @@ mas-world --env event exercise reset --cluster seat-01 --module observability
 |---|---|---|
 | `mas-world: command not found` | CLI not installed or venv not active | Run `source .venv/bin/activate && pip install -e "."` |
 | `Configuration validation FAILED: missing secret ref` | Secret not populated in provider | Populate the referenced secret (see section 5) |
-| `Cluster preflight FAILED: API unreachable` | Incorrect API URL or expired credentials | Verify `api_url` in `clusters.yaml` and refresh the admin kubeconfig |
+| `Cluster preflight FAILED: API unreachable` | Incorrect API URL or expired credentials | Verify `api_url` in `secrets/cluster-credentials.yml` and refresh the admin credentials |
 | `Cluster preflight FAILED: insufficient capacity` | Worker nodes below minimum requirements | Add worker nodes or reduce component enablement |
 | `MAS prerequisites timeout` | IBM registry pull slow or unreachable | Verify `pull_secret_ref` and IBM registry connectivity; increase timeout |
 | `LokiStack not ready` | S3 bucket missing or IAM permissions insufficient | Verify AWS credentials and bucket existence; check `aws.yaml` region |

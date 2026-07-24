@@ -1,6 +1,125 @@
-# Architecture Document — MAS World 2026
+# Architecture
 
-**Status**: DRAFT — Phase 0  
+## Overview
+
+This project runs entirely on `localhost` — all `rosa` and `aws` CLI commands execute locally, targeting remote AWS accounts via per-cluster environment variables.
+
+## Data Flow
+
+```
+group_vars/all/cluster_topology.yml    secrets/cluster-credentials.yml    group_vars/all/infra_state.yml
+         (categories, counts, sizing)   (per-cluster AWS keys, region,     (auto-discovered subnet_ids
+                        \                optionally subnet_ids)              from setup-infra.yml)
+                         \                    |                              /
+                          \                   |   credentials take         /
+                           \                  |   precedence over        /
+                            \                 |   infra_state           /
+                             \                |                       /
+                              plugins/filter/cluster_helpers.py
+                               build_cluster_list() filter
+                                        |
+                               cluster_definitions[]
+                              (flat list, one dict per cluster)
+                                        |
+                              loop + environment: per item
+                                        |
+                              rosa CLI commands with per-cluster AWS creds
+```
+
+The data merge works as follows:
+
+1. `cluster-credentials.yml` provides AWS keys and, optionally, explicit `subnet_ids` per account
+2. `infra_state.yml` provides auto-discovered `subnet_ids` produced by the infrastructure provisioning layer when subnets are not specified in credentials
+3. `build_cluster_list()` merges both sources — credentials take precedence, so manually specified subnets are never overridden by auto-discovered ones
+4. The merged data feeds into the cluster provisioning playbooks
+
+## Infrastructure Provisioning Layer
+
+Before clusters can be created, each AWS account needs networking infrastructure and ROSA account-level resources. The `setup-infra.yml` playbook automates this end-to-end.
+
+### aws_infra Role
+
+Creates the full networking stack in each AWS account:
+
+- **VPC** with a configured CIDR block
+- **Subnets**: 3 private and 3 public subnets, each placed in a separate Availability Zone for high availability
+- **Internet Gateway** attached to the VPC
+- **NAT Gateway** in a public subnet so private subnets can reach the internet
+- **Route tables** with correct associations (public subnets route through the IGW; private subnets route through the NAT GW)
+
+All resources are created per AWS account, so each account gets its own isolated networking stack.
+
+### rosa_account_setup Role
+
+Prepares each AWS account for ROSA HCP cluster creation:
+
+- Runs `rosa init` to bootstrap the account (validates quotas, creates the ROSA-linked role if needed)
+- Runs `rosa create account-roles --hosted-cp` to create the IAM roles required by ROSA HCP clusters
+
+### Orchestration
+
+`setup-infra.yml` orchestrates both roles across every account defined in `secrets/cluster-credentials.yml`:
+
+1. Iterates over all accounts in the credentials file
+2. Runs the `aws_infra` role to create networking resources
+3. Runs the `rosa_account_setup` role to prepare ROSA prerequisites
+4. Persists discovered infrastructure state (VPC IDs, subnet IDs, etc.) to `group_vars/all/infra_state.yml`
+
+The persisted `infra_state.yml` is then consumed by `build_cluster_list()` during cluster provisioning, supplying subnet IDs for accounts that do not have them specified explicitly in credentials.
+
+### Teardown
+
+The `destroy-infra.yml` playbook tears down all infrastructure created by `setup-infra.yml`. It removes resources in dependency order (clusters first if still present, then NAT gateways, internet gateways, subnets, route tables, and finally VPCs) to avoid AWS deletion errors from dangling references.
+
+## Key Mechanisms
+
+### Per-Cluster AWS Credential Isolation
+
+Each `shell` task sets `environment:` from the current loop item:
+
+```yaml
+environment:
+  AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+  AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+  AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+```
+
+This ensures each iteration of a loop talks to the correct AWS account.
+
+### Parallel Cluster Creation
+
+1. `create.yml` fires all `rosa create cluster` commands with `async/poll:0` — all launch near-simultaneously
+2. A separate `async_status` task with `until` waits for each CLI invocation to return
+3. `wait_ready.yml` polls `rosa describe cluster` per-cluster until state is `ready`
+
+The async pattern means all clusters start provisioning at roughly the same time, even though Ansible processes loop iterations sequentially for the polling phase.
+
+### Naming Convention
+
+- Pattern: `{cluster_prefix}-{category}-{index}`
+- Seats are zero-padded: `seat-01`, `seat-02`, ..., `seat-99`
+- Other categories use plain integers: `facilitator-1`, `hub-1`
+- Zero-padding ensures consistent sorting for fleets up to 99 seats
+
+### Role Structure
+
+- **rosa_preflight**: Validates CLI tools, ROSA login, AWS credentials, topology
+- **rosa_cluster**: Dispatches by `rosa_action` variable to specific task files (create, wait_ready, machinepool, verify, status, destroy, destroy_cleanup)
+
+### Custom Filter Plugin
+
+`build_cluster_list()` merges topology + credentials into a flat list. It:
+- Sorts categories alphabetically for deterministic ordering
+- Validates every generated cluster name has matching credentials
+- Raises a clear error on missing credentials (fails before any cluster creation)
+
+
+---
+
+## Phase 2: MAS World Application Layer
+
+
+**Status**: DRAFT — Phase 0
 **Date**: 2026-07-19
 
 ---
@@ -128,7 +247,7 @@ maximo-world/                          # Monorepo root
 │   ├── adr/                           # Architecture Decision Records
 │   └── ...
 │
-├── mas-world-2026-automation/         # Primary automation
+├──          # Primary automation
 │   ├── ansible.cfg
 │   ├── galaxy.yml                     # Ansible collection metadata
 │   ├── requirements.yml               # Ansible Galaxy dependencies
@@ -145,7 +264,7 @@ maximo-world/                          # Monorepo root
 │   ├── tests/                         # Unit, integration, security tests
 │   └── molecule/                      # Ansible Molecule test scenarios
 │
-├── mas-world-2026-showroom/           # Attendee workshop content
+├── showroom/           # Attendee workshop content
 │   ├── content/modules/ROOT/          # Antora content
 │   │   ├── nav.adoc
 │   │   ├── pages/                     # Workshop pages (9 pages)
@@ -154,21 +273,21 @@ maximo-world/                          # Monorepo root
 │   ├── site.yml                       # Antora site configuration
 │   └── ui-config.yml                  # Showroom UI configuration
 │
-├── mas-world-2026-public-content/     # Sanitized reusable examples
+├── public-content/     # Sanitized reusable examples
 │   ├── operators/
 │   ├── logging/
 │   ├── identity/
 │   └── ...
 │
-├── mas-world-2026-acm/               # ACM hub configuration
+├── acm/               # ACM hub configuration
 │   ├── managedclustersets/
 │   ├── policies/
 │   ├── placements/
 │   └── demo-assets/
 │
-├── mas-world-2026-agnosticv/          # AgnosticV catalog
+├── agnosticv/          # AgnosticV catalog
 │
-└── mas-world-2026-operations/         # Operational tooling
+└── operations/         # Operational tooling
     ├── seat-assignment/
     ├── fleet-dashboard/
     ├── runbooks/
@@ -446,7 +565,7 @@ flowchart TD
 flowchart LR
     D[defaults.yaml] --> E[environments/event.yaml]
     E --> EV[event.yaml]
-    EV --> C[clusters.yaml<br/>per-cluster overrides]
+    EV --> C[cluster-credentials.yml<br/>per-cluster identity]
     C --> CMD[Command-line<br/>arguments]
     CMD --> EFF[Effective<br/>Configuration]
     EFF --> VAL{Schema<br/>Validation}

@@ -1,0 +1,116 @@
+---
+- name: Include build_definitions
+  ansible.builtin.include_tasks: build_definitions.yml
+
+- name: Get cluster IDs for cleanup
+  ansible.builtin.shell: |
+    set -o pipefail
+    rosa describe cluster --cluster={{ item.name }} --output json 2>/dev/null \
+      | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" || echo ""
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: cluster_id_results
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Build cluster ID map
+  ansible.builtin.set_fact:
+    cluster_id_map: >-
+      {{ cluster_id_map | default({}) | combine({
+        item.item.name: item.stdout | trim
+      }) }}
+  loop: "{{ cluster_id_results.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: item.stdout | trim | length > 0
+
+- name: Display clusters to be destroyed
+  ansible.builtin.debug:
+    msg: "Will destroy {{ cluster_id_map | default({}) | length }} clusters: {{ cluster_id_map | default({}) | list }}"
+
+- name: Delete ROSA HCP clusters (async)
+  ansible.builtin.shell: |
+    set -o pipefail
+    rosa delete cluster --cluster={{ item.name }} --yes --best-effort 2>&1
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  async: "{{ rosa_delete_async_timeout }}"
+  poll: 0
+  register: cluster_delete_jobs
+  when: item.name in (cluster_id_map | default({}))
+  no_log: true
+
+- name: Wait for rosa delete commands to complete
+  ansible.builtin.async_status:
+    jid: "{{ item.ansible_job_id }}"
+  loop: "{{ cluster_delete_jobs.results | selectattr('ansible_job_id', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  register: cluster_delete_results
+  until: cluster_delete_results.finished
+  retries: "{{ rosa_delete_ready_retries }}"
+  delay: "{{ rosa_delete_ready_delay }}"
+  failed_when: false
+  no_log: true
+
+- name: Report cluster deletion results
+  ansible.builtin.debug:
+    msg: "{{ item.item.item.name | default('unknown') }}: {{ 'OK' if (item.rc | default(0)) == 0 else 'FAILED' }}"
+  loop: "{{ cluster_delete_results.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.item.name | default('n/a') }}"
+  when: item is not skipped
+
+- name: Warn if any cluster deletion failed
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: Deletion failed for {{ failed_deletes | join(', ') }}.
+      Continuing with cleanup of successfully deleted clusters.
+  vars:
+    failed_deletes: >-
+      {{ cluster_delete_results.results | default([])
+         | selectattr('rc', 'defined')
+         | selectattr('rc', 'ne', 0)
+         | map(attribute='item.item.name')
+         | list }}
+  when: failed_deletes | length > 0
+
+- name: Wait for clusters to be fully uninstalled
+  ansible.builtin.shell: |
+    set -o pipefail
+    rosa describe cluster --cluster={{ item.name }} --output json 2>&1
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: cluster_gone_check
+  until: cluster_gone_check.rc != 0
+  retries: "{{ rosa_delete_ready_retries }}"
+  delay: "{{ rosa_delete_ready_delay }}"
+  failed_when: false
+  when: item.name in (cluster_id_map | default({}))
+  no_log: true
+
+- name: All clusters destroyed
+  ansible.builtin.debug:
+    msg: "All {{ cluster_id_map | default({}) | length }} clusters have been destroyed."

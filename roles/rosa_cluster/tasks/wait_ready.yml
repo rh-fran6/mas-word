@@ -1,0 +1,27 @@
+---
+- name: Include build_definitions
+  ansible.builtin.include_tasks: build_definitions.yml
+
+- name: Wait for clusters to reach ready state
+  ansible.builtin.shell: |
+    set -o pipefail
+    rosa describe cluster --cluster={{ item.name }} --output json 2>/dev/null \
+      | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status',{}).get('state','unknown'))"
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: cluster_state_check
+  until: cluster_state_check.stdout | trim == 'ready'
+  retries: "{{ rosa_ready_retries }}"
+  delay: "{{ rosa_ready_delay }}"
+  no_log: true
+
+- name: All clusters are ready
+  ansible.builtin.debug:
+    msg: "All {{ cluster_definitions | length }} clusters have reached ready state."

@@ -1,0 +1,526 @@
+---
+- name: Lab Session Readiness Test
+  hosts: "{{ target_cluster | default('localhost') }}"
+  gather_facts: false
+  vars:
+    masworld_cluster_id: "{{ masworld_cluster_id | default(cluster_id | default('')) }}"
+    masworld_cluster_purpose: "{{ cluster_purpose | default('attendee') }}"
+    masworld_seat_number: "{{ seat_number | default('01') }}"
+    _seat: "{{ '%02d' | format(masworld_seat_number | int) }}"
+    _student_user: "user{{ _seat }}"
+    _student_ns: "student-{{ _seat }}"
+    _mas_core_ns: mas-inst1-core
+    _mas_manage_ns: mas-inst1-manage
+    _report_dir: /tmp/masworld-lab-readiness
+    _results: []
+    _exercise_results: {}
+
+  module_defaults:
+    group/kubernetes.core.k8s:
+      host: "{{ masworld_cluster_api_url | default(omit, true) }}"
+      api_key: "{{ masworld_api_token | default(omit, true) }}"
+      kubeconfig: "{{ masworld_kubeconfig | default(omit, true) }}"
+      validate_certs: "{{ masworld_validate_certs | default(true) }}"
+
+  pre_tasks:
+    - name: Exchange username/password for OAuth token
+      when:
+        - masworld_admin_password is defined
+        - masworld_admin_password | length > 0
+        - masworld_api_token is not defined or masworld_api_token | length == 0
+      block:
+        - name: Discover OAuth server URL
+          ansible.builtin.uri:
+            url: "{{ masworld_cluster_api_url }}/.well-known/oauth-authorization-server"
+            method: GET
+            validate_certs: "{{ masworld_validate_certs | default(true) }}"
+            status_code: [200]
+          register: _oauth_metadata
+
+        - name: Request OAuth token from cluster
+          ansible.builtin.uri:
+            url: "{{ _oauth_metadata.json.authorization_endpoint }}?response_type=token&client_id=openshift-challenging-client"
+            method: GET
+            user: "{{ masworld_admin_username | default('cluster-admin') }}"
+            password: "{{ masworld_admin_password }}"
+            force_basic_auth: true
+            validate_certs: "{{ masworld_validate_certs | default(true) }}"
+            follow_redirects: none
+            status_code: [302]
+          register: _oauth_response
+          no_log: true
+
+        - name: Extract bearer token from redirect
+          ansible.builtin.set_fact:
+            masworld_api_token: "{{ _oauth_response.location | regex_search('access_token=([^&]+)', '\\1') | first }}"
+          no_log: true
+
+  tasks:
+    # ── Exercise 1: Access & Readiness ─────────────────────────────
+    - name: "Ex1 — OpenShift API"
+      kubernetes.core.k8s_cluster_info:
+      register: _ex1_api
+      failed_when: false
+
+    - name: "Ex1 — Console route"
+      kubernetes.core.k8s_info:
+        api_version: route.openshift.io/v1
+        kind: Route
+        name: console
+        namespace: openshift-console
+      register: _ex1_console
+      failed_when: false
+
+    - name: "Ex1 — MAS Core Suite CR"
+      kubernetes.core.k8s_info:
+        api_version: core.mas.ibm.com/v1
+        kind: Suite
+        namespace: "{{ _mas_core_ns }}"
+      register: _ex1_suite
+      failed_when: false
+
+    - name: "Ex1 — Manage workspace"
+      kubernetes.core.k8s_info:
+        api_version: apps.mas.ibm.com/v1
+        kind: ManageWorkspace
+        namespace: "{{ _mas_manage_ns }}"
+      register: _ex1_manage
+      failed_when: false
+
+    - name: "Ex1 — htpasswd secret"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: masworld-htpasswd-secret
+        namespace: openshift-config
+      register: _ex1_htpasswd
+      failed_when: false
+
+    - name: "Ex1 — Student namespace"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "{{ _student_ns }}"
+      register: _ex1_ns
+      failed_when: false
+
+    - name: "Ex1 — Student RoleBinding"
+      kubernetes.core.k8s_info:
+        api_version: rbac.authorization.k8s.io/v1
+        kind: RoleBinding
+        name: "{{ _student_user }}-admin"
+        namespace: "{{ _student_ns }}"
+      register: _ex1_rb
+      failed_when: false
+
+    - name: "Ex1 — Nodes"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+      register: _ex1_nodes
+      failed_when: false
+
+    - name: Evaluate Exercise 1
+      ansible.builtin.set_fact:
+        _ex1:
+          api: "{{ _ex1_api is succeeded }}"
+          console: "{{ (_ex1_console.resources | default([])) | length > 0 }}"
+          suite_ready: >-
+            {{ (_ex1_suite.resources | default([]) | length > 0) and
+               (_ex1_suite.resources[0].status.conditions | default([])
+                 | selectattr('type', 'equalto', 'Ready')
+                 | selectattr('status', 'equalto', 'True')
+                 | list | length > 0) }}
+          manage_ready: >-
+            {{ (_ex1_manage.resources | default([]) | length > 0) and
+               (_ex1_manage.resources[0].status.conditions | default([])
+                 | selectattr('type', 'equalto', 'Ready')
+                 | selectattr('status', 'equalto', 'True')
+                 | list | length > 0) }}
+          htpasswd: "{{ (_ex1_htpasswd.resources | default([])) | length > 0 }}"
+          student_ns: "{{ (_ex1_ns.resources | default([])) | length > 0 }}"
+          student_rb: "{{ (_ex1_rb.resources | default([])) | length > 0 }}"
+          nodes_ready: >-
+            {{ (_ex1_nodes.resources | default([])
+                 | selectattr('status.conditions', 'defined')
+                 | list | length) > 0 }}
+
+    # ── Exercise 2: Navigation & Search ────────────────────────────
+    - name: "Ex2 — MAS core namespace"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "{{ _mas_core_ns }}"
+      register: _ex2_ns_core
+      failed_when: false
+
+    - name: "Ex2 — MAS manage namespace"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "{{ _mas_manage_ns }}"
+      register: _ex2_ns_manage
+      failed_when: false
+
+    - name: "Ex2 — CSVs in mas-inst1-core"
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        namespace: "{{ _mas_core_ns }}"
+      register: _ex2_csvs
+      failed_when: false
+
+    - name: "Ex2 — Subscriptions in mas-inst1-core"
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        namespace: "{{ _mas_core_ns }}"
+      register: _ex2_subs
+      failed_when: false
+
+    - name: Evaluate Exercise 2
+      ansible.builtin.set_fact:
+        _ex2:
+          core_ns: "{{ (_ex2_ns_core.resources | default([])) | length > 0 }}"
+          manage_ns: "{{ (_ex2_ns_manage.resources | default([])) | length > 0 }}"
+          csvs: "{{ (_ex2_csvs.resources | default([])) | length > 0 }}"
+          subscriptions: "{{ (_ex2_subs.resources | default([])) | length > 0 }}"
+
+    # ── Exercise 3: ACM Fleet Management ───────────────────────────
+    - name: "Ex3 — Event ConfigMap"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        name: masworld-event-marker
+        namespace: masworld-system
+      register: _ex3_cm
+      failed_when: false
+
+    - name: Evaluate Exercise 3
+      ansible.builtin.set_fact:
+        _ex3:
+          event_marker: "{{ (_ex3_cm.resources | default([])) | length > 0 }}"
+          event_value: "{{ (_ex3_cm.resources[0].data.event | default('')) if (_ex3_cm.resources | default([]) | length > 0) else '' }}"
+
+    # ── Exercise 4: Updates ────────────────────────────────────────
+    - name: "Ex4 — ClusterVersion"
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: ClusterVersion
+        name: version
+      register: _ex4_cv
+      failed_when: false
+
+    - name: "Ex4 — InstallPlans"
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: InstallPlan
+        namespace: "{{ _mas_core_ns }}"
+      register: _ex4_ip
+      failed_when: false
+
+    - name: Evaluate Exercise 4
+      ansible.builtin.set_fact:
+        _ex4:
+          cluster_version: "{{ (_ex4_cv.resources | default([])) | length > 0 }}"
+          ocp_version: "{{ (_ex4_cv.resources[0].status.desired.version | default('unknown')) if (_ex4_cv.resources | default([]) | length > 0) else 'unknown' }}"
+          install_plans: "{{ (_ex4_ip.resources | default([])) | length }}"
+
+    # ── Exercise 5: Observability ──────────────────────────────────
+    - name: "Ex5 — Logging CSVs"
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        namespace: openshift-logging
+      register: _ex5_csvs
+      failed_when: false
+
+    - name: "Ex5 — LokiStack CR"
+      kubernetes.core.k8s_info:
+        api_version: loki.grafana.com/v1
+        kind: LokiStack
+        namespace: openshift-logging
+      register: _ex5_loki
+      failed_when: false
+
+    - name: "Ex5 — ClusterLogForwarder"
+      kubernetes.core.k8s_info:
+        api_version: observability.openshift.io/v1
+        kind: ClusterLogForwarder
+        namespace: openshift-logging
+      register: _ex5_clf
+      failed_when: false
+
+    - name: "Ex5 — S3 storage secret"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        namespace: openshift-logging
+        label_selectors:
+          - masworld.io/component=loki-s3
+      register: _ex5_s3
+      failed_when: false
+
+    - name: "Ex5 — Loki gateway service"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Service
+        name: logging-loki-gateway-http
+        namespace: openshift-logging
+      register: _ex5_gw
+      failed_when: false
+
+    - name: Evaluate Exercise 5
+      ansible.builtin.set_fact:
+        _ex5:
+          logging_csvs: >-
+            {{ (_ex5_csvs.resources | default([])
+                 | selectattr('status.phase', 'defined')
+                 | selectattr('status.phase', 'equalto', 'Succeeded')
+                 | list | length) > 0 }}
+          lokistack_ready: >-
+            {{ (_ex5_loki.resources | default([]) | length > 0) and
+               (_ex5_loki.resources[0].status.conditions | default([])
+                 | selectattr('type', 'equalto', 'Ready')
+                 | selectattr('status', 'equalto', 'True')
+                 | list | length > 0) }}
+          clf_ready: >-
+            {{ (_ex5_clf.resources | default([]) | length > 0) and
+               (_ex5_clf.resources[0].status.conditions | default([])
+                 | selectattr('type', 'equalto', 'Ready')
+                 | selectattr('status', 'equalto', 'True')
+                 | list | length > 0) }}
+          s3_secret: "{{ (_ex5_s3.resources | default([])) | length > 0 }}"
+          loki_gateway: "{{ (_ex5_gw.resources | default([])) | length > 0 }}"
+
+    # ── Exercise 6: Identity Integration ───────────────────────────
+    - name: "Ex6 — OAuth cluster config"
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: OAuth
+        name: cluster
+      register: _ex6_oauth
+      failed_when: false
+
+    - name: "Ex6 — Keycloak CR"
+      kubernetes.core.k8s_info:
+        api_version: k8s.keycloak.org/v2alpha1
+        kind: Keycloak
+        namespace: masworld-keycloak
+      register: _ex6_kc
+      failed_when: false
+
+    - name: "Ex6 — OpenLDAP pod"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: masworld-keycloak
+        label_selectors:
+          - app=openldap
+      register: _ex6_ldap
+      failed_when: false
+
+    - name: "Ex6 — KeycloakRealmImport"
+      kubernetes.core.k8s_info:
+        api_version: k8s.keycloak.org/v2alpha1
+        kind: KeycloakRealmImport
+        name: masworld-realm
+        namespace: masworld-keycloak
+      register: _ex6_realm
+      failed_when: false
+
+    - name: "Ex6 — OIDC client secret"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: keycloak-oidc-client-secret
+        namespace: openshift-config
+      register: _ex6_oidc
+      failed_when: false
+
+    - name: Evaluate Exercise 6
+      ansible.builtin.set_fact:
+        _ex6:
+          htpasswd_provider: >-
+            {{ (_ex6_oauth.resources | default([]) | length > 0) and
+               (_ex6_oauth.resources[0].spec.identityProviders | default([])
+                 | selectattr('type', 'equalto', 'HTPasswd')
+                 | list | length > 0) }}
+          keycloak_ready: >-
+            {{ (_ex6_kc.resources | default([]) | length > 0) and
+               (_ex6_kc.resources[0].status.conditions | default([])
+                 | selectattr('type', 'equalto', 'Ready')
+                 | selectattr('status', 'equalto', 'True')
+                 | list | length > 0) }}
+          openldap_running: >-
+            {{ (_ex6_ldap.resources | default([])
+                 | selectattr('status.phase', 'equalto', 'Running')
+                 | list | length) > 0 }}
+          realm_import: "{{ (_ex6_realm.resources | default([])) | length > 0 }}"
+          oidc_secret: "{{ (_ex6_oidc.resources | default([])) | length > 0 }}"
+
+    # ── Workshop Infrastructure ────────────────────────────────────
+    - name: "Infra — Showroom pod"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: showroom
+        label_selectors:
+          - app.kubernetes.io/name=showroom
+      register: _infra_showroom
+      failed_when: false
+
+    - name: "Infra — masworld-exercises namespace"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: masworld-exercises
+      register: _infra_exercises_ns
+      failed_when: false
+
+    - name: Evaluate Workshop Infrastructure
+      ansible.builtin.set_fact:
+        _infra:
+          showroom: >-
+            {{ (_infra_showroom.resources | default([])
+                 | selectattr('status.phase', 'equalto', 'Running')
+                 | list | length) > 0 }}
+          exercises_ns: "{{ (_infra_exercises_ns.resources | default([])) | length > 0 }}"
+
+    # ── Summary & Report ───────────────────────────────────────────
+    - name: Build result summary
+      ansible.builtin.set_fact:
+        _lab_report:
+          cluster: "{{ masworld_cluster_id }}"
+          seat: "{{ _seat }}"
+          purpose: "{{ masworld_cluster_purpose }}"
+          exercise_1_access:
+            api: "{{ _ex1.api | bool }}"
+            console: "{{ _ex1.console | bool }}"
+            mas_suite_ready: "{{ _ex1.suite_ready | bool }}"
+            manage_ready: "{{ _ex1.manage_ready | bool }}"
+            htpasswd_secret: "{{ _ex1.htpasswd | bool }}"
+            student_namespace: "{{ _ex1.student_ns | bool }}"
+            student_rolebinding: "{{ _ex1.student_rb | bool }}"
+            nodes_ready: "{{ _ex1.nodes_ready | bool }}"
+          exercise_2_navigation:
+            core_namespace: "{{ _ex2.core_ns | bool }}"
+            manage_namespace: "{{ _ex2.manage_ns | bool }}"
+            csvs_present: "{{ _ex2.csvs | bool }}"
+            subscriptions_present: "{{ _ex2.subscriptions | bool }}"
+          exercise_3_acm:
+            event_marker: "{{ _ex3.event_marker | bool }}"
+            event_value: "{{ _ex3.event_value }}"
+          exercise_4_updates:
+            cluster_version: "{{ _ex4.cluster_version | bool }}"
+            ocp_version: "{{ _ex4.ocp_version }}"
+            install_plans: "{{ _ex4.install_plans }}"
+          exercise_5_observability:
+            logging_csvs: "{{ _ex5.logging_csvs | bool }}"
+            lokistack_ready: "{{ _ex5.lokistack_ready | bool }}"
+            clf_ready: "{{ _ex5.clf_ready | bool }}"
+            s3_secret: "{{ _ex5.s3_secret | bool }}"
+            loki_gateway: "{{ _ex5.loki_gateway | bool }}"
+          exercise_6_identity:
+            htpasswd_provider: "{{ _ex6.htpasswd_provider | bool }}"
+            keycloak_ready: "{{ _ex6.keycloak_ready | bool }}"
+            openldap_running: "{{ _ex6.openldap_running | bool }}"
+            realm_import: "{{ _ex6.realm_import | bool }}"
+            oidc_secret: "{{ _ex6.oidc_secret | bool }}"
+          infrastructure:
+            showroom: "{{ _infra.showroom | bool }}"
+            exercises_namespace: "{{ _infra.exercises_ns | bool }}"
+
+    - name: Ensure report directory exists
+      ansible.builtin.file:
+        path: "{{ _report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Write YAML report
+      ansible.builtin.copy:
+        content: "{{ _lab_report | to_nice_yaml }}"
+        dest: "{{ _report_dir }}/{{ masworld_cluster_id }}.yml"
+        mode: "0644"
+
+    - name: Count pass and fail
+      ansible.builtin.set_fact:
+        _total_checks: >-
+          {{ [_ex1.api, _ex1.console, _ex1.suite_ready, _ex1.manage_ready,
+              _ex1.htpasswd, _ex1.student_ns, _ex1.student_rb, _ex1.nodes_ready,
+              _ex2.core_ns, _ex2.manage_ns, _ex2.csvs, _ex2.subscriptions,
+              _ex3.event_marker,
+              _ex4.cluster_version,
+              _ex5.logging_csvs, _ex5.lokistack_ready, _ex5.clf_ready,
+              _ex5.s3_secret, _ex5.loki_gateway,
+              _ex6.htpasswd_provider, _ex6.keycloak_ready, _ex6.openldap_running,
+              _ex6.realm_import, _ex6.oidc_secret,
+              _infra.showroom, _infra.exercises_ns] }}
+        _pass_count: >-
+          {{ [_ex1.api, _ex1.console, _ex1.suite_ready, _ex1.manage_ready,
+              _ex1.htpasswd, _ex1.student_ns, _ex1.student_rb, _ex1.nodes_ready,
+              _ex2.core_ns, _ex2.manage_ns, _ex2.csvs, _ex2.subscriptions,
+              _ex3.event_marker,
+              _ex4.cluster_version,
+              _ex5.logging_csvs, _ex5.lokistack_ready, _ex5.clf_ready,
+              _ex5.s3_secret, _ex5.loki_gateway,
+              _ex6.htpasswd_provider, _ex6.keycloak_ready, _ex6.openldap_running,
+              _ex6.realm_import, _ex6.oidc_secret,
+              _infra.showroom, _infra.exercises_ns]
+              | select('equalto', true) | list | length }}
+
+    - name: Display lab readiness summary
+      ansible.builtin.debug:
+        msg: |
+          ═══════════════════════════════════════════════════════════
+           Lab Session Readiness — {{ masworld_cluster_id }}
+           Seat: {{ _seat }}  |  Purpose: {{ masworld_cluster_purpose }}
+          ═══════════════════════════════════════════════════════════
+
+           Exercise 1 — Access & Readiness
+             API: {{ _ex1.api }}  Console: {{ _ex1.console }}
+             MAS Suite: {{ _ex1.suite_ready }}  Manage: {{ _ex1.manage_ready }}
+             htpasswd: {{ _ex1.htpasswd }}  Student NS: {{ _ex1.student_ns }}
+             RoleBinding: {{ _ex1.student_rb }}  Nodes: {{ _ex1.nodes_ready }}
+
+           Exercise 2 — Navigation & Search
+             Core NS: {{ _ex2.core_ns }}  Manage NS: {{ _ex2.manage_ns }}
+             CSVs: {{ _ex2.csvs }}  Subscriptions: {{ _ex2.subscriptions }}
+
+           Exercise 3 — ACM Fleet Management
+             Event Marker: {{ _ex3.event_marker }} ({{ _ex3.event_value }})
+
+           Exercise 4 — Updates
+             ClusterVersion: {{ _ex4.cluster_version }} ({{ _ex4.ocp_version }})
+             InstallPlans: {{ _ex4.install_plans }}
+
+           Exercise 5 — Observability & Logging
+             Logging CSVs: {{ _ex5.logging_csvs }}  LokiStack: {{ _ex5.lokistack_ready }}
+             CLF: {{ _ex5.clf_ready }}  S3: {{ _ex5.s3_secret }}
+             Loki GW: {{ _ex5.loki_gateway }}
+
+           Exercise 6 — Identity Integration
+             HTPasswd: {{ _ex6.htpasswd_provider }}  Keycloak: {{ _ex6.keycloak_ready }}
+             OpenLDAP: {{ _ex6.openldap_running }}  Realm: {{ _ex6.realm_import }}
+             OIDC: {{ _ex6.oidc_secret }}
+
+           Infrastructure
+             Showroom: {{ _infra.showroom }}  Exercises NS: {{ _infra.exercises_ns }}
+
+          ───────────────────────────────────────────────────────────
+           Total: {{ _pass_count }} / {{ _total_checks | length }} passed
+           Report: {{ _report_dir }}/{{ masworld_cluster_id }}.yml
+          ═══════════════════════════════════════════════════════════
+
+    - name: Fail if any critical checks failed
+      ansible.builtin.assert:
+        that:
+          - _ex1.api | bool
+          - _ex1.suite_ready | bool
+          - _ex1.manage_ready | bool
+          - _ex1.htpasswd | bool
+          - _ex1.student_ns | bool
+          - _ex5.logging_csvs | bool
+          - _ex5.lokistack_ready | bool
+        fail_msg: "Lab readiness check FAILED — review report at {{ _report_dir }}/{{ masworld_cluster_id }}.yml"
+        success_msg: "Lab readiness check PASSED — cluster is ready for the workshop"

@@ -1,4 +1,159 @@
-# Teardown Guide — MAS World 2026
+# Teardown Guide
+
+Step-by-step procedure for decommissioning the ROSA HCP cluster fleet.
+
+> **Last updated:** 2026-07-20
+
+---
+
+## Prerequisites
+
+- Same CLI tools and credentials used for provisioning
+- Decrypted secrets (if using Ansible Vault): `make decrypt-secrets`
+
+## Quick Teardown
+
+```bash
+# Interactive (with confirmation prompt)
+make destroy
+
+# Automated (no confirmation — use with caution)
+make destroy-auto
+```
+
+## Full Teardown Sequence
+
+The complete teardown requires destroying clusters first, then tearing down the
+underlying AWS infrastructure. Follow this order:
+
+1. **Destroy all ROSA HCP clusters**
+   ```bash
+   make destroy
+   ```
+2. **Wait for cluster destruction to complete** -- verify with `make status` that
+   all clusters have been fully removed before proceeding.
+3. **Tear down VPCs, subnets, NAT gateways, and Internet Gateways**
+   ```bash
+   make destroy-infra
+   ```
+4. **Verify all resources are cleaned up** -- confirm that no clusters, VPCs, or
+   related networking resources remain in any of the target AWS accounts.
+
+## What the Destroy Playbook Does
+
+### Phase 1: Preflight (rosa_preflight)
+- Validates CLI tools are installed
+- Logs in to ROSA with the offline token
+- Builds cluster definitions from topology + credentials
+
+### Phase 2: Cluster Deletion (rosa_action=destroy)
+1. Retrieves cluster IDs via `rosa describe cluster --output json`
+2. Fires `rosa delete cluster --best-effort --yes` for all clusters asynchronously
+3. Waits for delete commands to complete
+4. Polls until clusters are fully removed from ROSA (no longer returned by `rosa describe`)
+
+### Phase 3: IAM Cleanup (rosa_action=destroy_cleanup)
+1. Deletes operator roles: `rosa delete operator-roles --cluster=<id> --mode=auto --yes`
+2. Deletes OIDC providers: `rosa delete oidc-provider --cluster=<id> --mode=auto --yes`
+3. Both operations use `failed_when: false` — tolerates already-cleaned-up resources
+
+## Infrastructure Teardown
+
+After all ROSA HCP clusters have been destroyed, use `make destroy-infra` to
+tear down the underlying AWS networking infrastructure for each account:
+
+- VPC
+- NAT gateway
+- Internet Gateway
+- Public and private subnets
+- Route tables and associations
+
+```bash
+# Interactive (prompts for confirmation before proceeding)
+make destroy-infra
+
+# Automated / scripted (skips confirmation — use with caution)
+make destroy-infra-auto
+```
+
+> **Warning:** You must run `make destroy-infra` only AFTER all clusters have
+> been fully destroyed (`make destroy`). Running it while clusters still exist
+> will orphan cluster resources -- the clusters will lose their underlying
+> network infrastructure and become unmanageable through normal ROSA tooling.
+
+## Post-Teardown Verification
+
+```bash
+# Verify no clusters remain
+make status
+
+# Manually verify in each AWS account
+for region in us-east-1 us-west-2; do
+  AWS_ACCESS_KEY_ID=AKIA... AWS_SECRET_ACCESS_KEY=... \
+    rosa list clusters --region $region
+done
+```
+
+## Manual Cleanup (If Automated Destroy Fails)
+
+### Delete Individual Clusters
+```bash
+rosa delete cluster --cluster=lab-seat-01 --yes --best-effort
+```
+
+### Clean Up Orphaned IAM Resources
+```bash
+# List operator roles
+rosa list operator-roles --cluster=<cluster-id>
+
+# Delete manually
+rosa delete operator-roles --cluster=<cluster-id> --mode=auto --yes
+rosa delete oidc-provider --cluster=<cluster-id> --mode=auto --yes
+```
+
+### Clean Up AWS Resources Manually
+If ROSA cleanup is incomplete, check for:
+- EC2 instances tagged with the cluster name
+- Load balancers in the VPC
+- Security groups created by the cluster
+- EBS volumes attached to worker nodes
+
+```bash
+# Find resources by cluster tag
+aws ec2 describe-instances --filters "Name=tag:Name,Values=*lab-seat-01*"
+aws elbv2 describe-load-balancers
+aws ec2 describe-security-groups --filters "Name=tag:red-hat-managed,Values=true"
+```
+
+## Post-Workshop Checklist
+
+- [ ] Run `make destroy` or `make destroy-auto`
+- [ ] Verify all clusters removed: `make status`
+- [ ] Run `make destroy-infra` to tear down VPCs and networking infrastructure
+- [ ] Verify no VPCs or networking resources remain in target AWS accounts
+- [ ] Rotate or deactivate AWS access keys used for the workshop
+- [ ] Delete or re-encrypt `secrets/cluster-credentials.yml`
+- [ ] Delete `secrets/rosa-token.yml` if token is no longer needed
+- [ ] Remove `cluster-report.txt` if generated: `make clean`
+- [ ] Archive any logs or reports needed for post-workshop review
+
+## Timing Expectations
+
+| Operation | Typical Duration |
+|---|---|
+| `rosa delete cluster` command | 1–2 minutes to initiate |
+| Cluster fully removed | 10–20 minutes |
+| IAM cleanup | 1–2 minutes |
+| Infrastructure teardown (`make destroy-infra`) | 2–5 minutes |
+| **Total teardown (clusters + infrastructure)** | **20–30 minutes** |
+
+Teardown is faster than provisioning because cluster deletion doesn't wait for all components to spin down before returning — it marks the cluster for deletion and background processes handle the rest.
+
+
+---
+
+## Phase 2: MAS World Application Layer
+
 
 **Status**: DRAFT — Phase 8
 **Date**: 2026-07-19

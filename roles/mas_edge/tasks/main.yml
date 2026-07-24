@@ -1,0 +1,108 @@
+---
+# MAS Edge (MVI Edge) configuration
+- name: Configure MAS Edge
+  block:
+    # ── Validate Docker Host ────────────────────────────────────────────
+    - name: Validate Docker host is configured
+      ansible.builtin.assert:
+        that:
+          - masworld_mas_edge_docker_host | length > 0
+        fail_msg: >-
+          masworld_mas_edge_docker_host must be set when MAS Edge is enabled.
+        quiet: true
+
+    # ── Verify Docker Host Accessible ───────────────────────────────────
+    - name: Verify Docker host is accessible
+      ansible.builtin.uri:
+        url: "http://{{ masworld_mas_edge_docker_host }}:2376/version"
+        method: GET
+        timeout: "{{ masworld_mas_edge_connect_timeout }}"
+        status_code:
+          - 200
+          - 403
+      register: _masworld_edge_docker_check
+      failed_when: false
+
+    - name: Fail if Docker host is unreachable
+      ansible.builtin.fail:
+        msg: >-
+          Docker host {{ masworld_mas_edge_docker_host }} is not accessible.
+          Verify network connectivity and Docker daemon status.
+      when:
+        - _masworld_edge_docker_check.status is not defined or
+          _masworld_edge_docker_check.status not in [200, 403]
+
+    # ── Verify GPU Availability ─────────────────────────────────────────
+    - name: Verify GPU availability on Docker host
+      ansible.builtin.uri:
+        url: "http://{{ masworld_mas_edge_docker_host }}:2376/info"
+        method: GET
+        timeout: "{{ masworld_mas_edge_connect_timeout }}"
+        return_content: true
+      register: _masworld_edge_docker_info
+      when: masworld_mas_edge_gpu_required | bool
+
+    - name: Check GPU runtime is present
+      ansible.builtin.assert:
+        that:
+          - "'nvidia' in (_masworld_edge_docker_info.json.Runtimes | default({}) | string | lower)"
+        fail_msg: >-
+          GPU runtime not found on Docker host {{ masworld_mas_edge_docker_host }}.
+          MAS Edge requires nvidia-container-runtime when masworld_mas_edge_gpu_required=true.
+        quiet: true
+      when: masworld_mas_edge_gpu_required | bool
+
+    # ── Configure MAS Edge Connection ───────────────────────────────────
+    - name: Create MAS Edge connection secret
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mas-edge-connection
+            namespace: "mas-{{ masworld_mas_instance_id }}-core"
+            labels:
+              masworld.redhat.com/component: mas-edge
+          type: Opaque
+          stringData:
+            docker_host: "{{ masworld_mas_edge_docker_host }}"
+            gpu_required: "{{ masworld_mas_edge_gpu_required | string }}"
+      no_log: true
+
+    - name: Create MAS Edge configuration ConfigMap
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: mas-edge-config
+            namespace: "mas-{{ masworld_mas_instance_id }}-core"
+            labels:
+              masworld.redhat.com/component: mas-edge
+          data:
+            docker_host: "{{ masworld_mas_edge_docker_host }}"
+            gpu_required: "{{ masworld_mas_edge_gpu_required | string }}"
+
+    # ── Set Success Fact ────────────────────────────────────────────────
+    - name: Set MAS Edge ready fact
+      ansible.builtin.set_fact:
+        mas_edge_ready: true
+
+    - name: Report MAS Edge success
+      ansible.builtin.debug:
+        msg: >-
+          MAS Edge configured. Docker host: {{ masworld_mas_edge_docker_host }},
+          GPU required: {{ masworld_mas_edge_gpu_required }}.
+
+  rescue:
+    - name: Set MAS Edge failed fact
+      ansible.builtin.set_fact:
+        mas_edge_ready: false
+
+    - name: Report MAS Edge failure
+      ansible.builtin.fail:
+        msg: >-
+          MAS Edge configuration failed: {{ ansible_failed_result.msg | default('unknown error') }}.
+          Check Docker host connectivity and GPU availability.

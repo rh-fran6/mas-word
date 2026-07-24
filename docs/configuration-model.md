@@ -1,6 +1,6 @@
 # Configuration Model — MAS World 2026
 
-**Status**: DRAFT — Phase 0  
+**Status**: DRAFT — Phase 0
 **Date**: 2026-07-19
 
 ---
@@ -8,15 +8,15 @@
 ## 1. Configuration Precedence
 
 ```text
-defaults.yaml                    ← Base defaults for all environments
+defaults.yaml                              ← Base defaults for all environments
    ↓
-environments/<env>.yaml          ← Environment-specific (dev / rehearsal / event)
+environments/<env>.yaml                    ← Environment-specific (dev / rehearsal / event)
    ↓
-event.yaml                       ← Event-specific overrides
+event.yaml                                 ← Event-specific overrides
    ↓
-clusters.yaml (per-cluster)      ← Cluster-specific overrides
+secrets/cluster-credentials.yml (per-cluster)  ← Cluster identity and credentials
    ↓
-Command-line arguments           ← Runtime overrides
+Command-line arguments                     ← Runtime overrides
 ```
 
 Later layers override earlier layers. The merge is deep — nested keys are
@@ -77,7 +77,7 @@ components:
   showroom:
     enabled: true
   acm_registration:
-    enabled: true
+    enabled: false
 
 secrets:
   provider: env
@@ -175,38 +175,35 @@ session:
       type: mixed
 ```
 
-### 2.3 `config/clusters.yaml`
+### 2.3 `secrets/cluster-credentials.yml`
 
-Per-cluster inventory. Each cluster is independently defined.
+Per-cluster inventory and credentials. This is the single source of truth
+for all per-cluster identity and credentials (AWS keys, account IDs,
+purpose, seat_number, enabled, api_url, admin_password). The file is
+encrypted with Ansible Vault.
+
+The top-level key is `cluster_credentials`, a dictionary keyed by cluster
+name matching the pattern `{cluster_prefix}-{category}-{index}`. Phase 2
+fleet playbooks use the `to_cluster_list` filter to convert this
+dictionary into an iterable list.
 
 ```yaml
-clusters:
-  - id: seat-01
+cluster_credentials:
+  lab-seat-01:
+    aws_access_key_id: "AKIA..."
+    aws_secret_access_key: "wJalr..."
+    aws_region: us-east-2
     enabled: true
     purpose: attendee
     seat_number: 1
-    connection:
-      api_url: "PLACEHOLDER"
-      admin_auth_method: kubeconfig
-      admin_secret_ref: "secret://mas-world/clusters/seat-01/admin-kubeconfig"
-    platform:
-      provider: aws
-      aws_account_id: "PLACEHOLDER"
-      aws_region: us-east-2
-    endpoints:
-      console_url: null
-      mas_url: null
-      showroom_url: null
-      logging_url: null
-    credentials:
-      student_credential_profile: attendee-default
-    metadata:
-      event: mas-world-2026
-      environment: workshop
+    api_url: "https://api.lab-seat-01.example.com:6443"
+    admin_password: "REDACTED"
 
   # Additional clusters follow the same structure
-  # Use inventory generation tooling for large fleets
 ```
+
+Event-level defaults (admin_username, auth_method,
+student_credential_profile) stay in `config/defaults.yaml`.
 
 ### 2.4 `config/credentials.yaml`
 
@@ -219,10 +216,8 @@ ibm:
 
 aws:
   default_region: us-east-2
-  credentials_ref: "secret://mas-world/aws/credentials"
-
-acm:
-  hub_kubeconfig_ref: "secret://mas-world/acm/hub-kubeconfig"
+  access_key_id_ref: "secret://mas-world/aws/access-key-id"
+  secret_access_key_ref: "secret://mas-world/aws/secret-access-key"
 
 container_registry:
   pull_secret_ref: "secret://mas-world/registry/pull-secret"
@@ -236,8 +231,7 @@ compatibility matrix.
 ```yaml
 components:
   openshift:
-    # minimum_version: set from compatibility matrix
-    # maximum_version: set from compatibility matrix
+    # version: target major.minor (latest stable patch resolved automatically)
     required_features: []
 
   mas:
@@ -263,7 +257,7 @@ components:
 
   acm:
     # version: set from compatibility matrix
-    hub_cluster_ref: "secret://mas-world/acm/hub-kubeconfig"
+    # hub_cluster_id: set in components.acm_registration.hub_cluster_id, referencing a cluster in inventory with purpose: hub
 
   keycloak:
     # version: set from compatibility matrix

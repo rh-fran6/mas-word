@@ -1,0 +1,7 @@
+---
+showroom:
+  template: nookbag
+  theme_version: "v2.0.3"
+  title: "MAS World 2026 — Maximo on OpenShift Workshop"
+  content_repo: "https://github.com/rf-fran6/mas-world.git"
+  content_ref: main

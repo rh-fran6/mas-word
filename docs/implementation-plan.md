@@ -1,6 +1,6 @@
 # Implementation Plan — MAS World 2026
 
-**Status**: DRAFT — Phase 0  
+**Status**: DRAFT — Phase 0
 **Date**: 2026-07-19
 
 ---
@@ -38,7 +38,7 @@
 ### 1.1 Python Project Setup
 
 ```text
-mas-world-2026-automation/
+
 ├── pyproject.toml          # Project metadata, dependencies, CLI entry points
 ├── requirements.yml        # Ansible Galaxy requirements
 ├── ansible.cfg             # Ansible configuration

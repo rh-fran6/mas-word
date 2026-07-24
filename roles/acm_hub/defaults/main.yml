@@ -1,0 +1,7 @@
+---
+masworld_acm_operator_channel: "release-2.13"
+masworld_acm_operator_source: redhat-marketplace
+masworld_acm_operator_source_namespace: openshift-marketplace
+masworld_acm_namespace: open-cluster-management
+masworld_acm_hub_ready_retries: 60
+masworld_acm_hub_ready_delay: 30

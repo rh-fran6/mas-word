@@ -15,12 +15,12 @@ mas-world-2026/
 ├── prompt.md                          # Master specification
 ├── .pre-commit-config.yaml            # Pre-commit hooks
 ├── .yamllint.yml                      # YAML linter config
-├── .ansible-lint.yml                  # Ansible linter config
+├── .ansible-lint                  # Ansible linter config
 ├── .gitleaks.toml                     # Secret scanning rules
 ├── .github/workflows/ci.yml          # CI pipeline (6 jobs)
 ├── docs/                             # Project documentation
 │
-├── mas-world-2026-automation/         # Ansible collection + Python CLI
+├──          # Ansible collection + Python CLI
 │   ├── ansible.cfg
 │   ├── galaxy.yml                     # Collection: masworld.automation
 │   ├── pyproject.toml                 # Python project config
@@ -37,7 +37,6 @@ mas-world-2026/
 │   ├── config/                        # Configuration files
 │   │   ├── defaults.yaml
 │   │   ├── event.yaml
-│   │   ├── clusters.yaml
 │   │   ├── credentials.yaml
 │   │   ├── components.yaml
 │   │   ├── aws.yaml
@@ -56,7 +55,7 @@ mas-world-2026/
 │   ├── scripts/
 │   └── molecule/
 │
-├── mas-world-2026-showroom/           # Antora/AsciiDoc workshop content
+├── showroom/           # Antora/AsciiDoc workshop content
 │   ├── site.yml
 │   ├── ui-config.yml
 │   ├── content/
@@ -71,7 +70,7 @@ mas-world-2026/
 │       ├── observability/
 │       └── identity/
 │
-├── mas-world-2026-acm/                # ACM manifests and policies
+├── acm/                # ACM manifests and policies
 │   ├── demo-assets/
 │   ├── gitops/
 │   ├── labels/
@@ -80,7 +79,7 @@ mas-world-2026/
 │   ├── policies/
 │   └── reports/
 │
-├── mas-world-2026-agnosticv/          # RHDP catalog configuration
+├── agnosticv/          # RHDP catalog configuration
 │   ├── catalog/
 │   ├── vars/
 │   ├── workloads/
@@ -88,7 +87,7 @@ mas-world-2026/
 │   ├── access-data/
 │   └── docs/
 │
-├── mas-world-2026-public-content/     # Sanitized attendee examples
+├── public-content/     # Sanitized attendee examples
 │   ├── architecture/
 │   ├── identity/
 │   ├── logging/
@@ -97,7 +96,7 @@ mas-world-2026/
 │   ├── production-guidance/
 │   └── troubleshooting/
 │
-└── mas-world-2026-operations/         # Operational tooling
+└── operations/         # Operational tooling
     ├── checklists/
     ├── cost-reporting/
     ├── fleet-dashboard/
@@ -131,10 +130,10 @@ python3.11 -m venv .venv
 source .venv/bin/activate
 
 # Install the CLI and all dev dependencies
-pip install -e mas-world-2026-automation[dev]
+pip install -e ".[dev]"
 
 # Install Ansible collection dependencies
-ansible-galaxy collection install -r mas-world-2026-automation/requirements.yml
+ansible-galaxy collection install -r requirements.yml
 
 # Install pre-commit hooks
 pip install pre-commit
@@ -167,8 +166,8 @@ Suggested workspace settings (`.vscode/settings.json`):
     "editor.formatOnSave": true
   },
   "yaml.schemas": {
-    "https://json.schemastore.org/ansible-playbook": "mas-world-2026-automation/playbooks/*.yml",
-    "https://json.schemastore.org/ansible-role-2.9": "mas-world-2026-automation/roles/*/tasks/*.yml"
+    "https://json.schemastore.org/ansible-playbook": "playbooks/*.yml",
+    "https://json.schemastore.org/ansible-role-2.9": "roles/*/tasks/*.yml"
   },
   "ansible.python.interpreterPath": "${workspaceFolder}/.venv/bin/python"
 }
@@ -177,7 +176,7 @@ Suggested workspace settings (`.vscode/settings.json`):
 **PyCharm:**
 
 - Set the project interpreter to `.venv/bin/python`.
-- Mark `mas-world-2026-automation` as a sources root.
+- Mark the project root as a sources root.
 - Enable the Ruff plugin for formatting and linting.
 
 ---
@@ -218,7 +217,7 @@ Pre-commit hooks run automatically on every `git commit`. They are defined in `.
 | `no-commit-to-branch` | pre-commit-hooks v5.0.0 | Block direct commits to `main`/`master` |
 | `gitleaks` | gitleaks v8.21.2 | Scan for secrets and credentials |
 | `yamllint` | yamllint v1.35.1 | Lint YAML files (config: `.yamllint.yml`) |
-| `ansible-lint` | ansible-lint v24.12.2 | Lint playbooks and roles (config: `.ansible-lint.yml`) |
+| `ansible-lint` | ansible-lint v24.12.2 | Lint playbooks and roles (config: `.ansible-lint`) |
 | `ruff` | ruff v0.8.6 | Python linting with auto-fix |
 | `ruff-format` | ruff v0.8.6 | Python formatting |
 | `shellcheck` | shellcheck v0.10.0.1 | Lint shell scripts |
@@ -247,7 +246,7 @@ If a hook fails, fix the issue before committing. Do not habitually skip hooks.
 
 ### Unit tests
 
-The test suite is under `mas-world-2026-automation/tests/unit/` and uses pytest. There are currently 39 test functions across three test modules:
+The test suite is under `tests/unit/` and uses pytest. There are currently 39 test functions across three test modules:
 
 - `test_config_loader.py` — configuration loading and precedence
 - `test_config_validation.py` — schema validation and error detection
@@ -255,7 +254,7 @@ The test suite is under `mas-world-2026-automation/tests/unit/` and uses pytest.
 
 ```bash
 # Run all unit tests (from the automation directory)
-cd mas-world-2026-automation
+# project root
 make test
 
 # Or directly with pytest
@@ -275,7 +274,7 @@ pytest tests/unit/ --cov=cli --cov-report=term-missing
 
 ```bash
 # Run all linters (from the automation directory)
-cd mas-world-2026-automation
+# project root
 make lint
 ```
 
@@ -310,7 +309,7 @@ python -m mypy cli/ plugins/ --strict
 mas-world --env development config validate
 
 # Or via Make
-cd mas-world-2026-automation
+# project root
 make validate ENVIRONMENT=development
 ```
 
@@ -326,12 +325,12 @@ npx @antora/cli@3.1 --fetch site.yml
 
 ## 6. Adding a New Ansible Role
 
-Roles live in `mas-world-2026-automation/roles/`. Each role follows a standard directory structure.
+Roles live in `roles/`. Each role follows a standard directory structure.
 
 ### Scaffold a new role
 
 ```bash
-cd mas-world-2026-automation/roles
+cd roles
 mkdir -p my_new_role/{defaults,tasks,meta,templates}
 ```
 
@@ -432,7 +431,7 @@ Every role must be safe to run multiple times. Follow these patterns:
 
 ### Register the role with ansible-lint
 
-If the role is not yet wired into playbooks, add it to the `mock_roles` list in `.ansible-lint.yml` so ansible-lint does not report it as missing.
+If the role is not yet wired into playbooks, add it to the `mock_roles` list in `.ansible-lint` so ansible-lint does not report it as missing.
 
 ### Add a molecule test scenario
 
@@ -446,7 +445,7 @@ Create `molecule/my_new_role/molecule.yml` and `converge.yml` following the exis
 
 ## 7. Adding a CLI Command
 
-The CLI uses [Click](https://click.palletsprojects.com/) and is structured into command groups under `mas-world-2026-automation/cli/commands/`.
+The CLI uses [Click](https://click.palletsprojects.com/) and is structured into command groups under `cli/commands/`.
 
 ### Existing command groups
 
@@ -539,7 +538,7 @@ def test_new_subcommand_validates_config() -> None:
 
 ## 8. Showroom Content Conventions
 
-Workshop content lives in `mas-world-2026-showroom/` and uses the RHDP Showroom framework built on Antora with AsciiDoc.
+Workshop content lives in `showroom/` and uses the RHDP Showroom framework built on Antora with AsciiDoc.
 
 ### Module structure
 
@@ -554,7 +553,7 @@ Every workshop module follows the **Know, Do, Check** pattern:
 Module pages live in:
 
 ```text
-mas-world-2026-showroom/content/modules/ROOT/pages/
+showroom/content/modules/ROOT/pages/
 ```
 
 Files are numbered for ordering: `01-access-readiness.adoc`, `02-navigation-search.adoc`, etc. Navigation is defined in `nav.adoc`.
@@ -652,7 +651,7 @@ def resolve_seat_username(seat_number: int, template: str) -> str:
 - **Add `no_log: true`** on every task that handles secrets, credentials, tokens, or passwords.
 - **Name every task.** Unnamed tasks are flagged by ansible-lint.
 - **Prefix role variables** with the role name to prevent collisions.
-- **Follow the production profile** as configured in `.ansible-lint.yml`.
+- **Follow the production profile** as configured in `.ansible-lint`.
 
 ### YAML
 
@@ -755,7 +754,7 @@ The CI pipeline is defined in `.github/workflows/ci.yml` and runs on pushes to `
 | **secret-scan** | PRs only | Gitleaks scan with `.gitleaks.toml` rules |
 | **unit-tests** | All pushes and PRs | pytest against `tests/unit/`, uploads JUnit XML artifact |
 | **validate-manifests** | PRs only | kubeconform validation of ACM YAML manifests |
-| **validate-showroom** | PRs changing `mas-world-2026-showroom/` | Antora build, nav.adoc cross-reference check |
+| **validate-showroom** | PRs changing `showroom/` | Antora build, nav.adoc cross-reference check |
 | **docs-links** | PRs changing `*.md` files | Checks for broken relative links in Markdown |
 
 **CI must pass before any PR can be merged to `main`.**
@@ -764,7 +763,7 @@ To reproduce CI checks locally:
 
 ```bash
 # Run the same linting CI does
-cd mas-world-2026-automation
+# project root
 make lint
 
 # Run unit tests
@@ -786,8 +785,8 @@ gitleaks detect --config .gitleaks.toml --source .
 
 - Use semantic versioning: `MAJOR.MINOR.PATCH`.
 - The version is defined in two places:
-  - `mas-world-2026-automation/pyproject.toml` (`version` field)
-  - `mas-world-2026-automation/galaxy.yml` (`version` field)
+  - `pyproject.toml` (`version` field)
+  - `galaxy.yml` (`version` field)
 - Both must be updated together.
 
 ### Release checklist
@@ -866,14 +865,14 @@ gitleaks detect --config .gitleaks.toml --source .
 
 | File | Purpose |
 |------|---------|
-| `mas-world-2026-automation/pyproject.toml` | Python project metadata, dependencies, tool config |
-| `mas-world-2026-automation/galaxy.yml` | Ansible collection metadata (namespace: `masworld`, name: `automation`) |
-| `mas-world-2026-automation/ansible.cfg` | Ansible runtime configuration |
-| `mas-world-2026-automation/Makefile` | Build targets: `lint`, `test`, `prepare-cluster`, `prepare-fleet`, `validate`, etc. |
-| `mas-world-2026-automation/requirements.yml` | Ansible collection dependencies |
+| `pyproject.toml` | Python project metadata, dependencies, tool config |
+| `galaxy.yml` | Ansible collection metadata (namespace: `masworld`, name: `automation`) |
+| `ansible.cfg` | Ansible runtime configuration |
+| `Makefile` | Build targets: `lint`, `test`, `prepare-cluster`, `prepare-fleet`, `validate`, etc. |
+| `requirements.yml` | Ansible collection dependencies |
 | `.pre-commit-config.yaml` | Pre-commit hook definitions |
 | `.yamllint.yml` | YAML linter configuration |
-| `.ansible-lint.yml` | Ansible linter configuration (production profile) |
+| `.ansible-lint` | Ansible linter configuration (production profile) |
 | `.gitleaks.toml` | Secret scanning rules |
 | `.github/workflows/ci.yml` | CI pipeline definition |
 | `prompt.md` | Master project specification |

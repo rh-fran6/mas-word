@@ -1,0 +1,59 @@
+---
+# Scenario 3: Cluster Ready — ROSA clusters running, add autoscaler + app
+# Called by deploy.yml after scenario_preflight passes
+
+- name: "=== CLUSTER-READY Step 1/3: Verify Cluster Fleet ==="
+  ansible.builtin.debug:
+    msg: "Confirming {{ cluster_definitions | length }} clusters are healthy..."
+
+- name: Verify all clusters are ready
+  ansible.builtin.include_role:
+    name: rosa_cluster
+  vars:
+    rosa_action: verify
+
+- name: "=== CLUSTER-READY Step 2/3: Configure Workshop Autoscaler ==="
+  ansible.builtin.debug:
+    msg: >-
+      Creating workshop machinepool '{{ workshop_machinepool_name }}'
+      ({{ workshop_machinepool_instance_type }},
+      {{ workshop_machinepool_min_replicas }}-{{ workshop_machinepool_max_replicas }} replicas)
+      on all clusters...
+
+- name: Create workshop machine pools
+  ansible.builtin.include_role:
+    name: rosa_cluster
+  vars:
+    rosa_action: workshop_machinepool
+
+- name: "=== CLUSTER-READY Step 3/3: Deploy Demo Application ==="
+  ansible.builtin.debug:
+    msg: "Preparing fleet for workshop..."
+
+- name: Build enabled cluster list for Phase 2
+  ansible.builtin.set_fact:
+    masworld_enabled_clusters: "{{ cluster_credentials | to_cluster_list }}"
+  no_log: true
+
+- name: Prepare each cluster
+  ansible.builtin.include_tasks: _prepare-single-cluster.yml
+  loop: "{{ masworld_enabled_clusters }}"
+  loop_control:
+    loop_var: cluster
+    label: "{{ cluster.id }}"
+
+- name: Validate each cluster
+  ansible.builtin.include_tasks: _validate-single-cluster.yml
+  loop: "{{ masworld_enabled_clusters }}"
+  loop_control:
+    loop_var: cluster
+    label: "{{ cluster.id }}"
+
+- name: "CLUSTER-READY deployment complete"
+  ansible.builtin.debug:
+    msg: |
+      ══════════════════════════════════════════════════════════════
+        CLUSTER-READY DEPLOYMENT COMPLETE
+        {{ cluster_definitions | length }} clusters prepared with
+        workshop machinepool ({{ workshop_machinepool_instance_type }})
+      ══════════════════════════════════════════════════════════════

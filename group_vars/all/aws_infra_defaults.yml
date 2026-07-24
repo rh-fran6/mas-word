@@ -1,0 +1,32 @@
+---
+# AWS VPC and networking defaults for infrastructure provisioning.
+# These values are used by 'make setup-infra' and apply uniformly
+# across all AWS accounts. Per-account region is set in
+# secrets/cluster-credentials.yml (aws_region field).
+
+aws_default_region: "us-east-2"
+
+aws_vpc_cidr: "10.0.0.0/16"
+
+aws_public_subnets:
+  - cidr: "10.0.0.0/24"
+    az_index: 0
+  - cidr: "10.0.1.0/24"
+    az_index: 1
+
+aws_private_subnets:
+  - cidr: "10.0.128.0/24"
+    az_index: 0
+  - cidr: "10.0.129.0/24"
+    az_index: 1
+
+aws_infra_tags:
+  Project: "rosa-hcp-multi-build"
+  ManagedBy: "ansible"
+
+# Timing for NAT gateway readiness polling
+aws_nat_gateway_retries: 30
+aws_nat_gateway_delay: 10
+
+# Path for persisted infrastructure state
+aws_infra_state_file: "{{ playbook_dir }}/../group_vars/all/infra_state.yml"

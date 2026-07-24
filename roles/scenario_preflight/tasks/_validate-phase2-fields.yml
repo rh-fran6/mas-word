@@ -1,0 +1,38 @@
+---
+# Shared Phase 2 field validation — included by all three scenario preflights.
+# Validates that cluster_credentials entries have the fields Phase 2 requires.
+
+- name: Validate purpose field for each cluster credential
+  ansible.builtin.assert:
+    that:
+      - item.value.purpose is defined
+      - item.value.purpose in ['facilitator', 'hub', 'attendee', 'spare']
+    fail_msg: >
+      Cluster '{{ item.key }}' has invalid or missing 'purpose' field.
+      Must be one of: facilitator, hub, attendee, spare.
+      Got: {{ item.value.purpose | default('UNDEFINED') }}
+    quiet: true
+  loop: "{{ cluster_credentials | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  no_log: true
+
+- name: Validate seat_number for attendee clusters
+  ansible.builtin.assert:
+    that:
+      - item.value.seat_number is defined
+      - item.value.seat_number | int > 0
+    fail_msg: >
+      Attendee cluster '{{ item.key }}' is missing 'seat_number' or has invalid value.
+      All attendee clusters must have a positive integer seat_number.
+    quiet: true
+  loop: "{{ cluster_credentials | dict2items | selectattr('value.purpose', 'equalto', 'attendee') | list }}"
+  loop_control:
+    label: "{{ item.key }}"
+  no_log: true
+
+- name: Display Phase 2 field validation results
+  ansible.builtin.debug:
+    msg: >-
+      Phase 2 fields validated — {{ cluster_credentials | length }} entries checked
+      ({{ cluster_credentials | dict2items | selectattr('value.purpose', 'equalto', 'attendee') | list | length }} attendees with seat_number)

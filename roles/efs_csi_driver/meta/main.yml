@@ -1,0 +1,8 @@
+---
+galaxy_info:
+  author: MAS World 2026
+  role_name: efs_csi_driver
+  description: Install AWS EFS CSI Driver Operator and create efs StorageClass on OCP
+  license: Apache-2.0
+  min_ansible_version: "2.14"
+dependencies: []

@@ -1,0 +1,393 @@
+---
+# Event Readiness: end-to-end validation
+- name: Run event readiness checks
+  block:
+    # ── Initialize Results ──────────────────────────────────────────────
+    - name: Initialize readiness results
+      ansible.builtin.set_fact:
+        _masworld_readiness_results: {}
+        _masworld_readiness_warnings: []
+        _masworld_readiness_failures: []
+
+    # ── Check 1: API Reachability ───────────────────────────────────────
+    - name: Check API server reachability
+      kubernetes.core.k8s_cluster_info: {}
+      register: _masworld_api_check
+      failed_when: false
+      when: "'api' in masworld_readiness_checks"
+
+    - name: Record API check result
+      ansible.builtin.set_fact:
+        _masworld_readiness_results: >-
+          {{ _masworld_readiness_results | combine({
+               'api': {
+                 'status': 'PASS' if (_masworld_api_check.connection is defined) else 'FAIL',
+                 'message': 'API server is reachable' if (_masworld_api_check.connection is defined) else 'API server unreachable'
+               }
+             })
+          }}
+        _masworld_readiness_failures: >-
+          {{ _masworld_readiness_failures + (['API server unreachable'] if (_masworld_api_check.connection is not defined) else []) }}
+      when: "'api' in masworld_readiness_checks"
+
+    # ── Check 2: MAS Core Ready ────────────────────────────────────────
+    - name: Check MAS Core Suite CR status
+      kubernetes.core.k8s_info:
+        api_version: core.mas.ibm.com/v1
+        kind: Suite
+        name: "{{ masworld_mas_instance_id }}"
+        namespace: "mas-{{ masworld_mas_instance_id }}-core"
+      register: _masworld_mas_check
+      failed_when: false
+      when: "'mas' in masworld_readiness_checks"
+
+    - name: Evaluate MAS Core readiness
+      ansible.builtin.set_fact:
+        _masworld_mas_ready: >-
+          {{ _masworld_mas_check.resources | default([]) | length > 0
+             and (_masworld_mas_check.resources[0].status.conditions | default([])
+                  | selectattr('type', 'equalto', 'Ready')
+                  | selectattr('status', 'equalto', 'True')
+                  | list | length > 0) }}
+      when: "'mas' in masworld_readiness_checks"
+
+    - name: Record MAS check result
+      ansible.builtin.set_fact:
+        _masworld_readiness_results: >-
+          {{ _masworld_readiness_results | combine({
+               'mas': {
+                 'status': 'PASS' if (_masworld_mas_ready | bool) else 'FAIL',
+                 'message': 'MAS Core Suite CR is Ready' if (_masworld_mas_ready | bool) else 'MAS Core Suite CR is not Ready'
+               }
+             })
+          }}
+        _masworld_readiness_failures: >-
+          {{ _masworld_readiness_failures + (['MAS Core not ready'] if not (_masworld_mas_ready | bool) else []) }}
+      when: "'mas' in masworld_readiness_checks"
+
+    # ── Check 3: Manage Ready ──────────────────────────────────────────
+    - name: Check Manage ManageWorkspace CR status
+      kubernetes.core.k8s_info:
+        api_version: apps.mas.ibm.com/v1
+        kind: ManageWorkspace
+        name: "{{ masworld_mas_instance_id }}-{{ masworld_mas_workspace_id }}"
+        namespace: "mas-{{ masworld_mas_instance_id }}-manage"
+      register: _masworld_manage_check
+      failed_when: false
+      when: "'manage' in masworld_readiness_checks"
+
+    - name: Evaluate Manage readiness
+      ansible.builtin.set_fact:
+        _masworld_manage_ready: >-
+          {{ _masworld_manage_check.resources | default([]) | length > 0
+             and (_masworld_manage_check.resources[0].status.conditions | default([])
+                  | selectattr('type', 'equalto', 'Ready')
+                  | selectattr('status', 'equalto', 'True')
+                  | list | length > 0) }}
+      when: "'manage' in masworld_readiness_checks"
+
+    - name: Record Manage check result
+      ansible.builtin.set_fact:
+        _masworld_readiness_results: >-
+          {{ _masworld_readiness_results | combine({
+               'manage': {
+                 'status': 'PASS' if (_masworld_manage_ready | bool) else 'FAIL',
+                 'message': 'Manage workspace is Ready' if (_masworld_manage_ready | bool) else 'Manage workspace is not Ready'
+               }
+             })
+          }}
+        _masworld_readiness_failures: >-
+          {{ _masworld_readiness_failures + (['Manage not ready'] if not (_masworld_manage_ready | bool) else []) }}
+      when: "'manage' in masworld_readiness_checks"
+
+    # ── Check 4: Logging Operator Ready ────────────────────────────────
+    - name: Check ClusterLogForwarder CR status
+      kubernetes.core.k8s_info:
+        api_version: "{{ masworld_logging_api_version }}"
+        kind: ClusterLogForwarder
+        namespace: openshift-logging
+      register: _masworld_logging_check
+      failed_when: false
+      when: "'logging' in masworld_readiness_checks"
+
+    - name: Evaluate Logging operator readiness
+      ansible.builtin.set_fact:
+        _masworld_logging_ready: >-
+          {{ _masworld_logging_check.resources | default([]) | length > 0
+             and (_masworld_logging_check.resources[0].status.conditions | default([])
+                  | selectattr('type', 'equalto', 'Ready')
+                  | selectattr('status', 'equalto', 'True')
+                  | list | length > 0) }}
+      when: "'logging' in masworld_readiness_checks"
+
+    - name: Record Logging check result
+      ansible.builtin.set_fact:
+        _masworld_readiness_results: >-
+          {{ _masworld_readiness_results | combine({
+               'logging': {
+                 'status': 'PASS' if (_masworld_logging_ready | default(false) | bool) else 'WARNING',
+                 'message': 'Log forwarding is operational' if (_masworld_logging_ready | default(false) | bool) else 'Log forwarding not confirmed ready'
+               }
+             })
+          }}
+        _masworld_readiness_warnings: >-
+          {{ _masworld_readiness_warnings + (['Log forwarding not confirmed ready'] if not (_masworld_logging_ready | default(false) | bool) else []) }}
+      when: "'logging' in masworld_readiness_checks"
+
+    # ── Check 5: LokiStack Ready ──────────────────────────────────────
+    - name: Check LokiStack CR status
+      kubernetes.core.k8s_info:
+        api_version: "{{ masworld_loki_api_version }}"
+        kind: LokiStack
+        namespace: openshift-logging
+      register: _masworld_loki_check
+      failed_when: false
+      when: "'loki' in masworld_readiness_checks"
+
+    - name: Evaluate LokiStack readiness
+      ansible.builtin.set_fact:
+        _masworld_loki_ready: >-
+          {{ _masworld_loki_check.resources | default([]) | length > 0
+             and (_masworld_loki_check.resources[0].status.conditions | default([])
+                  | selectattr('type', 'equalto', 'Ready')
+                  | selectattr('status', 'equalto', 'True')
+                  | list | length > 0) }}
+      when: "'loki' in masworld_readiness_checks"
+
+    - name: Record LokiStack check result
+      ansible.builtin.set_fact:
+        _masworld_readiness_results: >-
+          {{ _masworld_readiness_results | combine({
+               'loki': {
+                 'status': 'PASS' if (_masworld_loki_ready | default(false) | bool) else 'WARNING',
+                 'message': 'LokiStack is operational' if (_masworld_loki_ready | default(false) | bool) else 'LokiStack not confirmed ready'
+               }
+             })
+          }}
+        _masworld_readiness_warnings: >-
+          {{ _masworld_readiness_warnings + (['LokiStack not confirmed ready'] if not (_masworld_loki_ready | default(false) | bool) else []) }}
+      when: "'loki' in masworld_readiness_checks"
+
+    # ── Check 6: Log Forwarding Functional (Loki query) ────────────────
+    - name: Query Loki for recent logs to verify forwarding
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Service
+        name: logging-loki-gateway-http
+        namespace: openshift-logging
+      register: _masworld_loki_svc
+      failed_when: false
+      when: "'loki' in masworld_readiness_checks"
+
+    # ── Check 7: Showroom Accessible ───────────────────────────────────
+    - name: Check Showroom pod status
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ masworld_showroom_namespace }}"
+        label_selectors:
+          - "app.kubernetes.io/name=showroom"
+      register: _masworld_showroom_check
+      failed_when: false
+      when: "'showroom' in masworld_readiness_checks"
+
+    - name: Evaluate Showroom readiness
+      ansible.builtin.set_fact:
+        _masworld_showroom_ready: >-
+          {{ _masworld_showroom_check.resources | default([]) | length > 0
+             and (_masworld_showroom_check.resources
+                  | selectattr('status.phase', 'equalto', 'Running')
+                  | list | length > 0) }}
+      when: "'showroom' in masworld_readiness_checks"
+
+    - name: Check Showroom route exists
+      kubernetes.core.k8s_info:
+        api_version: route.openshift.io/v1
+        kind: Route
+        namespace: "{{ masworld_showroom_namespace }}"
+        label_selectors:
+          - "app.kubernetes.io/name=showroom"
+      register: _masworld_showroom_route_check
+      failed_when: false
+      when: "'showroom' in masworld_readiness_checks"
+
+    - name: Record Showroom check result
+      ansible.builtin.set_fact:
+        _masworld_readiness_results: >-
+          {{ _masworld_readiness_results | combine({
+               'showroom': {
+                 'status': 'PASS' if (_masworld_showroom_ready | default(false) | bool and _masworld_showroom_route_check.resources | default([]) | length > 0) else 'FAIL',
+                 'message': 'Showroom is running and route exists' if (_masworld_showroom_ready | default(false) | bool) else 'Showroom is not running or route missing'
+               }
+             })
+          }}
+        _masworld_readiness_failures: >-
+          {{ _masworld_readiness_failures + (['Showroom not accessible'] if not (_masworld_showroom_ready | default(false) | bool) else []) }}
+      when: "'showroom' in masworld_readiness_checks"
+
+    # ── Check 8: Student Login Works ───────────────────────────────────
+    - name: Check student htpasswd secret exists
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: masworld-htpasswd-secret
+        namespace: openshift-config
+      register: _masworld_student_secret_check
+      failed_when: false
+      when: "'student_access' in masworld_readiness_checks"
+
+    - name: Check student namespace exists
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: "student-{{ masworld_seat_number | pad(2) }}"
+      register: _masworld_student_ns_check
+      failed_when: false
+      when: "'student_access' in masworld_readiness_checks"
+
+    - name: Check student RoleBinding exists
+      kubernetes.core.k8s_info:
+        api_version: rbac.authorization.k8s.io/v1
+        kind: RoleBinding
+        name: "user{{ masworld_seat_number | pad(2) }}-admin"
+        namespace: "student-{{ masworld_seat_number | pad(2) }}"
+      register: _masworld_student_rb_check
+      failed_when: false
+      when: "'student_access' in masworld_readiness_checks"
+
+    - name: Evaluate student access readiness
+      ansible.builtin.set_fact:
+        _masworld_student_ready: >-
+          {{ (_masworld_student_secret_check.resources | default([]) | length > 0)
+             and (_masworld_student_ns_check.resources | default([]) | length > 0)
+             and (_masworld_student_rb_check.resources | default([]) | length > 0) }}
+      when: "'student_access' in masworld_readiness_checks"
+
+    - name: Record student access check result
+      ansible.builtin.set_fact:
+        _masworld_readiness_results: >-
+          {{ _masworld_readiness_results | combine({
+               'student_access': {
+                 'status': 'PASS' if (_masworld_student_ready | default(false) | bool) else 'FAIL',
+                 'message': 'Student account, namespace, and RBAC configured' if (_masworld_student_ready | default(false) | bool) else 'Student access not fully configured'
+               }
+             })
+          }}
+        _masworld_readiness_failures: >-
+          {{ _masworld_readiness_failures + (['Student access not configured'] if not (_masworld_student_ready | default(false) | bool) else []) }}
+      when: "'student_access' in masworld_readiness_checks"
+
+    # ── Check 9: Exercise Data Present ─────────────────────────────────
+    - name: Check exercise ConfigMap exists
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        name: exercise-expected-outputs
+        namespace: "{{ masworld_sample_namespace }}"
+      register: _masworld_exercise_cm_check
+      failed_when: false
+      when: "'exercise_data' in masworld_readiness_checks"
+
+    - name: Check log-generator pod exists
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ masworld_sample_namespace }}"
+        label_selectors:
+          - "app=log-generator"
+      register: _masworld_exercise_pod_check
+      failed_when: false
+      when: "'exercise_data' in masworld_readiness_checks"
+
+    - name: Evaluate exercise data readiness
+      ansible.builtin.set_fact:
+        _masworld_exercise_ready: >-
+          {{ (_masworld_exercise_cm_check.resources | default([]) | length > 0)
+             and (_masworld_exercise_pod_check.resources | default([]) | length > 0
+                  and (_masworld_exercise_pod_check.resources
+                       | selectattr('status.phase', 'equalto', 'Running')
+                       | list | length > 0)) }}
+      when: "'exercise_data' in masworld_readiness_checks"
+
+    - name: Record exercise data check result
+      ansible.builtin.set_fact:
+        _masworld_readiness_results: >-
+          {{ _masworld_readiness_results | combine({
+               'exercise_data': {
+                 'status': 'PASS' if (_masworld_exercise_ready | default(false) | bool) else 'FAIL',
+                 'message': 'Exercise data and workloads present' if (_masworld_exercise_ready | default(false) | bool) else 'Exercise data or workloads missing'
+               }
+             })
+          }}
+        _masworld_readiness_failures: >-
+          {{ _masworld_readiness_failures + (['Exercise data missing'] if not (_masworld_exercise_ready | default(false) | bool) else []) }}
+      when: "'exercise_data' in masworld_readiness_checks"
+
+    # ── Aggregate Results ───────────────────────────────────────────────
+    - name: Classify cluster readiness
+      ansible.builtin.set_fact:
+        readiness_result: >-
+          {{ 'FAILED' if (_masworld_readiness_failures | length > 0)
+             else ('WARNING' if (_masworld_readiness_warnings | length > 0) else 'READY') }}
+
+    # ── Write Readiness Report ──────────────────────────────────────────
+    - name: Ensure readiness report directory exists
+      ansible.builtin.file:
+        path: "{{ masworld_readiness_report_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Set readiness report path
+      ansible.builtin.set_fact:
+        readiness_report_path: "{{ masworld_readiness_report_dir }}/readiness-{{ now(utc=true, fmt='%Y%m%d-%H%M%S') }}.yml"
+
+    - name: Write readiness report
+      ansible.builtin.copy:
+        content: |
+          ---
+          # MAS World 2026 — Event Readiness Report
+          # Generated: {{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}
+          overall_result: {{ readiness_result }}
+          cluster_id: {{ masworld_cluster_id | default('unknown') }}
+          seat_number: {{ masworld_seat_number | default('unassigned') }}
+          checks:
+          {% for check_name, check_result in _masworld_readiness_results.items() %}
+            {{ check_name }}:
+              status: {{ check_result.status }}
+              message: "{{ check_result.message }}"
+          {% endfor %}
+          failures:
+          {% for failure in _masworld_readiness_failures %}
+            - "{{ failure }}"
+          {% endfor %}
+          warnings:
+          {% for warning in _masworld_readiness_warnings %}
+            - "{{ warning }}"
+          {% endfor %}
+        dest: "{{ readiness_report_path }}"
+        mode: "0644"
+
+    # ── Report Summary ──────────────────────────────────────────────────
+    - name: Report readiness summary
+      ansible.builtin.debug:
+        msg: >-
+          Event Readiness: {{ readiness_result }}.
+          Checks passed: {{ _masworld_readiness_results.values()
+                            | selectattr('status', 'equalto', 'PASS')
+                            | list | length }}/{{ _masworld_readiness_results | length }}.
+          Failures: {{ _masworld_readiness_failures | length }}.
+          Warnings: {{ _masworld_readiness_warnings | length }}.
+          Report: {{ readiness_report_path }}.
+
+  rescue:
+    - name: Set readiness failed facts
+      ansible.builtin.set_fact:
+        readiness_result: "FAILED"
+        readiness_report_path: ""
+
+    - name: Report readiness check failure
+      ansible.builtin.fail:
+        msg: >-
+          Event readiness checks failed with an error:
+          {{ ansible_failed_result.msg | default('unknown error') }}.
+          Unable to determine cluster readiness.

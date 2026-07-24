@@ -1,0 +1,201 @@
+---
+# acm_registration/tasks/main.yml
+# Registers the cluster with ACM hub for fleet management.
+# Sets fact: acm_registration_result (registered/skipped/failed)
+#
+# Hub authentication supports the same methods as any cluster in inventory:
+#   1. kubeconfig (masworld_acm_hub_kubeconfig)
+#   2. API URL + bearer token (masworld_acm_hub_host + masworld_acm_hub_api_key)
+#   3. API URL + username/password via OAuth exchange (masworld_acm_hub_host + masworld_acm_hub_admin_password)
+
+# --- Resolve hub cluster authentication ---
+
+- name: Validate hub connection is configured
+  ansible.builtin.fail:
+    msg: >-
+      ACM registration is enabled but no hub cluster connection is configured.
+      Provide one of: masworld_acm_hub_kubeconfig, masworld_acm_hub_api_key
+      (with masworld_acm_hub_host), or masworld_acm_hub_admin_password
+      (with masworld_acm_hub_host). The hub cluster should be in the
+      cluster inventory with purpose 'hub' or 'facilitator'.
+  when:
+    - masworld_acm_hub_kubeconfig | length == 0
+    - masworld_acm_hub_host | length == 0
+
+- name: Validate host is set when using token or password auth
+  ansible.builtin.fail:
+    msg: >-
+      masworld_acm_hub_host must be set when using API key or password
+      authentication for the ACM hub cluster.
+  when:
+    - masworld_acm_hub_kubeconfig | length == 0
+    - masworld_acm_hub_host | length == 0
+    - (masworld_acm_hub_api_key | length > 0) or (masworld_acm_hub_admin_password | length > 0)
+
+- name: Obtain hub API token via OpenShift OAuth
+  when:
+    - masworld_acm_hub_kubeconfig | length == 0
+    - masworld_acm_hub_api_key | length == 0
+    - masworld_acm_hub_host | length > 0
+    - masworld_acm_hub_admin_password | length > 0
+  block:
+    - name: Request OAuth token from hub cluster
+      ansible.builtin.uri:
+        url: "{{ masworld_acm_hub_host }}/oauth/authorize?response_type=token&client_id=openshift-challenging-client"
+        method: GET
+        user: "{{ masworld_acm_hub_admin_user }}"
+        password: "{{ masworld_acm_hub_admin_password }}"
+        force_basic_auth: true
+        validate_certs: "{{ masworld_acm_hub_validate_certs }}"
+        follow_redirects: none
+        status_code: [302]
+      register: _acm_oauth_response
+      no_log: true
+
+    - name: Extract API token from OAuth redirect
+      ansible.builtin.set_fact:
+        masworld_acm_hub_api_key: "{{ _acm_oauth_response.location | regex_search('access_token=([^&]+)', '\\1') | first }}"
+      no_log: true
+
+- name: Determine cluster name for ACM
+  ansible.builtin.set_fact:
+    _acm_cluster_name: "{{ masworld_cluster_name | default(inventory_hostname) }}"
+
+- name: Register cluster with ACM hub
+  block:
+    # --- Verify ACM Hub Connectivity ---
+    - name: Verify ACM hub is reachable
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: open-cluster-management
+        kubeconfig: "{{ masworld_acm_hub_kubeconfig | default(omit, true) }}"
+        host: "{{ masworld_acm_hub_host | default(omit, true) }}"
+        api_key: "{{ masworld_acm_hub_api_key | default(omit, true) }}"
+        validate_certs: "{{ masworld_acm_hub_validate_certs }}"
+      register: _acm_hub_ns
+
+    - name: Fail if ACM hub namespace not found
+      ansible.builtin.fail:
+        msg: "ACM hub namespace 'open-cluster-management' not found — is ACM installed on the hub?"
+      when: _acm_hub_ns.resources | length == 0
+
+    # --- Check if Cluster Already Imported ---
+    - name: Check if ManagedCluster already exists
+      kubernetes.core.k8s_info:
+        api_version: cluster.open-cluster-management.io/v1
+        kind: ManagedCluster
+        name: "{{ _acm_cluster_name }}"
+        kubeconfig: "{{ masworld_acm_hub_kubeconfig | default(omit, true) }}"
+        host: "{{ masworld_acm_hub_host | default(omit, true) }}"
+        api_key: "{{ masworld_acm_hub_api_key | default(omit, true) }}"
+        validate_certs: "{{ masworld_acm_hub_validate_certs }}"
+      register: _existing_managed_cluster
+
+    - name: Report existing ManagedCluster found
+      ansible.builtin.debug:
+        msg: "ManagedCluster '{{ _acm_cluster_name }}' already exists — updating labels"
+      when: _existing_managed_cluster.resources | length > 0
+
+    # --- Create or Update ManagedCluster ---
+    - name: Build ManagedCluster labels
+      ansible.builtin.set_fact:
+        _acm_merged_labels: >-
+          {{ masworld_acm_labels | combine({
+            'name': _acm_cluster_name,
+            'cloud': 'auto-detect',
+            'vendor': 'auto-detect'
+          }) }}
+
+    - name: Create or update ManagedCluster resource
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ masworld_acm_hub_kubeconfig | default(omit, true) }}"
+        host: "{{ masworld_acm_hub_host | default(omit, true) }}"
+        api_key: "{{ masworld_acm_hub_api_key | default(omit, true) }}"
+        validate_certs: "{{ masworld_acm_hub_validate_certs }}"
+        definition:
+          apiVersion: cluster.open-cluster-management.io/v1
+          kind: ManagedCluster
+          metadata:
+            name: "{{ _acm_cluster_name }}"
+            labels: "{{ _acm_merged_labels }}"
+          spec:
+            hubAcceptsClient: true
+            leaseDurationSeconds: 60
+
+    # --- Add Cluster to ManagedClusterSet ---
+    - name: Ensure ManagedClusterSet exists
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ masworld_acm_hub_kubeconfig | default(omit, true) }}"
+        host: "{{ masworld_acm_hub_host | default(omit, true) }}"
+        api_key: "{{ masworld_acm_hub_api_key | default(omit, true) }}"
+        validate_certs: "{{ masworld_acm_hub_validate_certs }}"
+        definition:
+          apiVersion: cluster.open-cluster-management.io/v1beta2
+          kind: ManagedClusterSet
+          metadata:
+            name: "{{ masworld_acm_cluster_set }}"
+
+    - name: Add cluster to ManagedClusterSet via label
+      kubernetes.core.k8s:
+        state: present
+        kubeconfig: "{{ masworld_acm_hub_kubeconfig | default(omit, true) }}"
+        host: "{{ masworld_acm_hub_host | default(omit, true) }}"
+        api_key: "{{ masworld_acm_hub_api_key | default(omit, true) }}"
+        validate_certs: "{{ masworld_acm_hub_validate_certs }}"
+        definition:
+          apiVersion: cluster.open-cluster-management.io/v1
+          kind: ManagedCluster
+          metadata:
+            name: "{{ _acm_cluster_name }}"
+            labels:
+              cluster.open-cluster-management.io/clusterset: "{{ masworld_acm_cluster_set }}"
+        merge_type: merge
+
+    # --- Wait for ManagedCluster to Become Available ---
+    - name: Wait for ManagedCluster to be available
+      kubernetes.core.k8s_info:
+        api_version: cluster.open-cluster-management.io/v1
+        kind: ManagedCluster
+        name: "{{ _acm_cluster_name }}"
+        kubeconfig: "{{ masworld_acm_hub_kubeconfig | default(omit, true) }}"
+        host: "{{ masworld_acm_hub_host | default(omit, true) }}"
+        api_key: "{{ masworld_acm_hub_api_key | default(omit, true) }}"
+        validate_certs: "{{ masworld_acm_hub_validate_certs }}"
+      register: _managed_cluster_status
+      until: >-
+        _managed_cluster_status.resources | length > 0 and
+        _managed_cluster_status.resources[0].status is defined and
+        _managed_cluster_status.resources[0].status.conditions is defined and
+        _managed_cluster_status.resources[0].status.conditions
+          | selectattr('type', 'equalto', 'ManagedClusterConditionAvailable')
+          | selectattr('status', 'equalto', 'True')
+          | list | length > 0
+      retries: "{{ masworld_acm_availability_retries }}"
+      delay: "{{ masworld_acm_availability_delay }}"
+
+    - name: Set ACM registration result
+      ansible.builtin.set_fact:
+        acm_registration_result: "registered"
+        acm_managed_cluster_name: "{{ _acm_cluster_name }}"
+        acm_cluster_set: "{{ masworld_acm_cluster_set }}"
+
+    - name: Report ACM registration success
+      ansible.builtin.debug:
+        msg: >-
+          Cluster '{{ _acm_cluster_name }}' registered with ACM hub
+          in ClusterSet '{{ masworld_acm_cluster_set }}'
+
+  rescue:
+    - name: Set ACM registration failed
+      ansible.builtin.set_fact:
+        acm_registration_result: "failed"
+        acm_registration_error: "{{ ansible_failed_result.msg | default('Unknown ACM registration error') }}"
+
+    - name: Report ACM registration failure
+      ansible.builtin.fail:
+        msg: >-
+          ACM registration failed for cluster '{{ _acm_cluster_name }}':
+          {{ acm_registration_error }}

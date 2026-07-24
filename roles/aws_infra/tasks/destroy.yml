@@ -1,0 +1,19 @@
+---
+- name: Include build_definitions
+  ansible.builtin.include_tasks: build_definitions.yml
+
+- name: Destroy infrastructure per account
+  ansible.builtin.include_tasks: destroy_account_infra.yml
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    loop_var: cluster_item
+    label: "{{ cluster_item.name }}"
+
+- name: Remove infrastructure state file
+  ansible.builtin.file:
+    path: "{{ aws_infra_state_file }}"
+    state: absent
+
+- name: Infrastructure destruction complete
+  ansible.builtin.debug:
+    msg: "Destroyed infrastructure for {{ cluster_definitions | length }} accounts."

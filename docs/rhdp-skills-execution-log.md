@@ -40,7 +40,7 @@ Each entry records:
 ### 2026-07-15 — Skill: showroom:create-lab
 
 - **Phase**: Phase 1 — Skeleton (Showroom content scaffold)
-- **Invocation**: Attempted `/showroom:create-lab` targeting `mas-world-2026-automation/showroom/`
+- **Invocation**: Attempted `/showroom:create-lab` targeting `showroom/`
 - **Input**: MAS World 2026 workshop spec (5 lab segments, 50 attendees, OCP 4.21 + MAS 9.1.x)
 - **Result**: `MANUAL_FALLBACK_SKILL_UNAVAILABLE`
 - **Output**: 13 files created manually:
@@ -56,7 +56,7 @@ Each entry records:
 ### 2026-07-19 — Skill: showroom:verify-content
 
 - **Phase**: Phase 1 — Skeleton (post-creation validation)
-- **Invocation**: `/showroom:verify-content /Users/francis.anyaegbu/CascadeProjects/maximo-world/mas-world-2026-automation/showroom`
+- **Invocation**: `/showroom:verify-content /Users/francis.anyaegbu/CascadeProjects/maximo-world/showroom`
 - **Result**: `PARTIAL` — orchestrator ran inline; `showroom:scaffold-checker` and `showroom:module-reviewer` agent types not available in current environment
 - **Output**: Verification completed inline with 2 Warning-level findings (B.3, B.4 — intentional naming deviations from standard template). 0 Critical, 0 High. All S, D, E, F checks passed. 46 executable source blocks correctly use `role="execute"`. All modules have `=== Verify` sections.
 - **Fallback reason**: Agent types `showroom:scaffold-checker` and `showroom:module-reviewer` not registered in available agent list. Verification checks (S.1-S.3, B.1-B.7, D.1, D.3, E.3a, E.5, F.1) executed inline using grep/scan.

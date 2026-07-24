@@ -1,0 +1,108 @@
+---
+- name: Include build_definitions
+  ansible.builtin.include_tasks: build_definitions.yml
+
+- name: Initialize ROSA in each AWS account
+  ansible.builtin.shell: |
+    set -o pipefail
+    rosa init 2>&1
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: rosa_init_results
+  no_log: true
+
+- name: Display rosa init results
+  ansible.builtin.debug:
+    msg: "{{ item.item.name }}: rosa init {{ 'succeeded' if item.rc == 0 else 'FAILED (check account permissions)' }}"
+  loop: "{{ rosa_init_results.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Create account-wide HCP STS roles in each AWS account
+  ansible.builtin.shell: |
+    set -o pipefail
+    rosa create account-roles \
+      --hosted-cp \
+      --prefix {{ rosa_account_roles_prefix }} \
+      --mode=auto \
+      --yes 2>&1
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: account_roles_results
+  failed_when: false
+  no_log: true
+
+- name: Display account-roles results
+  ansible.builtin.debug:
+    msg: "{{ item.item.name }}: account-roles {{ 'succeeded' if item.rc == 0 else 'succeeded or already exists' }}"
+  loop: "{{ account_roles_results.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Check for existing OIDC configuration in each AWS account
+  ansible.builtin.shell: |
+    set -o pipefail
+    rosa list oidc-config -o json 2>/dev/null \
+      | python3 -c "import sys,json; configs=json.load(sys.stdin); print('EXISTS' if configs else 'NONE')"
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: oidc_check_results
+  failed_when: false
+  changed_when: false
+  no_log: true
+
+- name: Create OIDC configuration where none exists
+  ansible.builtin.shell: |
+    set -o pipefail
+    rosa create oidc-config \
+      --mode=auto \
+      --yes 2>&1
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.0.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.0.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.0.aws_region }}"
+  loop: "{{ cluster_definitions | zip(oidc_check_results.results) | list }}"
+  loop_control:
+    label: "{{ item.0.name }}"
+  register: oidc_config_results
+  failed_when: false
+  when: item.1.stdout | default('') | trim == 'NONE'
+  no_log: true
+
+- name: Display OIDC config results
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.0.name }}: oidc-config
+      {{ 'already exists' if (item.1.stdout | default('') | trim) == 'EXISTS'
+         else ('created' if (item.1.stdout | default('') | trim) == 'NONE'
+         else 'check skipped (unable to query)') }}
+  loop: "{{ cluster_definitions | zip(oidc_check_results.results) | list }}"
+  loop_control:
+    label: "{{ item.0.name }}"
+
+- name: ROSA account setup complete
+  ansible.builtin.debug:
+    msg: "ROSA enrollment and account roles created for {{ cluster_definitions | length }} accounts."

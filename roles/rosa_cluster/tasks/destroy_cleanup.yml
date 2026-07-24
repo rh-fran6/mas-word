@@ -1,0 +1,47 @@
+---
+- name: Include build_definitions
+  ansible.builtin.include_tasks: build_definitions.yml
+
+- name: Delete operator roles
+  ansible.builtin.shell: |
+    set -o pipefail
+    rosa delete operator-roles \
+      --cluster={{ cluster_id_map[item.name] }} \
+      --mode=auto \
+      --yes 2>&1
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.name in (cluster_id_map | default({}))
+  failed_when: false
+  no_log: true
+
+- name: Delete OIDC providers
+  ansible.builtin.shell: |
+    set -o pipefail
+    rosa delete oidc-provider \
+      --cluster={{ cluster_id_map[item.name] }} \
+      --mode=auto \
+      --yes 2>&1
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.name in (cluster_id_map | default({}))
+  failed_when: false
+  no_log: true
+
+- name: IAM cleanup complete
+  ansible.builtin.debug:
+    msg: "Operator roles and OIDC providers cleaned up for all destroyed clusters."

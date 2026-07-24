@@ -1,0 +1,105 @@
+---
+- name: Include build_definitions
+  ansible.builtin.include_tasks: build_definitions.yml
+
+- name: Validate workshop machinepool instance type
+  ansible.builtin.assert:
+    that:
+      - workshop_machinepool_instance_type is defined
+      - workshop_machinepool_instance_type | length > 0
+    fail_msg: "workshop_machinepool_instance_type must be provided (e.g., m5.xlarge, m5.2xlarge, m6a.4xlarge)"
+
+- name: Check for existing workshop machinepools
+  ansible.builtin.shell: |
+    set -o pipefail
+    rosa list machinepools --cluster={{ item.name }} --output json 2>/dev/null \
+      | python3 -c "import sys,json; pools=json.load(sys.stdin); print(' '.join(p['id'] for p in pools))"
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _wmp_existing_pools
+  failed_when: false
+  changed_when: false
+  no_log: true
+
+- name: Build list of clusters needing workshop machinepool  # noqa: jinja[invalid]
+  ansible.builtin.set_fact:
+    _wmp_clusters_needing_pool: >-
+      {{ _wmp_clusters_needing_pool | default([]) +
+         ( [item.0] if workshop_machinepool_name not in (item.1.stdout | default(''))
+           else [] ) }}
+  loop: "{{ cluster_definitions | zip(_wmp_existing_pools.results) | list }}"
+  loop_control:
+    label: "{{ item.0.name }}"
+  no_log: true
+
+- name: Report existing workshop machinepools (will be skipped)
+  ansible.builtin.debug:
+    msg: "{{ item.0.name }}: workshop machinepool '{{ workshop_machinepool_name }}' already exists, skipping"
+  loop: "{{ cluster_definitions | zip(_wmp_existing_pools.results) | list }}"
+  loop_control:
+    label: "{{ item.0.name }}"
+  when: workshop_machinepool_name in (item.1.stdout | default(''))
+
+- name: Display workshop machinepool plan
+  ansible.builtin.debug:
+    msg: >-
+      Creating workshop machinepool on {{ _wmp_clusters_needing_pool | default([]) | length }} cluster(s):
+      name={{ workshop_machinepool_name }},
+      instance_type={{ workshop_machinepool_instance_type }},
+      autoscaling={{ workshop_machinepool_min_replicas }}-{{ workshop_machinepool_max_replicas }}
+
+- name: Create workshop machinepool on each cluster
+  ansible.builtin.shell: |
+    set -o pipefail
+    rosa create machinepool \
+      --cluster={{ item.name }} \
+      --name={{ workshop_machinepool_name }} \
+      --instance-type={{ workshop_machinepool_instance_type }} \
+      --enable-autoscaling \
+      --min-replicas={{ workshop_machinepool_min_replicas }} \
+      --max-replicas={{ workshop_machinepool_max_replicas }} \
+      --autorepair 2>&1
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ _wmp_clusters_needing_pool | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _wmp_create_results
+  failed_when: false
+  no_log: true
+
+- name: Report workshop machinepool results
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.name }}:
+      {{ 'workshop machinepool created' if item.rc == 0
+         else 'FAILED — ' + (item.stdout | default('') | regex_search('ERR:.*|Error:.*|error:.*') | default('', true) or 'check cluster logs') }}
+  loop: "{{ _wmp_create_results.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name | default('n/a') }}"
+  when: item is not skipped
+
+- name: Fail if any workshop machinepool creation failed
+  ansible.builtin.fail:
+    msg: >
+      Workshop machinepool creation FAILED for:
+      {{ _wmp_failed | join(', ') }}
+  vars:
+    _wmp_failed: >-
+      {{ _wmp_create_results.results | default([])
+         | selectattr('rc', 'defined')
+         | selectattr('rc', 'ne', 0)
+         | map(attribute='item.name')
+         | list }}
+  when: _wmp_failed | length > 0

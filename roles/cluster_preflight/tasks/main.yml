@@ -1,0 +1,305 @@
+---
+# cluster_preflight/tasks/main.yml
+# Checks cluster readiness before MAS installation.
+# Sets fact: preflight_result (pass/fail) and preflight_report (dict)
+
+- name: Initialize preflight check results
+  ansible.builtin.set_fact:
+    _preflight_checks: {}
+    _preflight_errors: []
+    _preflight_warnings: []
+
+# --- Check API Reachability ---
+- name: Verify cluster API is reachable
+  block:
+    - name: Query cluster version
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: ClusterVersion
+        name: version
+      register: _cluster_version_info
+
+    - name: Record cluster version
+      ansible.builtin.set_fact:
+        _preflight_checks: >-
+          {{ _preflight_checks | combine({
+            'api_reachable': true,
+            'cluster_version': _cluster_version_info.resources[0].status.desired.version | default('unknown')
+          }) }}
+
+  rescue:
+    - name: Record API unreachable
+      ansible.builtin.set_fact:
+        _preflight_checks: "{{ _preflight_checks | combine({'api_reachable': false}) }}"
+        _preflight_errors: "{{ _preflight_errors + ['Cluster API is not reachable'] }}"
+
+# --- Gather Node Information ---
+- name: Gather worker node information
+  block:
+    - name: Get all nodes
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Node
+        label_selectors:
+          - "node-role.kubernetes.io/worker"
+      register: _worker_nodes
+
+    - name: Extract raw CPU values
+      ansible.builtin.set_fact:
+        _raw_cpu_values: "{{ _worker_nodes.resources | map(attribute='status.allocatable.cpu') | list }}"
+
+    - name: Calculate total CPU in millicores
+      ansible.builtin.set_fact:
+        _worker_count: "{{ _worker_nodes.resources | length }}"
+        _total_cpu_milli: >-
+          {{ _raw_cpu_values
+             | map('regex_replace', '^(\\d+)$', '\\g<1>000')
+             | map('regex_replace', 'm$', '')
+             | map('int')
+             | sum }}
+        _total_memory_ki: >-
+          {{ _worker_nodes.resources
+             | map(attribute='status.allocatable.memory')
+             | map('regex_replace', 'Ki$', '')
+             | map('int')
+             | sum }}
+
+    - name: Convert CPU millicores to cores
+      ansible.builtin.set_fact:
+        _total_cpu: "{{ (_total_cpu_milli | int / 1000) | round(1) }}"
+
+    - name: Convert memory to GiB
+      ansible.builtin.set_fact:
+        _total_memory_gi: "{{ (_total_memory_ki | int / 1048576) | round(1) }}"
+
+    - name: Check minimum worker count
+      ansible.builtin.set_fact:
+        _preflight_errors: >-
+          {{ _preflight_errors + ['Insufficient worker nodes: found ' + _worker_count | string + ', need ' + masworld_preflight_min_workers | string] }}
+      when: _worker_count | int < masworld_preflight_min_workers | int
+
+    - name: Check minimum CPU
+      ansible.builtin.set_fact:
+        _preflight_errors: >-
+          {{ _preflight_errors + ['Insufficient CPU: found ' + _total_cpu | string + ' cores, need ' + masworld_preflight_min_cpu | string] }}
+      when: _total_cpu | float < masworld_preflight_min_cpu | float
+
+    - name: Check minimum memory
+      ansible.builtin.set_fact:
+        _preflight_errors: >-
+          {{ _preflight_errors + ['Insufficient memory: found ' + _total_memory_gi | string + ' GiB, need ' + masworld_preflight_min_memory_gi | string + ' GiB'] }}
+      when: _total_memory_gi | float < masworld_preflight_min_memory_gi | float
+
+    - name: Record node information
+      ansible.builtin.set_fact:
+        _preflight_checks: >-
+          {{ _preflight_checks | combine({
+            'worker_count': _worker_count | int,
+            'total_cpu': _total_cpu | int,
+            'total_memory_gi': _total_memory_gi | float,
+            'node_check': (_worker_count | int >= masworld_preflight_min_workers | int) and
+                          (_total_cpu | float >= masworld_preflight_min_cpu | float) and
+                          (_total_memory_gi | float >= masworld_preflight_min_memory_gi | float)
+          }) }}
+
+# --- Check StorageClass ---
+- name: Check required StorageClass exists
+  block:
+    - name: Query StorageClass
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ masworld_preflight_required_storage_class }}"
+      register: _storage_class_info
+
+    - name: Validate StorageClass found
+      ansible.builtin.set_fact:
+        _preflight_checks: >-
+          {{ _preflight_checks | combine({
+            'storage_class_present': (_storage_class_info.resources | length > 0)
+          }) }}
+
+    - name: Record StorageClass missing
+      ansible.builtin.set_fact:
+        _preflight_errors: >-
+          {{ _preflight_errors + ['Required StorageClass "' + masworld_preflight_required_storage_class + '" not found'] }}
+      when: _storage_class_info.resources | length == 0
+
+# --- Check OperatorHub Access ---
+- name: Check OperatorHub / CatalogSources
+  block:
+    - name: Query CatalogSources in openshift-marketplace
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: CatalogSource
+        namespace: openshift-marketplace
+      register: _catalog_sources
+
+    - name: Record OperatorHub status
+      ansible.builtin.set_fact:
+        _preflight_checks: >-
+          {{ _preflight_checks | combine({
+            'operatorhub_accessible': (_catalog_sources.resources | length > 0),
+            'catalog_source_count': _catalog_sources.resources | length
+          }) }}
+
+    - name: Warn if no CatalogSources found
+      ansible.builtin.set_fact:
+        _preflight_errors: >-
+          {{ _preflight_errors + ['No CatalogSources found in openshift-marketplace — OperatorHub may be unavailable'] }}
+      when: _catalog_sources.resources | length == 0
+
+# --- Check for Degraded ClusterOperators ---
+- name: Check ClusterOperator health
+  block:
+    - name: Query all ClusterOperators
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: ClusterOperator
+      register: _cluster_operators
+
+    - name: Build list of degraded operators
+      ansible.builtin.set_fact:
+        _degraded_operator_names: >-
+          {{ _cluster_operators.resources
+             | selectattr('status.conditions', 'defined')
+             | list
+             | json_query('[?status.conditions[?type==`Degraded` && status==`True`]].metadata.name')
+             | default([]) }}
+
+    - name: Record degraded operators
+      ansible.builtin.set_fact:
+        _preflight_checks: >-
+          {{ _preflight_checks | combine({
+            'degraded_operators': _degraded_operator_names | default([]),
+            'cluster_operators_healthy': (_degraded_operator_names | default([]) | length == 0)
+          }) }}
+
+    - name: Warn about degraded operators
+      ansible.builtin.set_fact:
+        _preflight_warnings: >-
+          {{ _preflight_warnings + ['Degraded ClusterOperators found: ' + (_degraded_operator_names | join(', '))] }}
+      when: (_degraded_operator_names | default([]) | length) > 0
+
+# --- Check IBM Container Registry Access ---
+- name: Check IBM container registry connectivity
+  block:
+    - name: Test connectivity to IBM registry
+      ansible.builtin.uri:
+        url: "https://{{ masworld_preflight_ibm_registry_host }}/v2/"
+        method: GET
+        timeout: "{{ masworld_preflight_registry_timeout }}"
+        status_code: [200, 401]
+        validate_certs: true
+      register: _ibm_registry_check
+
+    - name: Record IBM registry accessible
+      ansible.builtin.set_fact:
+        _preflight_checks: >-
+          {{ _preflight_checks | combine({
+            'ibm_registry_accessible': true
+          }) }}
+
+  rescue:
+    - name: Record IBM registry not accessible
+      ansible.builtin.set_fact:
+        _preflight_checks: >-
+          {{ _preflight_checks | combine({
+            'ibm_registry_accessible': false
+          }) }}
+        _preflight_warnings: >-
+          {{ _preflight_warnings + ['IBM container registry (' + masworld_preflight_ibm_registry_host + ') is not reachable — network issue or mirror may be needed'] }}
+  when: masworld_preflight_check_ibm_registry | bool
+
+# --- Check Bastion SSH Connectivity (pre-provisioned clusters) ---
+- name: Check bastion SSH connectivity
+  when:
+    - masworld_bastion_host is defined
+    - masworld_bastion_host | length > 0
+  block:
+    - name: Test SSH to bastion host
+      ansible.builtin.command:
+        cmd: >-
+          sshpass -p '{{ masworld_bastion_password }}'
+          ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -o BatchMode=no
+          {{ masworld_bastion_username }}@{{ masworld_bastion_host }}
+          'echo reachable'
+      register: _bastion_check
+      failed_when: false
+      changed_when: false
+      no_log: true
+
+    - name: Record bastion reachable
+      ansible.builtin.set_fact:
+        _preflight_checks: >-
+          {{ _preflight_checks | combine({
+            'bastion_reachable': (_bastion_check.rc | default(1)) == 0
+          }) }}
+
+    - name: Record bastion unreachable
+      ansible.builtin.set_fact:
+        _preflight_warnings: >-
+          {{ _preflight_warnings + ['Bastion host ' + masworld_bastion_host + ' is not reachable — machinepool management and ROSA token extraction will not work'] }}
+      when: (_bastion_check.rc | default(1)) != 0
+
+# --- Check for Existing MAS Resources ---
+- name: Check for existing MAS resources on cluster
+  block:
+    - name: Look for existing MAS namespace
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        label_selectors:
+          - "app.kubernetes.io/part-of=ibm-mas"
+      register: _existing_mas_ns
+
+    - name: Record existing MAS state
+      ansible.builtin.set_fact:
+        _preflight_checks: >-
+          {{ _preflight_checks | combine({
+            'existing_mas_found': (_existing_mas_ns.resources | length > 0),
+            'existing_mas_namespaces': _existing_mas_ns.resources | map(attribute='metadata.name') | list
+          }) }}
+
+    - name: Warn about existing MAS installation
+      ansible.builtin.set_fact:
+        _preflight_warnings: >-
+          {{ _preflight_warnings + ['Existing MAS namespaces found: ' + (_existing_mas_ns.resources | map(attribute='metadata.name') | join(', ')) + ' — may conflict with new installation'] }}
+      when: _existing_mas_ns.resources | length > 0
+
+# --- Generate Preflight Report ---
+- name: Build preflight report
+  ansible.builtin.set_fact:
+    preflight_report:
+      timestamp: "{{ now(utc=true) }}"
+      cluster_version: "{{ _preflight_checks.cluster_version | default('unknown') }}"
+      checks: "{{ _preflight_checks }}"
+      errors: "{{ _preflight_errors }}"
+      warnings: "{{ _preflight_warnings }}"
+      result: "{{ 'pass' if (_preflight_errors | length == 0) else 'fail' }}"
+
+- name: Set preflight_result fact for downstream roles
+  ansible.builtin.set_fact:
+    preflight_result: "{{ preflight_report.result }}"
+
+- name: Display preflight report summary
+  ansible.builtin.debug:
+    msg: |
+      === Cluster Preflight Report ===
+      Result: {{ preflight_result | upper }}
+      Cluster Version: {{ preflight_report.cluster_version }}
+      Workers: {{ _preflight_checks.worker_count | default('N/A') }}
+      CPU: {{ _preflight_checks.total_cpu | default('N/A') }} cores
+      Memory: {{ _preflight_checks.total_memory_gi | default('N/A') }} GiB
+      StorageClass ({{ masworld_preflight_required_storage_class }}): {{ 'Present' if _preflight_checks.storage_class_present | default(false) else 'Missing' }}
+      IBM Registry: {{ 'Accessible' if _preflight_checks.ibm_registry_accessible | default(false) else 'Not checked or unreachable' }}
+      Bastion SSH: {{ 'Reachable' if _preflight_checks.bastion_reachable | default(false) else ('Not configured' if masworld_bastion_host | default('') | length == 0 else 'Unreachable') }}
+      Errors: {{ _preflight_errors | length }}
+      Warnings: {{ _preflight_warnings | length }}
+
+- name: Fail if preflight checks did not pass
+  ansible.builtin.fail:
+    msg: >-
+      Cluster preflight failed with {{ _preflight_errors | length }} error(s):
+      {{ _preflight_errors | join('; ') }}
+  when: preflight_result == 'fail'

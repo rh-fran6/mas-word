@@ -1,0 +1,55 @@
+---
+- name: Include build_definitions
+  ansible.builtin.include_tasks: build_definitions.yml
+
+- name: Gather cluster details
+  ansible.builtin.shell: |
+    set -o pipefail
+    rosa describe cluster --cluster={{ item.name }} --output json
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: cluster_details
+  changed_when: false
+  no_log: true
+
+- name: Build verification report
+  ansible.builtin.set_fact:
+    cluster_report: >-
+      {{ cluster_report | default([]) + [{
+        'name': item.item.name,
+        'category': item.item.category,
+        'state': (item.stdout | from_json).status.state,
+        'api_url': (item.stdout | from_json).api.url | default('pending'),
+        'console_url': (item.stdout | from_json).console.url | default('pending'),
+        'version': (item.stdout | from_json).openshift_version | default('n/a'),
+        'region': (item.stdout | from_json).region.id | default('n/a'),
+      }] }}
+  loop: "{{ cluster_details.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Display cluster fleet report
+  ansible.builtin.debug:
+    msg: "{{ cluster_report }}"
+
+- name: Generate cluster report file
+  ansible.builtin.template:
+    src: cluster-report.j2
+    dest: "{{ playbook_dir }}/../cluster-report.txt"
+    mode: "0644"
+
+- name: Assert all clusters are ready
+  ansible.builtin.assert:
+    that:
+      - item.state == 'ready'
+    fail_msg: "Cluster {{ item.name }} is NOT ready (state: {{ item.state }})"
+  loop: "{{ cluster_report }}"
+  loop_control:
+    label: "{{ item.name }}"

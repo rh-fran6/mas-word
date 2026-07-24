@@ -1,0 +1,25 @@
+---
+# rosa_version is sourced from config/components.yaml (openshift.version)
+rosa_channel_group: "stable"
+rosa_mode: "auto"
+
+# Async timing for rosa create CLI invocation
+rosa_create_async_timeout: 300
+rosa_create_async_retries: 80
+rosa_create_async_delay: 30
+
+# Polling for cluster readiness (ready state)
+rosa_ready_retries: 60
+rosa_ready_delay: 30
+
+# Async timing for rosa delete CLI invocation
+rosa_delete_async_timeout: 300
+rosa_delete_ready_retries: 80
+rosa_delete_ready_delay: 30
+
+# Workshop machinepool (Scenario 3: cluster-ready)
+workshop_machinepool_name: "workshop-pool"
+workshop_machinepool_instance_type: "m6a.4xlarge"
+workshop_machinepool_min_replicas: 1
+workshop_machinepool_max_replicas: 3
+add_new_machine_pool: true

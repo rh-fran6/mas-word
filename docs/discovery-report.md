@@ -1,7 +1,7 @@
 # Discovery Report — MAS World 2026
 
-**Status**: DRAFT — Phase 0  
-**Date**: 2026-07-19  
+**Status**: DRAFT — Phase 0
+**Date**: 2026-07-19
 **Author**: Platform Architecture Team
 
 ---
@@ -30,12 +30,12 @@ maximo-world/
 ├── CLAUDE.md
 ├── prompt.md
 ├── docs/                              # Cross-cutting documentation
-├── mas-world-2026-automation/         # Ansible collection + CLI + fleet orchestration
-├── mas-world-2026-showroom/           # Attendee-facing Showroom content
-├── mas-world-2026-public-content/     # Sanitized reusable examples
-├── mas-world-2026-acm/               # ACM policies, placements, demo assets
-├── mas-world-2026-agnosticv/          # AgnosticV catalog items
-├── mas-world-2026-operations/         # Runbooks, seat management, dashboards
+├──          # Ansible collection + CLI + fleet orchestration
+├── showroom/           # Attendee-facing Showroom content
+├── public-content/     # Sanitized reusable examples
+├── acm/               # ACM policies, placements, demo assets
+├── agnosticv/          # AgnosticV catalog items
+├── operations/         # Runbooks, seat management, dashboards
 ```
 
 ### Repository Decision Record

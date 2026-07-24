@@ -1,0 +1,33 @@
+---
+- name: Include build_definitions
+  ansible.builtin.include_tasks: build_definitions.yml
+
+- name: Initialize admin credentials collector
+  ansible.builtin.set_fact:
+    cluster_admin_credentials: {}
+  no_log: true
+
+- name: Check for existing cluster-admin user
+  ansible.builtin.shell: |
+    set -o pipefail
+    rosa describe admin --cluster={{ item.name }} 2>&1
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: admin_check_results
+  failed_when: admin_check_results.rc > 1
+  changed_when: false
+  no_log: true
+
+- name: Create cluster-admin user where none exists
+  ansible.builtin.include_tasks: _create_admin_single.yml
+  loop: "{{ admin_check_results.results }}"
+  loop_control:
+    loop_var: admin_check
+    label: "{{ admin_check.item.name }}"
