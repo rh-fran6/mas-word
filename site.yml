@@ -17,5 +17,5 @@ asciidoc:
 
 ui:
   bundle:
-    url: https://github.com/rhpds/showroom-ui/releases/download/v0.3.0/ui-bundle.zip
+    url: https://github.com/rhpds/nookbag/releases/download/nookbag-v0.3.7/nookbag-v0.3.7.zip
     snapshot: true
