@@ -1,17 +1,49 @@
 ---
 title: MAS World 2026
 theme: rhpds-summit
+antora:
+  name: modules
+  dir: www
+  modules:
+    - name: index
+      label: Welcome
+      solveButton: false
+    - name: 01-access-readiness
+      label: "Access and Readiness"
+      solveButton: false
+    - name: 02-navigation-search
+      label: "Navigation and Search"
+      solveButton: false
+    - name: 03-acm-fleet-management
+      label: "Advanced Cluster Management"
+      solveButton: false
+    - name: 04-updates
+      label: "Updates"
+      solveButton: false
+    - name: 05-observability
+      label: "Observability and Logging"
+      solveButton: false
+    - name: 06-identity
+      label: "Identity Provider Integration"
+      solveButton: false
+    - name: 07-production-architecture
+      label: "Production Architecture"
+      solveButton: false
+    - name: 08-troubleshooting
+      label: "Troubleshooting"
+      solveButton: false
+    - name: 99-conclusion
+      label: Conclusion
+      solveButton: false
 tabs:
   - title: OpenShift Console
     url: https://console-openshift-console.${DOMAIN}
     position: right
     type: console
-
   - title: Maximo
     url: https://admin.inst1.${DOMAIN}
     position: right
     type: iframe
-
   - title: Grafana
     url: https://grafana-openshift-logging.${DOMAIN}
     position: right

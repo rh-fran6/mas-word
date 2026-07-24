@@ -1,6 +1,6 @@
 site:
   title: MAS World 2026
-  start_page: mas-world-2026::index.adoc
+  start_page: modules::index.adoc
 
 content:
   sources:
@@ -17,5 +17,5 @@ asciidoc:
 
 ui:
   bundle:
-    url: https://github.com/rhpds/nookbag/releases/download/nookbag-v0.3.7/nookbag-v0.3.7.zip
+    url: https://gitlab.com/antora/antora-ui-default/-/jobs/artifacts/HEAD/raw/build/ui-bundle.zip?job=bundle-stable
     snapshot: true

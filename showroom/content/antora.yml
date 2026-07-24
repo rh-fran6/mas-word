@@ -1,5 +1,5 @@
-name: mas-world-2026
-version: main
+name: modules
+version: ~
 title: MAS World 2026
 start_page: index.adoc
 asciidoc:
