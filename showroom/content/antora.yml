@@ -1,6 +1,6 @@
 name: modules
 version: ~
-title: MAS World 2026
+title: Maximo World 2026
 start_page: index.adoc
 asciidoc:
   attributes:

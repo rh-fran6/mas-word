@@ -1,5 +1,5 @@
 site:
-  title: MAS World 2026
+  title: Maximo World 2026
   start_page: modules::index.adoc
 
 content:
@@ -12,7 +12,7 @@ asciidoc:
     ocp_version: "4.21"
     mas_version: "9.2"
     manage_version: "9.2"
-    lab_title: "MAS World 2026"
+    lab_title: "Maximo World 2026"
     lab_duration: "2 hours"
     openshift_console_url@: "https://console-openshift-console.apps.example.com"
     openshift_cluster_ingress_domain@: "apps.example.com"

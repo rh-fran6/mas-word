@@ -2,58 +2,58 @@
 :navtitle: Navigation and Search
 :duration: 10 minutes
 
-Explore the Maximo Application Suite interface and understand how it runs on OpenShift.
+Explore the OpenShift Console and learn how to navigate your cluster efficiently.
 
 == Introduction
 
-IBM Maximo Application Suite ({mas_version}) provides enterprise asset management capabilities. In this section, you will:
+The OpenShift Console is your primary interface for managing and observing your cluster. In this section, you will:
 
-* Navigate the Maximo Suite Navigator
-* Explore Maximo Manage
-* Understand the relationship between MAS and OpenShift
-
-== Exercise: Explore the MAS Navigator
-
-. Open the *Maximo* tab on the right.
-. In the Suite Navigator, locate the following applications:
-+
-* *Manage* — Enterprise Asset Management
-* *Administration* — Suite configuration
-. Click on *Manage* to open it.
+* Explore how Maximo Application Suite runs on OpenShift
+* Add frequently used projects to your Favorites
+* Use the built-in Search tool to find resources across your cluster
 
 == Exercise: Explore Maximo on OpenShift
 
-MAS runs as a set of operators and custom resources on OpenShift.
+MAS runs as a set of operators and custom resources on OpenShift. You can explore these through the console.
 
-. Switch to the *Terminal* tab.
-. List the MAS namespaces:
-+
-[source,role="execute"]
-----
-oc get namespaces | grep mas
-----
-+
-. View the MAS Suite custom resource:
-+
-[source,role="execute"]
-----
-oc get suite -n mas-inst1-core -o yaml | head -30
-----
-+
-. Check the MAS operators:
-+
-[source,role="execute"]
-----
-oc get csv -n mas-inst1-core --no-headers
-----
+. In the *OpenShift Console* tab, navigate to *Home* > *Projects*.
+. In the filter bar, type `mas` to see all MAS-related namespaces (e.g., `mas-inst1-core`, `mas-inst1-manage`).
+. Click on `mas-inst1-core` to open the project.
+. Navigate to *Workloads* > *Pods* and observe the MAS core pods running.
+. Navigate to *Operators* > *Installed Operators*. Note the IBM operators managing MAS -- these are the controllers that maintain the desired state of your Maximo environment.
 
 == Exercise: Explore OpenShift Resources
 
-. In the *OpenShift Console* tab, navigate to *Workloads > Pods*.
-. Select the `mas-inst1-core` project from the dropdown.
-. Observe the MAS core pods running.
-. Navigate to *Operators > Installed Operators*.
-. Note the IBM operators managing MAS.
+. While still in the `mas-inst1-core` project, navigate to *Networking* > *Routes*.
+. Observe the routes created for MAS components. These are the external URLs that make MAS accessible.
+. Navigate to *Workloads* > *ConfigMaps* and *Workloads* > *Secrets* to see the configuration backing MAS.
+
+== Exercise: Add a Project to Favorites
+
+OpenShift lets you mark frequently used projects as Favorites for quick access.
+
+. Click the *Project* dropdown at the top of the console.
+. In the dropdown list, find `mas-inst1-core`.
+. Click the *star icon* next to `mas-inst1-core` to add it to your Favorites.
+. Repeat for your student project `student-{seat_number}`.
+. Click the *Project* dropdown again. Your favorited projects now appear at the top of the list under a *Favorites* section, making them easy to switch to.
+
+== Exercise: Using the Search Tool
+
+The Search tool lets you find any Kubernetes resource across your cluster.
+
+. Click the *Search* icon (magnifying glass) in the left navigation menu of the OpenShift Console.
+. In the *Resources* dropdown, select *Pod*.
+. In the *Namespace* dropdown, select `mas-inst1-core`.
+. Observe the list of pods returned. You can use the filter bar to narrow results further.
+. Now change the *Resources* dropdown to *Deployment* and observe the deployments in the namespace.
+. Try searching for other resource types:
++
+* *Route* -- to see external endpoints
+* *Service* -- to see internal networking
+* *Secret* -- to see configuration secrets (contents are hidden by default)
++
+. Change the namespace to `mas-inst1-manage` and search for *Pod* to see the Maximo Manage pods.
 
 === Verify
 
@@ -61,10 +61,10 @@ oc get csv -n mas-inst1-core --no-headers
 ====
 You have completed this section when:
 
-* You can access the MAS Navigator
-* You can list MAS namespaces from the terminal
-* You can see MAS pods in the OpenShift Console
+* You can see MAS pods in the OpenShift Console under *Workloads > Pods*
 * You understand that MAS runs as operators on OpenShift
+* You have added `mas-inst1-core` and your student project to Favorites
+* You can use the Search tool to find Pods, Deployments, Routes, and Services across namespaces
 ====
 
 Click *Next* to explore the update lifecycle.

@@ -1,7 +1,7 @@
-= MAS World 2026
+= Maximo World 2026
 :navtitle: Welcome
 
-Welcome to *MAS World 2026*, a hands-on workshop exploring IBM Maximo Application Suite on Red Hat OpenShift.
+Welcome to *Maximo World 2026*, a hands-on workshop exploring IBM Maximo Application Suite on Red Hat OpenShift.
 
 [IMPORTANT]
 ====
@@ -29,7 +29,7 @@ Log in to the OpenShift Console using these credentials. Your lab user has permi
 | Region | `{s3_region}` pass:[<button onclick="navigator.clipboard.writeText(this.closest('td').querySelector('code').textContent).then(function(){var b=this;b.textContent='✓';setTimeout(function(){b.textContent='⧉'},1500)}.bind(this))" style="cursor:pointer;border:none;background:none;font-size:14px;vertical-align:middle;padding:0 0 0 4px;color:#0066cc" title="Copy to clipboard">⧉</button>]
 |===
 
-You will need these when deploying the LokiStack in Exercise 5.
+You will need these when deploying the LokiStack in the Operator Installation exercise.
 ====
 
 [NOTE]
@@ -92,30 +92,22 @@ You have a dedicated OpenShift {ocp_version} cluster with:
 
 | 01
 | Access and Readiness -- log in and verify your environment
-| 15 min
+| 5 min
 
 | 02
-| Navigation and Search -- explore the Maximo UI
-| 20 min
+| Navigation and Search -- explore the OpenShift Console
+| 10 min
 
 | 04
-| Updates -- understand the update lifecycle
-| 15 min
-
-| 05
-| *Observability and Logging* -- install operators, deploy LokiStack, query logs
-| 45 min
-
-| 06
-| Identity Integration -- sync LDAP users to Maximo, configure group sync
-| 30 min
-
-| 07
-| Production Architecture -- sizing, HA, and operational considerations
+| Updates and Why You Should Care -- understand the update lifecycle
 | 20 min
 
-| 08
-| Troubleshooting -- diagnose common issues
+| 05
+| *Operator Installation and Configuration* -- install operators, deploy LokiStack, query logs
+| 20 min
+
+| 06
+| Identity Integration -- configure group sync with the Group Sync Operator
 | 20 min
 |===
 
@@ -123,7 +115,6 @@ You have a dedicated OpenShift {ocp_version} cluster with:
 
 * Your MAS environment is *pre-installed and read-only*. You can explore all MAS components but cannot install, delete, or modify them.
 * The logging and observability stack is *not* pre-installed -- you will install it yourself in Exercise 5.
-* If you get stuck or badly misconfigure something, ask your facilitator to run the lab reset procedure for your seat.
 * Your student namespace is `student-{seat_number}`.
 
 Click *Next* to verify your environment is ready.

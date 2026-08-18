@@ -1,5 +1,5 @@
 ---
-title: MAS World 2026
+title: Maximo World 2026
 theme: rhpds-summit
 antora:
   name: modules
@@ -15,10 +15,10 @@ antora:
       label: "Navigation and Search"
       solveButton: false
     - name: 04-updates
-      label: "Updates"
+      label: "Updates and Why You Should Care"
       solveButton: false
     - name: 05-observability
-      label: "Observability and Logging"
+      label: "Operator Installation and Configuration"
       solveButton: false
     - name: 06-identity
       label: "Identity Provider Integration"

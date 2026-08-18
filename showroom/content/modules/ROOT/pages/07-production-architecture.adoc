@@ -21,7 +21,7 @@ This workshop demonstrates concepts at conference scale. A production deployment
 
 | Database
 | Db2 inside cluster
-| Managed database service or dedicated HA Db2
+| Managed database service or dedicated enterprise database
 
 | Identity
 | Keycloak + OpenLDAP demo
@@ -40,24 +40,6 @@ This workshop demonstrates concepts at conference scale. A production deployment
 | Scheduled maintenance windows with rollback
 
 |===
-
-== Production Sizing Guidelines
-
-The following are reference guidelines. Actual sizing depends on your workload.
-
-=== OpenShift Cluster
-
-* *Workers*: minimum 3 (HA), recommended 5+ for MAS
-* *CPU per worker*: 16+ vCPUs
-* *Memory per worker*: 64+ GiB
-* *Storage*: 500+ GiB persistent storage per worker
-
-=== Maximo Application Suite
-
-* *MAS Core*: 8 vCPU, 32 GiB RAM minimum
-* *Maximo Manage*: 16 vCPU, 64 GiB RAM minimum (depends on modules)
-* *Database*: separate compute or managed service
-* *Object Storage*: S3 or compatible for attachments and logs
 
 == Key Takeaways
 

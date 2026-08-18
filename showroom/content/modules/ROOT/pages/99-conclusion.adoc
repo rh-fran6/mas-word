@@ -1,19 +1,19 @@
 = Conclusion
 :navtitle: Conclusion
 
-Congratulations on completing MAS World 2026!
+Congratulations on completing Maximo World 2026!
 
 == What You Accomplished
 
 In this workshop, you:
 
 * [x] Verified access to your dedicated OpenShift cluster with MAS
-* [x] Navigated Maximo Application Suite and explored its OpenShift foundation
-* [x] Explored OpenShift and MAS update mechanisms
+* [x] Navigated the OpenShift Console, added projects to Favorites, and used the Search tool
+* [x] Explored OpenShift and MAS update mechanisms and understood why version management matters
 * [x] *Installed* the OpenShift Logging stack from scratch (Logging Operator, Loki Operator, Cluster Observability Operator)
 * [x] Deployed a LokiStack with S3 backend and configured log forwarding
-* [x] Queried logs with LogQL through the OpenShift Console
-* [x] Synced LDAP users to Maximo and configured OpenShift group sync
+* [x] Verified persistent logging by deleting a Manage pod and querying its historical logs
+* [x] Configured OpenShift group sync using the Group Sync Operator with LDAP
 * [x] Understood production architecture considerations and troubleshooting techniques
 
 == Key Takeaways
@@ -26,20 +26,22 @@ In this workshop, you:
 == Next Steps
 
 * Review the production architecture guidance from this workshop
-* Explore the additional resources linked in each section
+* Explore the additional resources linked below
+* Meet the team at the *Cohesive Booth* to continue the conversation
 * Connect with the presenters for questions:
 ** *Ernie Steagall* (ONEOK) -- MAS operations perspective
-** *Francis Anyaegbu* (Red Hat) -- OpenShift platform
-** *Myles Vivian* (Cohesive) -- Observability
+** *Francis Anyaegbu* (Red Hat) -- OpenShift platform and automation
+** *Myles Vivian* (Cohesive) -- Observability and logging
 
 == Resources
 
-* IBM Maximo Application Suite documentation
-* Red Hat OpenShift documentation
-* OpenShift Logging documentation
+* https://www.ibm.com/docs/en/mas-cd/maximo-manage/continuous-delivery[IBM Maximo Application Suite Documentation^]
+* https://docs.openshift.com/container-platform/{ocp_version}/welcome/index.html[Red Hat OpenShift {ocp_version} Documentation^]
+* https://docs.openshift.com/container-platform/{ocp_version}/observability/logging/logging-6.6/log6x-about.html[OpenShift Logging 6.6 Documentation^]
+* https://access.redhat.com/support/policy/updates/openshift[OpenShift Life Cycle Policy^]
 
 == Feedback
 
 Your feedback helps us improve future workshops. Please share your thoughts with the facilitators or through the event feedback form.
 
-Thank you for attending MAS World 2026!
+Thank you for attending Maximo World 2026!

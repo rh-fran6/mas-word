@@ -1,6 +1,6 @@
-= Observability and Logging
-:navtitle: Observability and Logging
-:duration: 45 minutes
+= Operator Installation and Configuration
+:navtitle: Operator Installation and Configuration
+:duration: 20 minutes
 
 Install and configure the OpenShift Logging stack with Loki to observe your Maximo environment.
 
@@ -12,7 +12,7 @@ In this exercise you will install and configure a complete cluster logging stack
 * Created an S3-backed LokiStack for log storage
 * Configured log collection and forwarding
 * Enabled console-integrated log viewing
-* Generated test logs and queried them with LogQL
+* Verified persistent logging by observing logs from a deleted Maximo Manage pod
 
 == Architecture Overview
 
@@ -293,76 +293,42 @@ spec:
 . Click *Create*.
 . Verify the UIPlugin appears with the name `logging`. You may need to refresh the console page for the *Observe > Logs* menu item to appear.
 
-== Step 8: Generate Test Logs
+== Step 8: Verify Persistent Logging
 
+One of the key benefits of centralized logging is that logs persist even after a pod is deleted or restarted. You will demonstrate this by deleting a Maximo Manage pod and verifying its logs remain in Loki.
+
+. In the OpenShift web console, navigate to *Workloads > Pods*.
+. Select the `mas-inst1-manage` project from the namespace dropdown.
+. Look for a pod whose name contains `-all-` (this is the Manage ALL pod). Note its full name.
+. Click on the pod name to open its details. Select the *Logs* tab to view its current logs. These are the container logs streamed directly from the running pod.
+. Go back to the pod list. Click the three-dot menu (*⋮*) next to the Manage ALL pod and select *Delete Pod*. Confirm the deletion.
++
 [NOTE]
 ====
-Open the *Terminal* tab and run the following commands to generate test logs in your namespace:
-
-[source,role="execute",subs="+attributes"]
-----
-oc run log-test-{seat_number} \
-  --image=registry.access.redhat.com/ubi9/ubi-minimal:9.4 \
-  -n student-{seat_number} \
-  --restart=Never \
-  -- /bin/bash -c 'for i in $(seq 1 10); do echo "{\"msg\":\"MAS World log test\",\"seat\":\"{seat_number}\",\"iteration\":$i,\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"; sleep 2; done'
-----
-
-Wait about 25 seconds for the pod to finish generating logs, then verify the output:
-
-[source,role="execute",subs="+attributes"]
-----
-oc logs log-test-{seat_number} -n student-{seat_number}
-----
-
-You should see 10 JSON log entries with your seat number.
+The pod is managed by a Deployment, so Kubernetes will automatically create a replacement pod. You are not disrupting MAS -- the new pod will start up and resume serving requests.
 ====
-
-== Step 9: Query Logs in the Console
-
-Now use the integrated log viewer to find your test logs.
-
-. In the OpenShift web console, navigate to *Observe > Logs*.
++
+. Wait for the new replacement pod to reach *Running* status (this may take 1-2 minutes).
+. Now navigate to *Observe > Logs*.
 +
 [TIP]
 ====
 If you do not see the *Logs* menu item under *Observe*, try refreshing the browser page. The UIPlugin may take a moment to register.
 ====
 +
-. In the log query field, enter the following LogQL query to find your test logs:
+. In the log query field, enter the following LogQL query to find logs from the Manage namespace:
 +
-[source,text,subs="+attributes"]
+[source,text]
 ----
-\{kubernetes_namespace_name="student-{seat_number}"} |= "MAS World log test"
-----
-+
-. Click *Run Query* (or press Enter). You should see your 10 test log entries.
-. Try a more specific query that filters by your seat number using JSON parsing:
-+
-[source,text,subs="+attributes"]
-----
-\{kubernetes_namespace_name="student-{seat_number}"} | json | seat="{seat_number}"
+{kubernetes_namespace_name="mas-inst1-manage"}
 ----
 +
-. Experiment with other queries:
+. Click *Run Query*. You should see logs from both the old (deleted) pod and the new (replacement) pod. The old pod's logs are preserved in Loki even though the pod no longer exists.
+. Experiment with additional queries:
 +
-* View all infrastructure logs: `\{log_type="infrastructure"}`
+* View infrastructure logs: `\{log_type="infrastructure"}`
 * View audit logs: `\{log_type="audit"}`
-* Search across namespaces: `\{kubernetes_namespace_name=~"student-.*"} |= "MAS World"`
-
-== Step 10: Clean Up
-
-[NOTE]
-====
-Open the *Terminal* tab and run the following command to delete your test pod:
-
-[source,role="execute",subs="+attributes"]
-----
-oc delete pod log-test-{seat_number} -n student-{seat_number}
-----
-====
-
-After deleting the pod, navigate back to *Observe > Logs* and run your LogQL query again. Notice that the historical logs persist in Loki even after the pod is deleted -- this is a key benefit of centralized log storage.
+* Filter by severity: `\{kubernetes_namespace_name="mas-inst1-manage"} |= "error"`
 
 == Production Considerations
 
@@ -405,9 +371,8 @@ You have completed this section when:
 * LokiStack `logging-loki` reports *Ready* in the Loki Operator LokiStack tab
 * ClusterLogForwarder `collector` is configured with collector pods running in *Workloads > Pods*
 * UIPlugin `logging` is created and *Observe > Logs* appears in the console menu
-* You generated test logs and found them via LogQL in *Observe > Logs*
-* You understand that logs persist after pod deletion
-* You cleaned up your test pod
+* You deleted a Manage pod and confirmed its logs persist in Loki via *Observe > Logs*
+* You understand that logs are retained even after pod deletion
 ====
 
 Click *Next* to explore Identity Provider Integration.

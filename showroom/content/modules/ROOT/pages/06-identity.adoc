@@ -1,39 +1,23 @@
 = Identity Provider Integration
 :navtitle: Identity Provider Integration
-:duration: 30 minutes
+:duration: 20 minutes
 
-Understand how Maximo Application Suite integrates with external identity providers through OpenShift OAuth, sync LDAP users to Maximo, and configure OpenShift group sync.
+Understand how Maximo Application Suite integrates with external identity providers through OpenShift OAuth, and configure group sync from an LDAP directory.
 
 == Introduction
 
 Enterprise MAS deployments typically use an external identity provider (IdP) rather than local authentication. In this section, you will:
 
-* Understand OpenShift OAuth and identity provider configuration
 * Explore a Keycloak instance deployed on your cluster
 * Observe LDAP user federation in Keycloak
-* Sync LDAP users to Maximo Application Suite
-* Configure OpenShift group sync from LDAP
+* Install and configure the Group Sync Operator to synchronize LDAP groups to OpenShift
 * Understand the full identity chain: LDAP -> Keycloak -> OpenShift OAuth -> MAS
-
-== Exercise: Explore Current Authentication
-
-. In {openshift_console_url}[the OpenShift Console^], navigate to *Administration* -> *Cluster Settings*.
-. Select the *Configuration* tab.
-. In the configuration resource list, find and click *OAuth*.
-. On the OAuth details page, scroll down to the *Identity Providers* section.
-+
-You should see two identity providers listed:
-+
-* *htpasswd* -- the workshop admin provider
-* *masworld-keycloak* -- the OIDC provider wired to Keycloak
-+
-. Click on the *masworld-keycloak* entry to expand its details. Note the *Type* is `OpenID` and observe the issuer URL pointing to your Keycloak instance.
 
 == Exercise: Explore Keycloak
 
 A Keycloak instance is deployed on your cluster as the identity provider for this exercise.
 
-. In {openshift_console_url}[the OpenShift Console^], navigate to *Networking* -> *Routes*.
+. In {openshift_console_url}[the OpenShift Console^], navigate to *Networking* > *Routes*.
 . Use the *Project* dropdown at the top to select the `masworld-keycloak` namespace.
 . You should see a route for the Keycloak admin console. Click the *Location* URL to open it in a new browser tab.
 . Log in to the Keycloak admin console using the admin credentials provided by your facilitator.
@@ -65,148 +49,118 @@ Observe the connection settings:
 +
 . Click on any user (for example, `alice.engineer`) to view their profile details including email, first name, last name, and federation link back to LDAP.
 
-== Exercise: Understand the OIDC Integration
+== Exercise: OpenShift Group Sync with the Group Sync Operator
 
-Your cluster's OpenShift OAuth is configured with Keycloak as an OpenID Connect identity provider. This creates the full identity chain: LDAP -> Keycloak -> OpenShift OAuth -> MAS.
+OpenShift can synchronize groups from an LDAP directory using the Group Sync Operator. This creates OpenShift `Group` objects that map to LDAP groups, enabling RBAC based on directory membership.
 
-. In {openshift_console_url}[the OpenShift Console^], navigate to *Administration* -> *Cluster Settings*.
-. Select the *Configuration* tab, then click *OAuth*.
-. In the *Identity Providers* section, locate the *masworld-keycloak* entry with type *OpenID*. Note the issuer URL -- this is the Keycloak realm endpoint that OpenShift uses for authentication.
-. Now navigate to *Workloads* -> *Secrets*.
-. Use the *Project* dropdown at the top to select the `openshift-config` namespace.
-. In the search/filter box, type `keycloak-oidc-client-secret` to find the secret.
-. Click on the *keycloak-oidc-client-secret* entry to view its details. This is the OIDC client secret that OpenShift uses to communicate with Keycloak.
-. Under *Labels*, you should see `masworld.redhat.com/component=identity-demo`, confirming this secret was created as part of the identity demo setup.
+=== Step 1: Install the Group Sync Operator
 
-== Exercise: Sync LDAP Users to Maximo
-
-The LDAP users (alice, bob, carol, dave) are intended for use within Maximo Application Suite. In this exercise, you will trigger the identity sync and verify user access.
-
-=== Step 1: Verify LDAP Users in Keycloak
-
-First, confirm that Keycloak has synced the LDAP users.
-
-. Return to the Keycloak admin console tab (opened earlier).
-. Navigate to the *masworld* realm -> *Users*.
-. Click *View all users*. You should see the four LDAP-synced users alongside any locally created users.
-
-=== Step 2: Understand MAS User Sync
-
-MAS delegates authentication to OpenShift OAuth, which in turn delegates to Keycloak. When a Keycloak user (including LDAP-synced users) logs in to OpenShift for the first time, an OpenShift identity mapping is created. MAS can then recognize these users.
-
-The sync chain is:
-
-[source,text]
-----
-OpenLDAP -> Keycloak (User Federation) -> OpenShift OAuth (OIDC) -> MAS (identity mapping)
-----
-
-=== Step 3: Log In as an LDAP User
-
-To trigger the identity sync, log in to the OpenShift Console as one of the LDAP users via the Keycloak provider.
-
-. Open a new browser tab or incognito window.
-. Navigate to {openshift_console_url}[the OpenShift Console^].
-. Select *Keycloak* as the identity provider.
-. Log in with:
+. In the OpenShift Console, navigate to *Operators* > *OperatorHub*.
+. In the search field, type `Group Sync`.
+. Click the *Group Sync Operator* tile (provided by Red Hat).
+. Click *Install*.
+. On the Install Operator page, configure the following:
 +
-* *Username*: `alice.engineer`
-* *Password*: (ask your facilitator for the LDAP demo password)
+[cols="1,2"]
+|===
+| Setting | Value
+
+| Update channel
+| `alpha`
+
+| Installation mode
+| All namespaces on the cluster
+
+| Installed Namespace
+| `group-sync-operator`
+
+| Update approval
+| Automatic
+|===
 +
-. Once logged in, you should see the OpenShift Console dashboard, confirming that Alice's identity was created and authenticated through the full chain: LDAP -> Keycloak -> OpenShift OAuth.
-. To verify the identity mapping, navigate to *User Management* -> *Users* in the console. You should see `alice.engineer` listed with the identity provider `masworld-keycloak`.
+. Click *Install*.
+. Wait for the status to show *Succeeded* on the Installed Operators page.
 
-=== Step 4: Verify User in Maximo
+=== Step 2: Create the LDAP Bind Password Secret
 
-. Navigate to {mas_url}[MAS Suite Administration^].
-. Go to the *Users* section.
-. Search for `alice.engineer`.
-. If MAS user sync is configured, the user should appear. If not, this demonstrates the manual step where an administrator would map the identity.
+Before creating the GroupSync configuration, you need to provide the LDAP bind password as a secret in the operator's namespace.
 
-== Exercise: OpenShift Group Sync
-
-OpenShift can synchronize groups directly from an LDAP directory. This creates OpenShift `Group` objects that map to LDAP groups, enabling RBAC based on directory membership.
-
-NOTE: This step requires the CLI. Open the *Terminal* tab in your browser to run the commands below.
-
-=== Step 1: Create the LDAP Sync Configuration
-
-. Create the sync configuration file:
+. Navigate to *Workloads* > *Secrets*.
+. Use the *Project* dropdown to select `group-sync-operator`.
+. Click *Create* and select *Key/value secret*.
+. Set the *Secret name* to `ldap-bind-password`.
+. Add a single key/value pair:
 +
-[source,role="execute"]
-----
-cat <<'EOF' > /tmp/ldap-group-sync.yaml
-kind: LDAPSyncConfig
-apiVersion: v1
-url: ldap://openldap.masworld-keycloak.svc:3389
-insecure: true
-bindDN: "cn=Directory Manager"
-bindPassword:
-  file: /tmp/ldap-bind-password
-groupUIDNameMapping:
-  "cn=mas-admins,ou=groups,dc=masworld,dc=example,dc=com": mas-admins
-  "cn=mas-users,ou=groups,dc=masworld,dc=example,dc=com": mas-users
-rfc2307:
-  groupsQuery:
-    baseDN: "ou=groups,dc=masworld,dc=example,dc=com"
-    scope: sub
-    derefAliases: never
-    filter: (objectClass=groupOfNames)
-  groupUIDAttribute: dn
-  groupNameAttributes:
-    - cn
-  groupMembershipAttributes:
-    - member
-  usersQuery:
-    baseDN: "ou=users,dc=masworld,dc=example,dc=com"
-    scope: sub
-    derefAliases: never
-  userUIDAttribute: dn
-  userNameAttributes:
-    - uid
-EOF
-----
+[cols="1,2"]
+|===
+| Key | Value
 
-=== Step 2: Get the LDAP Bind Password
+| `password`
+| (ask your facilitator for the LDAP bind password)
+|===
++
+. Click *Create*.
 
-[source,role="execute"]
-----
-oc get secret openldap-admin-secret -n masworld-keycloak -o jsonpath='{.data.password}' | base64 -d > /tmp/ldap-bind-password
-----
+=== Step 3: Create the GroupSync Configuration
 
-=== Step 3: Run the Group Sync
-
-[source,role="execute"]
+. Navigate to *Operators* > *Installed Operators*.
+. Use the *Project* dropdown to select `group-sync-operator`.
+. Click on *Group Sync Operator*.
+. Click the *GroupSync* tab.
+. Click *Create GroupSync*.
+. Switch to the *YAML view* and replace the contents with the following:
++
+[source,yaml]
 ----
-oc adm groups sync --sync-config=/tmp/ldap-group-sync.yaml --confirm
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: GroupSync
+metadata:
+  name: ldap-groupsync
+  namespace: group-sync-operator
+spec:
+  providers:
+    - name: ldap-masworld
+      ldap:
+        url: ldap://openldap.masworld-keycloak.svc:3389
+        insecure: true
+        credentialsSecret:
+          name: ldap-bind-password
+          namespace: group-sync-operator
+          key: password
+        rfc2307:
+          groupsQuery:
+            baseDN: "ou=groups,dc=masworld,dc=example,dc=com"
+            scope: sub
+            derefAliases: never
+            filter: (objectClass=groupOfNames)
+          groupUIDAttribute: dn
+          groupNameAttributes:
+            - cn
+          groupMembershipAttributes:
+            - member
+          usersQuery:
+            baseDN: "ou=users,dc=masworld,dc=example,dc=com"
+            scope: sub
+            derefAliases: never
+          userUIDAttribute: dn
+          userNameAttributes:
+            - uid
+  schedule: "*/5 * * * *"
 ----
-
-.Expected output
-[source,text]
-----
-group/mas-admins
-group/mas-users
-----
++
+. Click *Create*.
+. Wait 1-2 minutes for the operator to perform the initial sync.
 
 === Step 4: Verify the Groups in the Console
 
-. Switch back to {openshift_console_url}[the OpenShift Console^].
-. Navigate to *User Management* -> *Groups*.
+. Navigate to *User Management* > *Groups*.
 . You should see two new groups:
 +
 * *mas-admins* -- with members `alice.engineer` and `dave.supervisor`
 * *mas-users* -- with members `bob.technician` and `carol.planner`
 +
 . Click on *mas-admins* to view its details and verify the membership list.
-
-=== Step 5: Clean Up Temp Files
-
-Return to the *Terminal* tab and run:
-
-[source,role="execute"]
-----
-rm -f /tmp/ldap-group-sync.yaml /tmp/ldap-bind-password
-----
+. The Group Sync Operator will automatically re-sync on the schedule defined in the GroupSync CR (every 5 minutes). Any changes in the LDAP directory will be reflected in OpenShift groups on the next sync cycle.
 
 == Production Considerations
 
@@ -232,8 +186,8 @@ rm -f /tmp/ldap-group-sync.yaml /tmp/ldap-bind-password
 | Token Lifetime
 | Configure appropriate expiration and refresh policies in Keycloak realm settings
 
-| MAS User Sync
-| Configure MAS to sync users from the IdP automatically via SCIM or OIDC claims
+| Group Sync
+| Use the Group Sync Operator for automated, scheduled synchronization in production
 |===
 
 WARNING: This workshop uses a lightweight OpenLDAP instance for demonstration. Production deployments should use Active Directory, Red Hat Directory Server, or a managed directory service with HA.
@@ -244,14 +198,12 @@ WARNING: This workshop uses a lightweight OpenLDAP instance for demonstration. P
 ====
 You have completed this section when:
 
-* You can see both htpasswd and Keycloak OIDC identity providers in the OAuth configuration (Administration -> Cluster Settings -> Configuration -> OAuth)
-* You accessed the Keycloak admin console via Networking -> Routes in the masworld-keycloak namespace
+* You accessed the Keycloak admin console via *Networking > Routes* in the `masworld-keycloak` namespace
 * You found the LDAP user federation (`ldap-masworld`) in Keycloak and synced users successfully
 * You viewed all 4 demo users (alice.engineer, bob.technician, carol.planner, dave.supervisor) in the Keycloak Users list
-* You verified the OIDC client secret exists in openshift-config (Workloads -> Secrets)
-* You logged in as an LDAP user (`alice.engineer`) via Keycloak and verified the identity in User Management -> Users
-* You successfully ran `oc adm groups sync` and created `mas-admins` and `mas-users` groups
-* You verified the groups in the console via User Management -> Groups
+* You installed the Group Sync Operator from OperatorHub
+* You created a GroupSync CR that connects to the workshop OpenLDAP
+* You verified that `mas-admins` and `mas-users` groups were created in *User Management > Groups*
 * You understand the full identity chain: LDAP -> Keycloak -> OpenShift OAuth -> MAS
 ====
 

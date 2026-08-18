@@ -1,5 +1,5 @@
-= Updates
-:navtitle: Updates
+= Updates and Why You Should Care
+:navtitle: Updates and Why You Should Care
 :duration: 20 minutes
 
 Understand how MAS and OpenShift updates are managed in an enterprise environment.
@@ -12,64 +12,40 @@ Keeping Maximo Application Suite and OpenShift current requires coordinating:
 * Operator Lifecycle Manager (OLM) updates
 * MAS operator channel updates
 * Maximo Manage application updates
-* Database schema migrations
 
-In this section, you will explore the update mechanisms and understand the operational workflow.
+In this section, you will explore the update mechanisms through the OpenShift Console and understand the operational workflow.
 
 == Exercise: Check Current Versions
 
-. Check your OpenShift version:
+. In the OpenShift Console, navigate to *Administration* > *Cluster Settings*.
+. On the *Details* tab, locate the *Current version* field. This shows your OpenShift platform version (e.g., `{ocp_version}`).
+. Note the *Channel* field -- this determines which update stream your cluster follows.
+. Now navigate to *Operators* > *Installed Operators*.
+. Use the *Project* dropdown to select `mas-inst1-core`.
+. Observe the list of IBM MAS operators. Note the *Version* column -- this shows the installed version of each operator.
+. Click on any IBM operator (e.g., *IBM Maximo Application Suite*) to open its details.
+. Select the *Subscription* tab. Here you can see:
 +
-[source,role="execute"]
-----
-oc get clusterversion version -o jsonpath='{.status.desired.version}'
-----
-+
-. Check the MAS operator version:
-+
-[source,role="execute"]
-----
-oc get csv -n mas-inst1-core -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'
-----
-+
-. Check the operator subscriptions:
-+
-[source,role="execute"]
-----
-oc get subscription -n mas-inst1-core -o custom-columns=NAME:.metadata.name,CHANNEL:.spec.channel,SOURCE:.spec.source
-----
+* *Channel* -- the version stream the operator tracks
+* *Source* -- the catalog source providing operator metadata
+* *Approval* -- whether updates are applied automatically or require manual approval
 
 == Exercise: Explore Update Channels
 
-. View available channels for the MAS operator:
-+
-[source,role="execute"]
-----
-oc get packagemanifest ibm-mas -n openshift-marketplace -o jsonpath='{range .status.channels[*]}{.name}{"\n"}{end}'
-----
-+
-. View the current install plan:
-+
-[source,role="execute"]
-----
-oc get installplan -n mas-inst1-core --no-headers
-----
+. While viewing an operator's *Subscription* tab, click the *Channel* value to see available channels.
+. Each channel represents a different version stream. For MAS, channels typically follow the `9.x` pattern.
+. Click *Cancel* to return without making changes.
+. Now navigate to *Operators* > *Installed Operators* in the `mas-inst1-core` project.
+. Click on any operator, then select the *InstallPlan* tab.
+. Review the install plans -- each one records what an operator update will install or has installed.
 
 == Exercise: Understand the Update Process
 
-. Check if there are pending updates for the cluster:
-+
-[source,role="execute"]
-----
-oc get clusterversion version -o jsonpath='{.status.availableUpdates[*].version}'
-----
-+
-. View the update history:
-+
-[source,role="execute"]
-----
-oc get clusterversion version -o jsonpath='{range .status.history[*]}{.version}{" - "}{.state}{"\n"}{end}'
-----
+. Navigate to *Administration* > *Cluster Settings*.
+. Select the *ClusterVersion* details tab.
+. Review the *Update History* section at the bottom. This shows all OpenShift version transitions your cluster has gone through, with timestamps and status.
+. Note the *Conditions* section. It shows whether the cluster is currently updating, available for updates, or has any degraded components.
+. Navigate to the *Cluster Operators* tab. This lists all cluster operators and their current status. All should show *Available = True*, *Progressing = False*, *Degraded = False* for a healthy cluster.
 
 == Key Concepts
 
@@ -100,16 +76,22 @@ oc get clusterversion version -o jsonpath='{range .status.history[*]}{.version}{
 
 WARNING: Do not update OpenShift beyond the MAS-supported version range ({ocp_version} is the current target).
 
+== Additional References
+
+* https://www.ibm.com/docs/en/mas-cd/maximo-manage/continuous-delivery[IBM MAS Catalogue and Version Information^] -- check supported versions and compatibility matrices
+* https://access.redhat.com/support/policy/updates/openshift[OpenShift Life Cycle Policy^] -- understand support timelines for each OpenShift release
+
 === Verify
 
 [%collapsible]
 ====
 You have completed this section when:
 
-* You can identify your current OpenShift and MAS versions
-* You can list available operator channels
+* You can identify your current OpenShift version via *Administration > Cluster Settings*
+* You can view MAS operator versions and channels via *Operators > Installed Operators*
+* You can review install plans and update history through the console
 * You understand the relationship between catalog sources, channels, and install plans
 * You understand why version pinning matters for MAS
 ====
 
-Click *Next* to explore Observability and Logging.
+Click *Next* to explore Operator Installation and Configuration.

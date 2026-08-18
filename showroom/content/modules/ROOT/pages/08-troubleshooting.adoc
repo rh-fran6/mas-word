@@ -1,237 +1,165 @@
 = Troubleshooting
 :navtitle: Troubleshooting
 
-Common issues and resolution steps for the workshop environment.
+Common issues and resolution steps for the workshop environment, using the OpenShift Console.
+
+== Viewing Pod Logs
+
+The OpenShift Console provides built-in log viewing for individual pods.
+
+. Navigate to *Workloads* > *Pods* in the OpenShift Console.
+. Select the namespace containing the pod you want to investigate (e.g., `mas-inst1-core`, `mas-inst1-manage`, or `openshift-logging`).
+. Click on the pod name to open its details page.
+. Select the *Logs* tab to view the pod's log output.
+. Use the following controls on the Logs tab:
++
+* *Container* dropdown -- if the pod has multiple containers, select the one you want to view
+* *Download* -- save the current log output to a file
+* *Expand* -- view the logs in a full-screen view for easier reading
+* *Wrap lines* -- toggle line wrapping for long log entries
++
+. For pods that are restarting, check the *Previous* log option (if available) to see logs from the previous container instance.
+
+== Using LokiStack for Log Analysis
+
+If you have completed the Operator Installation exercise and have a working LokiStack, you can use *Observe > Logs* for powerful log analysis that spans across pods and time.
+
+=== Viewing Logs for Active Pods
+
+. Navigate to *Observe* > *Logs* in the OpenShift Console.
+. Enter a LogQL query to view logs from a specific namespace:
++
+[source,text]
+----
+{kubernetes_namespace_name="mas-inst1-manage"}
+----
++
+. Click *Run Query*. You will see logs from all pods in the Manage namespace, aggregated across the cluster.
+
+=== Viewing Logs for Restarted or Deleted Pods
+
+One of the most powerful features of centralized logging is the ability to view logs from pods that no longer exist. This is critical for post-mortem analysis.
+
+. In *Observe* > *Logs*, enter a query filtering by pod name:
++
+[source,text]
+----
+{kubernetes_namespace_name="mas-inst1-manage"} | json | kubernetes_pod_name=~".*all.*"
+----
++
+. Expand the time range using the time picker to include the period when the old pod was running.
+. You will see logs from both current and previous pod instances -- the historical logs are preserved in Loki even after the pod was deleted and replaced.
+
+=== Searching for Errors and Warnings
+
+. Use LogQL filters to search for specific patterns:
++
+* Error logs: `\{kubernetes_namespace_name="mas-inst1-manage"} |= "error"`
+* Warning logs: `\{kubernetes_namespace_name="mas-inst1-manage"} |= "WARN"`
+* Specific component: `\{kubernetes_namespace_name="mas-inst1-core"} |= "reconcile"`
++
+. Combine filters for more targeted searches:
++
+[source,text]
+----
+{kubernetes_namespace_name="mas-inst1-manage"} |= "error" != "healthcheck"
+----
++
+This shows error logs while excluding routine healthcheck entries.
 
 == OpenShift Console Not Loading
 
-. Verify the console route:
-+
-[source,role="execute"]
-----
-oc get route console -n openshift-console -o jsonpath='{.spec.host}'
-----
-+
-. Check console pod health:
-+
-[source,role="execute"]
-----
-oc get pods -n openshift-console --no-headers
-----
-+
-. If pods are not Running, check events:
-+
-[source,role="execute"]
-----
-oc get events -n openshift-console --sort-by=.lastTimestamp | tail -10
-----
+. Navigate to *Networking* > *Routes* in the OpenShift Console.
+. Use the *Project* dropdown to select `openshift-console`.
+. Verify the console route exists and has a valid host URL.
+. Navigate to *Workloads* > *Pods* in the `openshift-console` namespace.
+. Check that the console pods are in *Running* status.
+. If pods are not Running, click on a pod to view its *Events* tab for error details.
 
 == Cannot Log In
 
-. Verify the OAuth configuration includes Keycloak:
-+
-[source,role="execute"]
-----
-oc get oauth cluster -o jsonpath='{.spec.identityProviders[*].name}'
-----
-+
-. Check the OAuth pod status:
-+
-[source,role="execute"]
-----
-oc get pods -n openshift-authentication --no-headers
-----
-+
-. If authentication fails, confirm you are selecting *Keycloak* (not htpasswd) and using the credentials from the Welcome page.
-. If your login still fails, ask your facilitator to verify your Keycloak account.
+. Verify you are selecting *Keycloak* (not htpasswd) as the identity provider on the login screen.
+. Confirm you are using the credentials shown on the Welcome page of this lab guide.
+. If authentication fails, navigate to *Administration* > *Cluster Settings* > *Configuration* tab > *OAuth* to verify the Keycloak identity provider is listed.
+. Check the pods in the `openshift-authentication` namespace via *Workloads* > *Pods* -- all authentication pods should be *Running*.
+. If your login still fails, contact your facilitator to verify your Keycloak account.
 
 == Maximo Not Accessible
 
-. Check the MAS Suite status:
-+
-[source,role="execute"]
-----
-oc get suite -n mas-inst1-core -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}'
-----
-+
-. Check Manage workspace status:
-+
-[source,role="execute"]
-----
-oc get manageworkspace -n mas-inst1-manage --no-headers
-----
-+
-. If Manage is not Ready, check the pods:
-+
-[source,role="execute"]
-----
-oc get pods -n mas-inst1-manage --no-headers | grep -v Running
-----
+. Navigate to *Operators* > *Installed Operators* in the `mas-inst1-core` project.
+. Verify the IBM MAS operators show *Succeeded* status.
+. Navigate to *Workloads* > *Pods* in the `mas-inst1-manage` namespace.
+. Check that all Manage pods are in *Running* status. Pods showing *CrashLoopBackOff* or *Error* indicate a problem.
+. Click on any unhealthy pod to view its *Logs* and *Events* tabs for error details.
 
 == Operator Installation Issues
 
-If you encounter problems installing operators in Exercise 5:
+If you encounter problems installing operators in the Operator Installation exercise:
 
-=== Subscription Stuck in "UpgradePending"
+=== Subscription Not Progressing
 
-. Check the install plan:
-+
-[source,role="execute"]
-----
-oc get installplan -n openshift-logging --no-headers
-----
-+
-. If an install plan is not approved:
-+
-[source,role="execute"]
-----
-oc get installplan -n openshift-logging -o jsonpath='{range .items[*]}{.metadata.name}{" approved="}{.spec.approved}{"\n"}{end}'
-----
-+
-. Approve a pending install plan:
-+
-[source,role="execute"]
-----
-PLAN=$(oc get installplan -n openshift-logging -o jsonpath='{.items[?(@.spec.approved==false)].metadata.name}')
-if [ -n "$PLAN" ]; then oc patch installplan $PLAN -n openshift-logging --type merge -p '{"spec":{"approved":true}}'; fi
-----
+. Navigate to *Operators* > *Installed Operators* and select the relevant namespace (e.g., `openshift-logging`).
+. Check if the operator status shows *UpgradePending* or *Installing*.
+. Click on the operator name, then select the *InstallPlan* tab.
+. If an install plan is not approved, click on it and approve it manually.
+. If the operator remains stuck, try uninstalling it and reinstalling from OperatorHub.
 
-=== CSV Not Reaching "Succeeded"
+=== Operator Not Reaching "Succeeded"
 
-. Check the CSV status:
-+
-[source,role="execute"]
-----
-oc get csv -n openshift-logging -o custom-columns=NAME:.metadata.name,PHASE:.status.phase --no-headers
-----
-+
-. Check CSV events for errors:
-+
-[source,role="execute"]
-----
-oc get csv -n openshift-logging -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.status.message}{"\n"}{end}'
-----
-+
-. If a CSV is stuck, try deleting the Subscription and recreating it:
-+
-[source,role="execute"]
-----
-oc delete subscription cluster-logging -n openshift-logging
-# Then re-apply the Subscription from Exercise 5
-----
-
-=== OperatorGroup Already Exists
-
-If you get an error that the OperatorGroup already exists, that's fine -- it means it was already created. Proceed to the next step.
+. Navigate to *Operators* > *Installed Operators* in the relevant namespace.
+. Click on the operator that is not reaching *Succeeded* status.
+. Check the *Conditions* section on the operator details page for error messages.
+. Navigate to *Workloads* > *Pods* in the operator's namespace and look for pods that are not in *Running* status.
+. Click on any unhealthy pod and check its *Logs* and *Events* tabs.
 
 === Permission Denied
 
-If you get a "forbidden" error:
-
-[source,role="execute"]
-----
-oc auth can-i create subscription.operators.coreos.com -n openshift-logging
-----
-
-If the result is `no`, contact your facilitator -- your lab account may not have the correct RBAC.
+If you get a "forbidden" error when installing an operator, contact your facilitator -- your lab account may not have the correct RBAC permissions.
 
 == LokiStack Issues
 
 === LokiStack Not Becoming Ready
 
-. Check LokiStack status:
-+
-[source,role="execute"]
-----
-oc get lokistack logging-loki -n openshift-logging -o jsonpath='{range .status.conditions[*]}{.type}{"="}{.status}{" "}{.message}{"\n"}{end}'
-----
-+
-. Check if the S3 secret is correct:
-+
-[source,role="execute"]
-----
-oc get secret logging-loki-s3 -n openshift-logging -o jsonpath='{.data.bucketnames}' | base64 -d
-----
-+
-. Verify the S3 bucket name matches what's shown on the Welcome page.
-. Check the Loki pods for errors:
-+
-[source,role="execute"]
-----
-oc get pods -n openshift-logging -l app.kubernetes.io/instance=logging-loki --no-headers
-oc logs -n openshift-logging -l app.kubernetes.io/component=compactor --tail=20 2>/dev/null || echo "No compactor pods yet"
-----
+. Navigate to *Operators* > *Installed Operators* in the `openshift-logging` namespace.
+. Click on *Loki Operator*, then click the *LokiStack* tab.
+. Click on `logging-loki` to view its status and conditions. Look for error messages in the *Conditions* section.
+. Navigate to *Workloads* > *Pods* in the `openshift-logging` namespace.
+. Filter for Loki pods (look for names starting with `logging-loki-`).
+. Click on any pod that is not *Running* and check its *Logs* and *Events* tabs.
 
 === S3 Credential Issues
 
-If LokiStack fails with access errors, verify your S3 credentials:
+If LokiStack fails with access errors:
 
-[source,role="execute"]
-----
-oc delete secret logging-loki-s3 -n openshift-logging
-# Recreate with the correct values from the Welcome page (Exercise 5, Step 4)
-----
+. Navigate to *Workloads* > *Secrets* in the `openshift-logging` namespace.
+. Find and click on `logging-loki-s3`.
+. Click *Reveal values* to check that the bucket name, region, and credentials match what is shown on the Welcome page.
+. If the values are incorrect, delete the secret and recreate it following the steps in the Operator Installation exercise.
 
 == Logging Queries Return No Results
 
-. Verify the ClusterLogForwarder is healthy:
-+
-[source,role="execute"]
-----
-oc get clusterlogforwarder -n openshift-logging -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}'
-----
-+
-. Check the Vector collector pods:
-+
-[source,role="execute"]
-----
-oc get pods -n openshift-logging -l app.kubernetes.io/component=collector --no-headers | head -5
-----
-+
-. Verify LokiStack is healthy:
-+
-[source,role="execute"]
-----
-oc get lokistack -n openshift-logging -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}'
-----
-+
-. If logs are missing, wait 2-3 minutes for log ingestion and retry.
+. Navigate to *Operators* > *Installed Operators* in the `openshift-logging` namespace.
+. Click on *Red Hat OpenShift Logging*, then check the *ClusterLogForwarder* tab. Verify the `collector` forwarder exists and its conditions show *Ready*.
+. Navigate to *Workloads* > *Pods* in the `openshift-logging` namespace. Verify that collector pods are running on each node.
+. Check the LokiStack status (see LokiStack Issues above).
+. If logs are missing, wait 2-3 minutes for log ingestion and retry your query.
 
 == Keycloak Not Accessible
 
-. Check Keycloak pod status:
-+
-[source,role="execute"]
-----
-oc get pods -n masworld-keycloak --no-headers
-----
-+
-. Check the Keycloak route:
-+
-[source,role="execute"]
-----
-oc get route -n masworld-keycloak --no-headers
-----
+. Navigate to *Workloads* > *Pods* in the `masworld-keycloak` namespace.
+. Verify that Keycloak pods are in *Running* status.
+. Navigate to *Networking* > *Routes* in the `masworld-keycloak` namespace.
+. Verify the route exists and click the *Location* URL to test access.
 
 == Group Sync Issues
 
-If `oc adm groups sync` fails:
+If the Group Sync Operator is not creating OpenShift groups:
 
-. Verify LDAP connectivity:
-+
-[source,role="execute"]
-----
-oc exec deploy/openldap -n masworld-keycloak -- ldapsearch -x -H ldap://localhost:3389 -b "dc=masworld,dc=example,dc=com" -D "cn=Directory Manager" -w "$(oc get secret openldap-admin-secret -n masworld-keycloak -o jsonpath='{.data.password}' | base64 -d)" "(objectClass=groupOfNames)" dn
-----
-+
-. Ensure the bind password file is correct:
-+
-[source,role="execute"]
-----
-cat /tmp/ldap-bind-password
-----
-+
-If empty, recreate it per Exercise 6, Step 2.
+. Navigate to *Operators* > *Installed Operators* in the `group-sync-operator` namespace.
+. Verify the Group Sync Operator shows *Succeeded* status.
+. Click on the operator, then check the *GroupSync* tab. Click on your GroupSync CR to view its status and conditions.
+. Check the operator pod logs: navigate to *Workloads* > *Pods* in the `group-sync-operator` namespace, click on the operator pod, and review the *Logs* tab for LDAP connection errors.
+. Verify the LDAP bind password secret exists in the `group-sync-operator` namespace under *Workloads* > *Secrets*.
 
 == Getting Help
 

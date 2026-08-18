@@ -1,6 +1,6 @@
 = Access and Readiness
 :navtitle: Access and Readiness
-:duration: 15 minutes
+:duration: 5 minutes
 
 Verify that your environment is ready for the workshop.
 
@@ -35,20 +35,6 @@ Your lab account can install operators and configure logging, but cannot modify 
 . Click *Workloads* > *Pods* and confirm you can *view* the pods running in this namespace.
 . Note that you have *read-only* access here -- you should not see options to delete or modify MAS resources. If you attempt to delete a pod, the console will display a permission denied error.
 
-== Verify Maximo Access
-
-. Open {mas_url}[MAS Suite Admin^] in a new browser tab.
-. Log in with the MAS Admin credentials shown on the Welcome page:
-+
-* *Username*: `{mas_admin_username}`
-* *Password*: `{mas_admin_password}`
-+
-. Confirm the MAS Suite Administration page loads and shows the suite overview.
-. Open {manage_url}[Maximo Manage^] in a new browser tab. If prompted to log in, use the same MAS Admin credentials.
-. Confirm the Manage home page loads.
-
-NOTE: The MAS admin credentials are separate from your OpenShift lab credentials. Both are listed on the Welcome page of this lab guide.
-
 == Verify Cluster Health
 
 . In the OpenShift Console, click *Home* in the left navigation menu, then select *Overview*.
@@ -68,7 +54,6 @@ Your environment is ready when:
 * Your student project *student-{seat_number}* exists and shows *Active* status under *Home > Projects*
 * You can view the *Pods* page under *Workloads* in your student namespace without access errors
 * You *cannot* delete resources in the *mas-inst1-core* namespace
-* Maximo Navigator loads and displays application tiles
 * The cluster overview under *Home > Overview* shows healthy status
 * All nodes under *Compute > Nodes* show *Ready*
 ====
