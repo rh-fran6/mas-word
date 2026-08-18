@@ -8,25 +8,8 @@ Explore the OpenShift Console and learn how to navigate your cluster efficiently
 
 The OpenShift Console is your primary interface for managing and observing your cluster. In this section, you will:
 
-* Explore how Maximo Application Suite runs on OpenShift
-* Add frequently used projects to your Favorites
+* Add frequently used projects to your Favorites for quick access
 * Use the built-in Search tool to find resources across your cluster
-
-== Exercise: Explore Maximo on OpenShift
-
-MAS runs as a set of operators and custom resources on OpenShift. You can explore these through the console.
-
-. In the *OpenShift Console* tab, navigate to *Home* > *Projects*.
-. In the filter bar, type `mas` to see all MAS-related namespaces (e.g., `mas-inst1-core`, `mas-inst1-manage`).
-. Click on `mas-inst1-core` to open the project.
-. Navigate to *Workloads* > *Pods* and observe the MAS core pods running.
-. Navigate to *Operators* > *Installed Operators*. Note the IBM operators managing MAS -- these are the controllers that maintain the desired state of your Maximo environment.
-
-== Exercise: Explore OpenShift Resources
-
-. While still in the `mas-inst1-core` project, navigate to *Networking* > *Routes*.
-. Observe the routes created for MAS components. These are the external URLs that make MAS accessible.
-. Navigate to *Workloads* > *ConfigMaps* and *Workloads* > *Secrets* to see the configuration backing MAS.
 
 == Exercise: Add a Project to Favorites
 
@@ -61,8 +44,6 @@ The Search tool lets you find any Kubernetes resource across your cluster.
 ====
 You have completed this section when:
 
-* You can see MAS pods in the OpenShift Console under *Workloads > Pods*
-* You understand that MAS runs as operators on OpenShift
 * You have added `mas-inst1-core` and your student project to Favorites
 * You can use the Search tool to find Pods, Deployments, Routes, and Services across namespaces
 ====

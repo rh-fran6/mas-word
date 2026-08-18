@@ -202,18 +202,68 @@ spec:
 
 The ClusterLogForwarder tells the Logging Operator what logs to collect and where to send them. Before creating the forwarder, you need to create a service account with the required permissions.
 
-[NOTE]
-====
-Open the *Terminal* tab and run these commands to create the required service account and grant log collection permissions:
+=== Create the Collector Service Account
 
-[source,role="execute"]
+. In the OpenShift web console, make sure the *openshift-logging* project is selected.
+. Navigate to *Workloads* > *ServiceAccounts*.
+. Click *Create ServiceAccount*.
+. Switch to the *YAML view* and replace the contents with:
++
+[source,yaml]
 ----
-oc create serviceaccount collector -n openshift-logging
-oc adm policy add-cluster-role-to-user collect-application-logs -z collector -n openshift-logging
-oc adm policy add-cluster-role-to-user collect-infrastructure-logs -z collector -n openshift-logging
-oc adm policy add-cluster-role-to-user collect-audit-logs -z collector -n openshift-logging
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: collector
+  namespace: openshift-logging
 ----
-====
++
+. Click *Create*.
+
+=== Grant Log Collection Permissions
+
+. Navigate to *User Management* > *RoleBindings*.
+. Click *Create binding*.
+. Select *ClusterRoleBinding* (not RoleBinding).
+. Fill in the form:
++
+[cols="1,2"]
+|===
+| Field | Value
+
+| Name
+| `collector-application-logs`
+
+| ClusterRole
+| `collect-application-logs`
+
+| Subject kind
+| ServiceAccount
+
+| Subject namespace
+| `openshift-logging`
+
+| Subject name
+| `collector`
+|===
++
+. Click *Create*.
+. Repeat the above steps to create two more ClusterRoleBindings:
++
+[cols="1,1,1"]
+|===
+| Name | ClusterRole | Subject
+
+| `collector-infrastructure-logs`
+| `collect-infrastructure-logs`
+| ServiceAccount `collector` in `openshift-logging`
+
+| `collector-audit-logs`
+| `collect-audit-logs`
+| ServiceAccount `collector` in `openshift-logging`
+|===
+
+=== Create the ClusterLogForwarder
 
 Now create the ClusterLogForwarder using the console:
 
