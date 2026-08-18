@@ -1,0 +1,49 @@
+---
+- name: Restart Showroom pods across the fleet
+  hosts: localhost
+  gather_facts: false
+  vars:
+    masworld_showroom_namespace: showroom
+    _cached_cluster_tokens: {}
+
+  tasks:
+    - name: Load cluster credentials
+      ansible.builtin.include_vars:
+        file: "../secrets/cluster-credentials.yml"
+      no_log: true
+
+    - name: Build cluster list
+      ansible.builtin.set_fact:
+        _all_clusters: "{{ cluster_credentials | to_cluster_list }}"
+      no_log: true
+
+    - name: Filter to clusters with Showroom (non-hub, enabled)
+      ansible.builtin.set_fact:
+        _showroom_clusters: >-
+          {{ _all_clusters
+             | rejectattr('purpose', 'equalto', 'hub')
+             | selectattr('api_url', 'defined')
+             | list }}
+      no_log: true
+
+    - name: Display restart plan
+      ansible.builtin.debug:
+        msg: >-
+          Restarting Showroom pods on {{ _showroom_clusters | length }} clusters.
+
+    - name: Restart Showroom pods per cluster
+      ansible.builtin.include_tasks: _restart-showroom-single.yml
+      loop: "{{ _showroom_clusters }}"
+      loop_control:
+        loop_var: cluster
+        label: "{{ cluster.id }}"
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: |
+          ══════════════════════════════════════════════════
+          Showroom Pod Restart Complete
+          ══════════════════════════════════════════════════
+          Processed {{ _showroom_clusters | length }} clusters.
+          Pods will pull fresh git content on restart.
+          ══════════════════════════════════════════════════

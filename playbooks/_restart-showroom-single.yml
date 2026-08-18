@@ -1,0 +1,80 @@
+---
+- name: "{{ cluster.id }} — Obtain API token"
+  block:
+    - name: "{{ cluster.id }} — Discover OAuth endpoint"
+      ansible.builtin.uri:
+        url: "{{ cluster.api_url }}/.well-known/oauth-authorization-server"
+        validate_certs: false
+        return_content: true
+      register: _oauth_metadata
+
+    - name: "{{ cluster.id }} — Request OAuth token"
+      ansible.builtin.uri:
+        url: "{{ _oauth_metadata.json.authorization_endpoint }}?response_type=token&client_id=openshift-challenging-client"
+        validate_certs: false
+        force_basic_auth: true
+        url_username: cluster-admin
+        url_password: "{{ cluster.admin_password | default('cluster-admin') }}"
+        status_code: [302]
+        follow_redirects: none
+      register: _oauth_response
+      no_log: true
+
+    - name: "{{ cluster.id }} — Extract bearer token"
+      ansible.builtin.set_fact:
+        _cluster_token: "{{ _oauth_response.location | regex_search('access_token=([^&]+)', '\\1') | first }}"
+      when:
+        - _oauth_response.location is defined
+        - "'access_token=' in _oauth_response.location"
+      no_log: true
+  rescue:
+    - name: "{{ cluster.id }} — Auth failed"
+      ansible.builtin.set_fact:
+        _cluster_token: ""
+
+- name: "{{ cluster.id }} — Get Showroom pods"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ masworld_showroom_namespace }}"
+    host: "{{ cluster.api_url }}"
+    api_key: "{{ _cluster_token | default('') }}"
+    validate_certs: false
+  register: _showroom_pods
+  failed_when: false
+  when:
+    - _cluster_token | default('') | length > 0
+
+- name: "{{ cluster.id }} — Delete Showroom pods to trigger restart"
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ masworld_showroom_namespace }}"
+    name: "{{ item.metadata.name }}"
+    state: absent
+    host: "{{ cluster.api_url }}"
+    api_key: "{{ _cluster_token | default('') }}"
+    validate_certs: false
+  loop: "{{ _showroom_pods.resources | default([]) }}"
+  loop_control:
+    label: "{{ item.metadata.name | default('unknown') }}"
+  when:
+    - _cluster_token | default('') | length > 0
+    - _showroom_pods.resources | default([]) | length > 0
+  failed_when: false
+
+- name: "{{ cluster.id }} — Report"
+  ansible.builtin.debug:
+    msg: >-
+      {{ cluster.id }}:
+      {% if _cluster_token | default('') | length == 0 %}
+      SKIPPED — could not obtain API token
+      {% elif _showroom_pods.resources | default([]) | length == 0 %}
+      NO SHOWROOM PODS — namespace may not exist
+      {% else %}
+      RESTARTED {{ _showroom_pods.resources | length }} pod(s)
+      {% endif %}
+
+- name: "{{ cluster.id }} — Clear token"
+  ansible.builtin.set_fact:
+    _cluster_token: ""

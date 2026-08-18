@@ -311,7 +311,10 @@ teardown: ## [e2e] Full teardown: decommission -> destroy clusters -> destroy in
 # Maintenance
 # ═══════════════════════════════════════════════════════════════════════
 
-.PHONY: cleanup-community-keycloak lab-reset lab-reset-fleet
+.PHONY: cleanup-community-keycloak lab-reset lab-reset-fleet restart-showroom
+
+restart-showroom: ## [maintenance] Restart Showroom pods across fleet to pick up content changes
+	$(ANSIBLE_PLAYBOOK) $(PLAYBOOK_DIR)/restart-showroom.yml $(VAULT_ARGS)
 
 cleanup-community-keycloak: ## [maintenance] Remove all community Keycloak from fleet (one-time, run before RHBK deploy)
 	$(ANSIBLE_PLAYBOOK) $(PLAYBOOK_DIR)/cleanup-community-keycloak.yml $(VAULT_ARGS)
