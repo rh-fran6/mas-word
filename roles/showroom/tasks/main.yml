@@ -52,20 +52,36 @@
           {{ _masworld_infra_cr.resources[0].status.apiServerURL | default('') }}
 
     # ── Resolve MAS and Manage URLs ───────────────────────────────────
-    - name: Get MAS home route
+    - name: Get MAS admin route
       kubernetes.core.k8s_info:
         api_version: route.openshift.io/v1
         kind: Route
         namespace: "mas-{{ masworld_mas_instance_id }}-core"
-        name: "{{ masworld_mas_instance_id }}-{{ masworld_mas_workspace_id | default('masworld') }}-home"
-      register: _masworld_mas_home_route
+        name: "{{ masworld_mas_instance_id }}-admin"
+      register: _masworld_mas_admin_route
       failed_when: false
 
     - name: Set MAS URL fact
       ansible.builtin.set_fact:
         _masworld_mas_url: >-
-          {{ 'https://' ~ _masworld_mas_home_route.resources[0].spec.host
-             if (_masworld_mas_home_route.resources | default([]) | length > 0)
+          {{ 'https://' ~ _masworld_mas_admin_route.resources[0].spec.host
+             if (_masworld_mas_admin_route.resources | default([]) | length > 0)
+             else 'https://admin.' ~ masworld_mas_instance_id ~ '.' ~ _masworld_cluster_domain }}
+
+    - name: Get MAS navigator route
+      kubernetes.core.k8s_info:
+        api_version: route.openshift.io/v1
+        kind: Route
+        namespace: "mas-{{ masworld_mas_instance_id }}-core"
+        name: "{{ masworld_mas_instance_id }}-{{ masworld_mas_workspace_id | default('masworld') }}-home"
+      register: _masworld_mas_navigator_route
+      failed_when: false
+
+    - name: Set MAS navigator URL fact
+      ansible.builtin.set_fact:
+        _masworld_mas_navigator_url: >-
+          {{ 'https://' ~ _masworld_mas_navigator_route.resources[0].spec.host
+             if (_masworld_mas_navigator_route.resources | default([]) | length > 0)
              else 'https://' ~ (masworld_mas_workspace_id | default('masworld')) ~ '.home.' ~ masworld_mas_instance_id ~ '.' ~ _masworld_cluster_domain }}
 
     - name: Get Manage all route
@@ -245,6 +261,7 @@
               openshift_cluster_ingress_domain: {{ _masworld_cluster_domain }}
               openshift_api_url: {{ _masworld_api_url | default(masworld_cluster_api_url | default('')) }}
               mas_url: {{ _masworld_mas_url }}
+              mas_navigator_url: {{ _masworld_mas_navigator_url }}
               manage_url: {{ _masworld_manage_url }}
               seat_number: {{ masworld_seat_number }}
               user: {{ masworld_student_username }}

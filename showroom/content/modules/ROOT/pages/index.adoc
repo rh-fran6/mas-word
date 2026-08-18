@@ -74,8 +74,11 @@ You have a dedicated OpenShift {ocp_version} cluster with:
 | OpenShift Console
 | {openshift_console_url}[Open Console^]
 
-| Maximo Suite Navigator
-| {mas_url}[Open MAS^]
+| MAS Suite Admin
+| {mas_url}[Open MAS Admin^]
+
+| MAS Workspace Navigator
+| {mas_navigator_url}[Open Navigator^]
 
 | Maximo Manage
 | {manage_url}[Open Manage^]

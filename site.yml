@@ -18,6 +18,7 @@ asciidoc:
     openshift_cluster_ingress_domain@: "apps.example.com"
     openshift_api_url@: "https://api.example.com:443"
     mas_url@: "https://admin.mas.apps.example.com"
+    mas_navigator_url@: "https://masworld.home.mas.apps.example.com"
     manage_url@: "https://manage.mas.apps.example.com"
     lab_username@: "userXX"
     lab_password@: "CHANGE_ME"  # pragma: allowlist secret
