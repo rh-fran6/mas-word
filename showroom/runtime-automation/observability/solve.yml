@@ -154,7 +154,7 @@
             name: logging-loki
             namespace: "{{ logging_ns }}"
           spec:
-            size: 1x.extra-small
+            size: 1x.demo
             storage:
               schemas:
                 - version: v13

@@ -28,7 +28,7 @@ This workshop demonstrates concepts at conference scale. A production deployment
 | Enterprise IdP (SAML/OIDC) with MFA
 
 | Logging
-| Student-installed (Logging + Loki + COO, `1x.extra-small`)
+| Student-installed (Logging + Loki + COO, `1x.demo`)
 | Pre-deployed with `1x.medium`+, 30-90 day retention, SIEM integration
 
 | Storage

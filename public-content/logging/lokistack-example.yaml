@@ -4,7 +4,7 @@
 #
 # Purpose:
 #   Deploys a LokiStack instance for log storage on OpenShift. This example
-#   uses demo sizing (1x.extra-small) suitable ONLY for workshops, demos,
+#   uses demo sizing (1x.demo) suitable ONLY for workshops, demos,
 #   and development. It is NOT appropriate for production.
 #
 # Required permissions:
@@ -29,13 +29,13 @@
 #   - Rotate S3 credentials regularly.
 #
 # DEMO vs PRODUCTION SIZING:
-#   This example uses 1x.extra-small, which runs minimal replicas with low
+#   This example uses 1x.demo, which runs minimal replicas with low
 #   resource requests. Production deployments should use at least 1x.medium
 #   with appropriate retention, replication, and resource limits.
 #
 #   | Size            | Use case           | Ingestion  | Replicas |
 #   |-----------------|--------------------|------------|----------|
-#   | 1x.extra-small  | Demo / dev         | ~100 GB/d  | Minimal  |
+#   | 1x.demo         | Demo / dev         | ~100 GB/d  | Minimal  |
 #   | 1x.small        | Small clusters     | ~100 GB/d  | HA       |
 #   | 1x.medium       | Production         | ~500 GB/d  | HA       |
 #
@@ -70,7 +70,7 @@ metadata:
   name: logging-loki
   namespace: openshift-logging
 spec:
-  size: 1x.extra-small
+  size: 1x.demo
   storage:
     schemas:
       - version: v13

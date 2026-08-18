@@ -64,7 +64,7 @@ logging_collect_audit: true
 # Loki
 loki_channel: "stable-6.6"
 loki_api_version: "loki.grafana.com/v1"
-loki_size: "1x.extra-small"
+loki_size: "1x.demo"
 loki_object_storage_mode: bucket-per-cluster
 loki_retention_days: 7
 

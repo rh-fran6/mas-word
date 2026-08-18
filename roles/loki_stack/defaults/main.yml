@@ -5,8 +5,8 @@
 # Whether LokiStack deployment is enabled
 masworld_loki_enabled: true
 
-# LokiStack sizing (1x.extra-small, 1x.small, 1x.medium, etc.)
-masworld_loki_size: "1x.extra-small"
+# LokiStack sizing (1x.demo, 1x.extra-small, 1x.small, 1x.medium, etc.)
+masworld_loki_size: "1x.demo"
 
 # S3 bucket name for log storage
 masworld_loki_s3_bucket_name: ""

@@ -37,7 +37,7 @@ components:
   loki:
     enabled: true
     object_storage_mode: bucket-per-cluster
-    size: "1x.extra-small"
+    size: "1x.demo"
     retention_days: 7
   keycloak:
     enabled: true

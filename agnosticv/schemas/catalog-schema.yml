@@ -296,9 +296,10 @@ schema:
     loki_size:
       type: string
       required: false
-      default: "1x.extra-small"
+      default: "1x.demo"
       description: "LokiStack size profile"
       enum:
+        - "1x.demo"
         - "1x.extra-small"
         - "1x.small"
         - "1x.medium"

@@ -178,7 +178,7 @@ metadata:
   name: logging-loki
   namespace: openshift-logging
 spec:
-  size: 1x.extra-small
+  size: 1x.demo
   storage:
     schemas:
       - version: v13
@@ -371,7 +371,7 @@ After deleting the pod, navigate back to *Observe > Logs* and run your LogQL que
 | Aspect | Workshop | Production
 
 | Loki size
-| `1x.extra-small`
+| `1x.demo`
 | `1x.medium` or larger
 
 | S3 storage
