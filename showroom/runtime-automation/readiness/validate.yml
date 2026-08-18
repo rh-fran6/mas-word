@@ -291,7 +291,7 @@
       ansible.builtin.debug:
         msg: |
           ============================================================
-           MAS World 2026 — Workshop Readiness Report
+           Maximo World 2026 — Workshop Readiness Report
            Seat: {{ seat }}  ({{ lab_username }})
           ============================================================
           {% for r in results %}
@@ -301,4 +301,4 @@
            PASS: {{ pass_count }}   FAIL: {{ fail_count }}   N/A: {{ na_count }}   STUDENT_EXERCISE: {{ exercise_count }}
           ============================================================
           Note: STUDENT_EXERCISE items are for the student to complete
-          during the workshop (Exercise 5: Observability and Logging).
+          during the workshop (Operator Installation and Configuration).

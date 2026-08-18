@@ -14,19 +14,7 @@
 
   tasks:
     # ------------------------------------------------------------------
-    # 1. Delete log-test pod
-    # ------------------------------------------------------------------
-    - name: Delete log-test pod
-      kubernetes.core.k8s:
-        api_version: v1
-        kind: Pod
-        name: "log-test-{{ seat_padded }}"
-        namespace: "{{ student_ns }}"
-        state: absent
-      failed_when: false
-
-    # ------------------------------------------------------------------
-    # 2. Delete UIPlugin
+    # 1. Delete UIPlugin
     # ------------------------------------------------------------------
     - name: Delete UIPlugin
       kubernetes.core.k8s:
@@ -102,13 +90,15 @@
     # 6. Delete collector ServiceAccount and ClusterRoleBindings
     # ------------------------------------------------------------------
     - name: Remove collector ClusterRoleBindings
-      ansible.builtin.command:
-        cmd: "oc adm policy remove-cluster-role-from-user {{ item }} -z collector -n {{ logging_ns }}"
+      kubernetes.core.k8s:
+        api_version: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        name: "collector-{{ item }}"
+        state: absent
       loop:
         - collect-application-logs
         - collect-infrastructure-logs
         - collect-audit-logs
-      changed_when: true
       failed_when: false
 
     - name: Delete collector ServiceAccount
@@ -235,7 +225,6 @@
             - Operator Subscriptions (Logging, Loki, COO)
             - Operator CSVs
             - OperatorGroup (openshift-logging)
-            - Log-test pod
 
           NOT touched:
             - MAS namespaces (mas-inst1-core, mas-inst1-manage)
@@ -244,4 +233,4 @@
             - Showroom
             - S3 credentials ConfigMap (showroom namespace)
           ============================================================
-          The student can now re-run Exercise 5 from the beginning.
+          The student can now re-run the Operator Installation exercise.

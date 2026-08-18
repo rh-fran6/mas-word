@@ -94,38 +94,18 @@
           Lab user RBAC ({{ lab_username }}): {{ 'CONFIGURED' if rbac_ready | bool else 'NOT FOUND – contact facilitator' }}
 
     # ------------------------------------------------------------------
-    # 5. Delete leftover test pod from previous attempts
-    # ------------------------------------------------------------------
-    - name: Delete leftover log-test pod if present
-      kubernetes.core.k8s:
-        api_version: v1
-        kind: Pod
-        name: "log-test-{{ seat_padded }}"
-        namespace: "{{ student_ns }}"
-        state: absent
-      register: pod_cleanup
-      failed_when: false
-
-    - name: Report pod cleanup
-      ansible.builtin.debug:
-        msg: >-
-          Leftover log-test-{{ seat_padded }} pod:
-          {{ 'cleaned up' if pod_cleanup.changed | default(false) else 'none found (clean)' }}
-
-    # ------------------------------------------------------------------
-    # 6. Summary
+    # 5. Summary
     # ------------------------------------------------------------------
     - name: Readiness summary
       ansible.builtin.debug:
         msg: |
           ============================================================
-          OBSERVABILITY EXERCISE – PREREQUISITES (seat {{ seat_padded }})
+          OPERATOR INSTALLATION – PREREQUISITES (seat {{ seat_padded }})
           ============================================================
           Student namespace     : {{ 'READY' if ns_result is not failed else 'FAILED' }}
           S3 credentials        : {{ 'READY' if s3_ready | bool else 'NOT FOUND' }}
           Operator catalog      : {{ 'AVAILABLE' if catalog_ready | bool else 'NOT FOUND' }}
           Lab user RBAC         : {{ 'CONFIGURED' if rbac_ready | bool else 'NOT FOUND' }}
-          Leftover test pod     : {{ 'cleaned up' if pod_cleanup.changed | default(false) else 'none (clean)' }}
           ============================================================
           Operators are NOT pre-installed. You will install them
           during this exercise.

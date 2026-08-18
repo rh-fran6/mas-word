@@ -9,7 +9,6 @@
   vars:
     seat_padded: "{{ '%02d' | format(seat_number | int) }}"
     student_ns: "student-{{ seat_padded }}"
-    pod_name: "log-test-{{ seat_padded }}"
     logging_ns: openshift-logging
 
   tasks:
@@ -199,14 +198,26 @@
             name: collector
             namespace: "{{ logging_ns }}"
 
-    - name: Grant collector ClusterRoles
-      ansible.builtin.command:
-        cmd: "oc adm policy add-cluster-role-to-user {{ item }} -z collector -n {{ logging_ns }}"
+    - name: Grant collector ClusterRoleBindings
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: "collector-{{ item }}"
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: "{{ item }}"
+          subjects:
+            - kind: ServiceAccount
+              name: collector
+              namespace: "{{ logging_ns }}"
       loop:
         - collect-application-logs
         - collect-infrastructure-logs
         - collect-audit-logs
-      changed_when: true
 
     # ------------------------------------------------------------------
     # 9. Deploy ClusterLogForwarder
@@ -263,91 +274,19 @@
               logsLimit: 50
 
     # ------------------------------------------------------------------
-    # 11. Create and run test pod
+    # 11. Summary
     # ------------------------------------------------------------------
-    - name: Delete existing log-test pod if present
-      kubernetes.core.k8s:
-        api_version: v1
-        kind: Pod
-        name: "{{ pod_name }}"
-        namespace: "{{ student_ns }}"
-        state: absent
-      failed_when: false
-
-    - name: Wait for old pod removal
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Pod
-        name: "{{ pod_name }}"
-        namespace: "{{ student_ns }}"
-      register: old_pod
-      until: old_pod.resources | default([]) | length == 0
-      retries: 12
-      delay: 5
-      failed_when: false
-
-    - name: Create log-test pod
-      kubernetes.core.k8s:
-        state: present
-        definition:
-          apiVersion: v1
-          kind: Pod
-          metadata:
-            name: "{{ pod_name }}"
-            namespace: "{{ student_ns }}"
-            labels:
-              app: log-test
-              seat: "{{ seat_padded }}"
-          spec:
-            restartPolicy: Never
-            containers:
-              - name: log-generator
-                image: registry.access.redhat.com/ubi9/ubi-minimal:9.4
-                command:
-                  - /bin/sh
-                  - -c
-                  - |
-                    for i in $(seq 1 10); do
-                      TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-                      echo "{\"timestamp\":\"${TS}\",\"level\":\"info\",\"message\":\"MAS World log test\",\"seat\":\"{{ seat_padded }}\",\"iteration\":${i}}"
-                      sleep 2
-                    done
-
-    - name: Wait for log-test pod to complete
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Pod
-        name: "{{ pod_name }}"
-        namespace: "{{ student_ns }}"
-      register: pod_status
-      until: >-
-        pod_status.resources | default([]) | length > 0 and
-        pod_status.resources[0].status.phase | default('') in ['Succeeded', 'Failed']
-      retries: 15
-      delay: 5
-
-    - name: Delete log-test pod after exercise
-      kubernetes.core.k8s:
-        api_version: v1
-        kind: Pod
-        name: "{{ pod_name }}"
-        namespace: "{{ student_ns }}"
-        state: absent
-      failed_when: false
-
-    # ------------------------------------------------------------------
-    # 12. Show LogQL queries
-    # ------------------------------------------------------------------
-    - name: Show LogQL queries
+    - name: Show completion summary
       ansible.builtin.debug:
         msg: |
           ============================================================
-          OBSERVABILITY EXERCISE – SOLVE COMPLETE (seat {{ seat_padded }})
+          OPERATOR INSTALLATION – SOLVE COMPLETE (seat {{ seat_padded }})
           ============================================================
           All operators installed, LokiStack deployed, CLF configured,
-          UIPlugin created, and test logs generated.
+          UIPlugin created.
 
           LogQL queries for the Console (Observe > Logs):
-            {kubernetes_namespace_name="{{ student_ns }}"} |= "MAS World log test"
-            {kubernetes_namespace_name="{{ student_ns }}"} | json | seat="{{ seat_padded }}"
+            {kubernetes_namespace_name="mas-inst1-manage"}
+            {log_type="infrastructure"}
+            {log_type="audit"}
           ============================================================

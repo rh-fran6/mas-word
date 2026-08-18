@@ -44,15 +44,66 @@
             mas-users: {{ 'deleted' if del_users.changed | default(false) else 'not found (already clean)' }}
 
     # ------------------------------------------------------------------
-    # 2. Clean up temp files from group sync
+    # 2. Delete GroupSync CR
     # ------------------------------------------------------------------
-    - name: Remove temp files
-      ansible.builtin.file:
-        path: "{{ item }}"
+    - name: Delete GroupSync CR
+      kubernetes.core.k8s:
+        api_version: redhatcop.redhat.io/v1alpha1
+        kind: GroupSync
+        name: ldap-groupsync
+        namespace: group-sync-operator
         state: absent
-      loop:
-        - /tmp/ldap-group-sync.yaml
-        - /tmp/ldap-bind-password
+      register: del_groupsync
+      failed_when: false
+
+    - name: Delete LDAP bind password secret
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Secret
+        name: ldap-bind-password
+        namespace: group-sync-operator
+        state: absent
+      failed_when: false
+
+    # ------------------------------------------------------------------
+    # 2b. Delete Group Sync Operator
+    # ------------------------------------------------------------------
+    - name: Delete Group Sync Operator Subscription
+      kubernetes.core.k8s:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: group-sync-operator
+        namespace: group-sync-operator
+        state: absent
+      failed_when: false
+
+    - name: Find Group Sync Operator CSVs
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        namespace: group-sync-operator
+      register: gso_csvs
+      failed_when: false
+
+    - name: Delete Group Sync Operator CSVs
+      kubernetes.core.k8s:
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        name: "{{ item.metadata.name }}"
+        namespace: group-sync-operator
+        state: absent
+      loop: "{{ gso_csvs.resources | default([]) }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      failed_when: false
+
+    - name: Delete Group Sync Operator OperatorGroup
+      kubernetes.core.k8s:
+        api_version: operators.coreos.com/v1
+        kind: OperatorGroup
+        name: group-sync-operator
+        namespace: group-sync-operator
+        state: absent
       failed_when: false
 
     # ------------------------------------------------------------------
@@ -181,11 +232,13 @@
       ansible.builtin.debug:
         msg: |
           ============================================================
-          IDENTITY EXERCISE – RESET COMPLETE
+          IDENTITY PROVIDER INTEGRATION – RESET COMPLETE
           ============================================================
           Removed:
             - OpenShift groups (mas-admins, mas-users)
-            - Temp files (/tmp/ldap-group-sync.yaml, /tmp/ldap-bind-password)
+            - GroupSync CR (ldap-groupsync)
+            - LDAP bind password secret
+            - Group Sync Operator (Subscription, CSVs, OperatorGroup)
 
           NOT touched:
             - Keycloak / OpenLDAP
@@ -194,18 +247,21 @@
             - MAS namespaces
           ============================================================
           All infrastructure components verified OK.
-          The student can re-run Exercise 6 from the beginning.
+          The student can re-run the Identity Provider Integration
+          exercise from the beginning.
       when: issues | length == 0
 
     - name: Reset complete – issues found
       ansible.builtin.debug:
         msg: |
           ============================================================
-          IDENTITY EXERCISE – RESET COMPLETE (with issues)
+          IDENTITY PROVIDER INTEGRATION – RESET COMPLETE (with issues)
           ============================================================
           Removed:
             - OpenShift groups (mas-admins, mas-users)
-            - Temp files
+            - GroupSync CR (ldap-groupsync)
+            - LDAP bind password secret
+            - Group Sync Operator (Subscription, CSVs, OperatorGroup)
 
           Issues needing manual attention:
           {% for issue in issues %}
