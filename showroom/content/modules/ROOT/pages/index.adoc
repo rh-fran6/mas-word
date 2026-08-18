@@ -32,6 +32,19 @@ Log in to the OpenShift Console using these credentials. Your lab user has permi
 You will need these when deploying the LokiStack in Exercise 5.
 ====
 
+[NOTE]
+====
+*MAS Admin Credentials*
+
+[cols="1,2"]
+|===
+| Username | `{mas_admin_username}` pass:[<button onclick="navigator.clipboard.writeText(this.closest('td').querySelector('code').textContent).then(function(){var b=this;b.textContent='✓';setTimeout(function(){b.textContent='⧉'},1500)}.bind(this))" style="cursor:pointer;border:none;background:none;font-size:14px;vertical-align:middle;padding:0 0 0 4px;color:#0066cc" title="Copy to clipboard">⧉</button>]
+| Password | `{mas_admin_password}` pass:[<button onclick="navigator.clipboard.writeText(this.closest('td').querySelector('code').textContent).then(function(){var b=this;b.textContent='✓';setTimeout(function(){b.textContent='⧉'},1500)}.bind(this))" style="cursor:pointer;border:none;background:none;font-size:14px;vertical-align:middle;padding:0 0 0 4px;color:#0066cc" title="Copy to clipboard">⧉</button>]
+|===
+
+Use these to log in to the MAS Suite Navigator and Maximo Manage.
+====
+
 == What You Will Learn
 
 In this workshop, you will:

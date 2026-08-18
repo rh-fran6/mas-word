@@ -68,21 +68,28 @@
              if (_masworld_mas_home_route.resources | default([]) | length > 0)
              else 'https://' ~ (masworld_mas_workspace_id | default('masworld')) ~ '.home.' ~ masworld_mas_instance_id ~ '.' ~ _masworld_cluster_domain }}
 
-    - name: Get Manage route
+    - name: Get Manage all route
       kubernetes.core.k8s_info:
         api_version: route.openshift.io/v1
         kind: Route
         namespace: "mas-{{ masworld_mas_instance_id }}-manage"
-        name: "{{ masworld_mas_instance_id }}-manage-{{ masworld_mas_workspace_id | default('masworld') }}"
-      register: _masworld_manage_route
+        label_selectors:
+          - "mas.ibm.com/applicationId=manage"
+      register: _masworld_manage_routes
       failed_when: false
 
     - name: Set Manage URL fact
       ansible.builtin.set_fact:
         _masworld_manage_url: >-
-          {{ 'https://' ~ _masworld_manage_route.resources[0].spec.host
-             if (_masworld_manage_route.resources | default([]) | length > 0)
-             else 'https://' ~ (masworld_mas_workspace_id | default('masworld')) ~ '.manage.' ~ masworld_mas_instance_id ~ '.' ~ _masworld_cluster_domain }}
+          {{ 'https://' ~ (_masworld_manage_routes.resources
+             | selectattr('spec.host', 'match', '.*-all\\.manage\\..*')
+             | map(attribute='spec.host') | first
+             | default(
+                 _masworld_manage_routes.resources
+                 | selectattr('metadata.name', 'match', 'all-.*')
+                 | map(attribute='spec.host') | first
+                 | default((masworld_mas_workspace_id | default('masworld')) ~ '-all.manage.' ~ masworld_mas_instance_id ~ '.' ~ _masworld_cluster_domain)
+             )) }}
 
     # ── Gather Lab Credentials ─────────────────────────────────────────
     - name: Read S3 credentials ConfigMap
@@ -132,6 +139,32 @@
       ansible.builtin.set_fact:
         _masworld_lab_password: ""
       when: _masworld_lab_creds_secret.resources | default([]) | length == 0
+
+    - name: Read MAS superuser credentials
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "{{ masworld_mas_instance_id }}-credentials-superuser"
+        namespace: "mas-{{ masworld_mas_instance_id }}-core"
+      register: _masworld_mas_superuser_secret
+      failed_when: false
+
+    - name: Set MAS superuser facts
+      ansible.builtin.set_fact:
+        _masworld_mas_admin_username: >-
+          {{ (_masworld_mas_superuser_secret.resources[0].data.username | default(''))
+             | b64decode }}
+        _masworld_mas_admin_password: >-
+          {{ (_masworld_mas_superuser_secret.resources[0].data.password | default(''))
+             | b64decode }}
+      when: _masworld_mas_superuser_secret.resources | default([]) | length > 0
+      no_log: true
+
+    - name: Set empty MAS superuser facts when Secret not found
+      ansible.builtin.set_fact:
+        _masworld_mas_admin_username: ""
+        _masworld_mas_admin_password: ""
+      when: _masworld_mas_superuser_secret.resources | default([]) | length == 0
 
     # ── Deploy Showroom via local Helm chart ──────────────────────────────
     - name: Create chart copies directory
@@ -226,6 +259,8 @@
               s3_region: {{ _masworld_s3_region | default('') }}
               s3_access_key_id: {{ _masworld_s3_access_key | default('') }}
               s3_secret_access_key: {{ _masworld_s3_secret_key | default('') }}
+              mas_admin_username: {{ _masworld_mas_admin_username | default('') }}
+              mas_admin_password: {{ _masworld_mas_admin_password | default('') }}
           terminal:
             setup: "false"
             storage:

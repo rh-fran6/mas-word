@@ -37,11 +37,16 @@ Your lab account can install operators and configure logging, but cannot modify 
 
 == Verify Maximo Access
 
-. Open {mas_url}[Maximo^] in a new browser tab.
-. Log in with your MAS credentials.
-. Confirm the Maximo Navigator loads and you can see application tiles.
+. Open {mas_url}[Maximo Suite Navigator^] in a new browser tab.
+. Log in with the MAS Admin credentials shown on the Welcome page:
++
+* *Username*: `{mas_admin_username}`
+* *Password*: `{mas_admin_password}`
++
+. Confirm the Maximo Navigator loads and you can see application tiles (such as *Manage*).
+. Click *Manage* to open Maximo Manage. Confirm the Manage home page loads.
 
-NOTE: Your lab account is for OpenShift access. Maximo uses its own authentication. Ask your facilitator for Maximo login details if needed.
+NOTE: The MAS admin credentials are separate from your OpenShift lab credentials. Both are listed on the Welcome page of this lab guide.
 
 == Verify Cluster Health
 
