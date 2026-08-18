@@ -696,6 +696,66 @@
         - _existing_oidc_secret.resources | default([]) | length == 0
       no_log: true
 
+    # ── Lab user credentials (included in realm import) ─────────────────
+    - name: Resolve lab username for realm import
+      ansible.builtin.set_fact:
+        _lab_username: "{{ masworld_lab_username_prefix | default('lab-seat-') }}{{ '%02d' | format(masworld_seat_number | int) }}"
+      when: masworld_lab_accounts_enabled | default(false) | bool
+
+    - name: Check if lab credentials secret exists
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "{{ masworld_lab_credentials_secret_name | default('masworld-lab-credentials') }}"
+        namespace: "{{ masworld_lab_credentials_namespace | default('showroom') }}"
+      register: _existing_lab_creds
+      when: masworld_lab_accounts_enabled | default(false) | bool
+
+    - name: Use existing lab password
+      ansible.builtin.set_fact:
+        _lab_password: "{{ _existing_lab_creds.resources[0].data.password | b64decode }}"
+      when:
+        - masworld_lab_accounts_enabled | default(false) | bool
+        - _existing_lab_creds.resources | default([]) | length > 0
+      no_log: true
+
+    - name: Generate lab password (first run only)
+      ansible.builtin.set_fact:
+        _lab_password: >-
+          {{ lookup('ansible.builtin.password',
+             '/dev/null length=16 chars=ascii_letters,digits') }}
+      when:
+        - masworld_lab_accounts_enabled | default(false) | bool
+        - _existing_lab_creds.resources | default([]) | length == 0
+      no_log: true
+
+    - name: Ensure lab credentials namespace exists
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ masworld_lab_credentials_namespace | default('showroom') }}"
+        state: present
+      failed_when: false
+      when: masworld_lab_accounts_enabled | default(false) | bool
+
+    - name: Create lab credentials secret
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ masworld_lab_credentials_secret_name | default('masworld-lab-credentials') }}"
+            namespace: "{{ masworld_lab_credentials_namespace | default('showroom') }}"
+            labels:
+              masworld.redhat.com/component: lab-accounts
+          type: Opaque
+          stringData:
+            username: "{{ _lab_username }}"
+            password: "{{ _lab_password }}"
+      when: masworld_lab_accounts_enabled | default(false) | bool
+      no_log: true
+
     # ── Create Demo Realm with LDAP Federation ──────────────────────────
     - name: Build realm import with LDAP user federation
       ansible.builtin.set_fact:
@@ -726,6 +786,22 @@
                   'temporary': true
                 }]
               }) | list
+              + (
+                [{
+                  'username': _lab_username,
+                  'enabled': true,
+                  'emailVerified': true,
+                  'firstName': 'Lab',
+                  'lastName': 'Seat ' + ('%02d' | format(masworld_seat_number | int)),
+                  'email': _lab_username + '@masworld.example.com',
+                  'credentials': [{
+                    'type': 'password',
+                    'value': _lab_password,
+                    'temporary': false
+                  }]
+                }] if (masworld_lab_accounts_enabled | default(false) | bool
+                       and _lab_username is defined) else []
+              )
             }}
           components:
             org.keycloak.storage.UserStorageProvider:

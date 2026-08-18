@@ -1,192 +1,28 @@
 ---
-# Lab Accounts: create per-seat Keycloak user with scoped RBAC for operator exercises
+# Lab Accounts: scoped RBAC for per-seat lab user (created in Keycloak by identity_demo)
 - name: Create lab accounts
   block:
     - name: Resolve lab username
       ansible.builtin.set_fact:
-        _lab_username: "{{ masworld_lab_username_prefix }}{{ masworld_seat_number }}"
+        _lab_username: "{{ masworld_lab_username_prefix }}{{ '%02d' | format(masworld_seat_number | int) }}"
 
     - name: Resolve student namespace
       ansible.builtin.set_fact:
         _lab_student_ns: "student-{{ masworld_seat_number | pad(2) }}"
 
-    # ── Check for existing credentials ────────────────────────────────
-    - name: Check if lab credentials secret exists
+    # ── Read credentials created by identity_demo ─────────────────────
+    - name: Read lab credentials secret
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Secret
         name: "{{ masworld_lab_credentials_secret_name }}"
         namespace: "{{ masworld_lab_credentials_namespace }}"
       register: _existing_lab_creds
+      failed_when: _existing_lab_creds.resources | length == 0
 
-    - name: Use existing lab password
+    - name: Extract lab password
       ansible.builtin.set_fact:
         _lab_password: "{{ _existing_lab_creds.resources[0].data.password | b64decode }}"
-      when: _existing_lab_creds.resources | length > 0
-      no_log: true
-
-    - name: Generate lab password (first run only)
-      ansible.builtin.set_fact:
-        _lab_password: "{{ lookup('ansible.builtin.password', '/dev/null length=' + (masworld_lab_password_length | string) + ' chars=ascii_letters,digits') }}"
-      when: _existing_lab_creds.resources | length == 0
-      no_log: true
-
-    # ── Ensure showroom namespace exists ───────────────────────────────
-    - name: Ensure lab credentials namespace exists
-      kubernetes.core.k8s:
-        api_version: v1
-        kind: Namespace
-        name: "{{ masworld_lab_credentials_namespace }}"
-        state: present
-      failed_when: false
-
-    # ── Store credentials in Secret ───────────────────────────────────
-    - name: Create lab credentials secret
-      kubernetes.core.k8s:
-        state: present
-        definition:
-          apiVersion: v1
-          kind: Secret
-          metadata:
-            name: "{{ masworld_lab_credentials_secret_name }}"
-            namespace: "{{ masworld_lab_credentials_namespace }}"
-            labels:
-              masworld.redhat.com/component: lab-accounts
-          type: Opaque
-          stringData:
-            username: "{{ _lab_username }}"
-            password: "{{ _lab_password }}"
-      no_log: true
-
-    # ── Find Keycloak pod ─────────────────────────────────────────────
-    - name: Get Keycloak pod name
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Pod
-        namespace: "{{ masworld_keycloak_namespace }}"
-        label_selectors:
-          - app=keycloak
-      register: _kc_pods
-
-    - name: Set Keycloak pod fact
-      ansible.builtin.set_fact:
-        _kc_pod: >-
-          {{ (_kc_pods.resources
-              | selectattr('status.phase', 'equalto', 'Running')
-              | list | first).metadata.name }}
-
-    # ── Read admin credentials for kcadm.sh ───────────────────────────
-    - name: Read Keycloak admin secret
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Secret
-        name: keycloak-admin-secret
-        namespace: "{{ masworld_keycloak_namespace }}"
-      register: _kc_admin_secret
-      failed_when: _kc_admin_secret.resources | length == 0
-
-    - name: Extract admin credentials
-      ansible.builtin.set_fact:
-        _kc_admin_user: "{{ _kc_admin_secret.resources[0].data.username | b64decode }}"
-        _kc_admin_pass: "{{ _kc_admin_secret.resources[0].data.password | b64decode }}"
-      no_log: true
-
-    # ── Authenticate kcadm.sh inside the pod ──────────────────────────
-    - name: Authenticate kcadm.sh
-      ansible.builtin.command:
-        cmd: >-
-          oc exec -n {{ masworld_keycloak_namespace }} {{ _kc_pod }} --
-          /opt/keycloak/bin/kcadm.sh config credentials
-          --server http://localhost:8080
-          --realm master
-          --user {{ _kc_admin_user }}
-          --password {{ _kc_admin_pass }}
-      environment:
-        KUBECONFIG: "/tmp/kubeconfig-{{ masworld_cluster_id | default(inventory_hostname) }}"
-      changed_when: false
-      retries: 3
-      delay: 10
-      until: _kc_auth is not failed
-      register: _kc_auth
-      no_log: true
-
-    # ── Check if user already exists ──────────────────────────────────
-    - name: Check if lab user exists in Keycloak
-      ansible.builtin.command:
-        cmd: >-
-          oc exec -n {{ masworld_keycloak_namespace }} {{ _kc_pod }} --
-          /opt/keycloak/bin/kcadm.sh get users
-          -r {{ masworld_keycloak_realm }}
-          -q username={{ _lab_username }}
-          -q exact=true
-      environment:
-        KUBECONFIG: "/tmp/kubeconfig-{{ masworld_cluster_id | default(inventory_hostname) }}"
-      register: _kc_user_check
-      changed_when: false
-      no_log: true
-
-    - name: Parse user check result
-      ansible.builtin.set_fact:
-        _kc_user_exists: "{{ (_kc_user_check.stdout | default('[]') | from_json | length) > 0 }}"
-        _kc_user_id: "{{ (_kc_user_check.stdout | default('[]') | from_json | first).id | default('') }}"
-      no_log: true
-
-    # ── Create user if not exists ─────────────────────────────────────
-    - name: Create lab user in Keycloak
-      ansible.builtin.command:
-        cmd: >-
-          oc exec -n {{ masworld_keycloak_namespace }} {{ _kc_pod }} --
-          /opt/keycloak/bin/kcadm.sh create users
-          -r {{ masworld_keycloak_realm }}
-          -s username={{ _lab_username }}
-          -s enabled=true
-          -s emailVerified=true
-          -s firstName=Lab
-          -s "lastName=Seat {{ masworld_seat_number }}"
-          -s email={{ _lab_username }}@masworld.example.com
-      environment:
-        KUBECONFIG: "/tmp/kubeconfig-{{ masworld_cluster_id | default(inventory_hostname) }}"
-      register: _kc_user_create
-      changed_when: true
-      when: not (_kc_user_exists | bool)
-      no_log: true
-
-    # ── Set password ──────────────────────────────────────────────────
-    - name: Get user ID after creation
-      ansible.builtin.command:
-        cmd: >-
-          oc exec -n {{ masworld_keycloak_namespace }} {{ _kc_pod }} --
-          /opt/keycloak/bin/kcadm.sh get users
-          -r {{ masworld_keycloak_realm }}
-          -q username={{ _lab_username }}
-          -q exact=true
-      environment:
-        KUBECONFIG: "/tmp/kubeconfig-{{ masworld_cluster_id | default(inventory_hostname) }}"
-      register: _kc_user_lookup
-      changed_when: false
-      when: not (_kc_user_exists | bool)
-      no_log: true
-
-    - name: Set user ID fact
-      ansible.builtin.set_fact:
-        _kc_user_id: >-
-          {{ (_kc_user_lookup.stdout
-              | default(_kc_user_check.stdout)
-              | from_json | first).id }}
-      no_log: true
-
-    - name: Set lab user password
-      ansible.builtin.command:
-        cmd: >-
-          oc exec -n {{ masworld_keycloak_namespace }} {{ _kc_pod }} --
-          /opt/keycloak/bin/kcadm.sh set-password
-          -r {{ masworld_keycloak_realm }}
-          --userid {{ _kc_user_id }}
-          --new-password {{ _lab_password }}
-          -t
-      environment:
-        KUBECONFIG: "/tmp/kubeconfig-{{ masworld_cluster_id | default(inventory_hostname) }}"
-      changed_when: true
       no_log: true
 
     # ── Create ClusterRoles ───────────────────────────────────────────
@@ -285,7 +121,9 @@
 
     - name: Report lab account created
       ansible.builtin.debug:
-        msg: "Lab account {{ _lab_username }} created in Keycloak realm {{ masworld_keycloak_realm }} with scoped RBAC."
+        msg: >-
+          Lab account {{ _lab_username }} configured with scoped RBAC
+          (Keycloak user created by identity_demo via realm import).
 
   rescue:
     - name: Set lab accounts failed facts

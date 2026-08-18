@@ -146,6 +146,19 @@
   failed_when: false
   when: masworld_cluster_purpose | default('attendee') != 'hub'
 
+- name: "{{ cluster.id }} — Check lab credentials for identity readiness"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ masworld_lab_credentials_secret_name | default('masworld-lab-credentials') }}"
+    namespace: "{{ masworld_lab_credentials_namespace | default('showroom') }}"
+    host: "{{ masworld_cluster_api_url }}"
+    api_key: "{{ masworld_api_token | default('') }}"
+    validate_certs: false
+  register: _fast_check_identity_lab_creds
+  failed_when: false
+  when: masworld_cluster_purpose | default('attendee') != 'hub'
+
 - name: "{{ cluster.id }} — Evaluate identity readiness"
   ansible.builtin.set_fact:
     _identity_already_ready: >-
@@ -157,7 +170,8 @@
          and (_fast_check_oauth.resources | default([])
               | map(attribute='spec.identityProviders', default=[]) | flatten
               | selectattr('name', 'equalto', 'masworld-keycloak')
-              | list | length > 0) }}
+              | list | length > 0)
+         and (_fast_check_identity_lab_creds.resources | default([]) | length > 0) }}
   when: masworld_cluster_purpose | default('attendee') != 'hub'
 
 - name: "{{ cluster.id }} — Check lab_accounts readiness"

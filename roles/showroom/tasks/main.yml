@@ -108,6 +108,9 @@
           helm status showroom
           --namespace {{ masworld_showroom_namespace }}
           --output json
+          --burst-limit 300 --qps 50
+      environment:
+        KUBECONFIG: "/tmp/kubeconfig-{{ masworld_cluster_id | default(inventory_hostname) }}"
       register: _masworld_showroom_status_check
       changed_when: false
       failed_when: false
@@ -119,14 +122,16 @@
           {{ (_masworld_showroom_status_check.stdout | default('{}') | from_json).info.status | default('') }}
       when: _masworld_showroom_status_check.rc == 0
 
-    - name: Uninstall stale failed Showroom release
-      kubernetes.core.helm:
-        name: showroom
-        release_namespace: "{{ masworld_showroom_namespace }}"
-        state: absent
-        wait: true
-        wait_timeout: "120s"
-      when: _masworld_showroom_release_status | default('') == 'failed'
+    - name: Uninstall stale Showroom release
+      ansible.builtin.command:
+        cmd: >-
+          helm uninstall showroom
+          --namespace {{ masworld_showroom_namespace }}
+          --wait --timeout 120s
+          --burst-limit 300 --qps 50
+      environment:
+        KUBECONFIG: "/tmp/kubeconfig-{{ masworld_cluster_id | default(inventory_hostname) }}"
+      when: _masworld_showroom_release_status | default('') in ['failed', 'pending-upgrade', 'pending-install']
       failed_when: false
 
     - name: Delete orphaned terminal PVC from previous failed release
@@ -138,24 +143,17 @@
         namespace: "{{ masworld_showroom_namespace }}"
         wait: true
         wait_timeout: 60
-      when: _masworld_showroom_release_status | default('') == 'failed'
+      when: _masworld_showroom_release_status | default('') in ['failed', 'pending-upgrade', 'pending-install']
       failed_when: false
 
     - name: Stagger Helm deploy to avoid rate limiting
       ansible.builtin.wait_for:
-        timeout: "{{ (masworld_seat_number | default(0) | int) * 5 }}"
+        timeout: "{{ (masworld_seat_number | default(0) | int) * 15 }}"
       changed_when: false
 
-    - name: Deploy Showroom via Helm chart
-      no_log: true
-      kubernetes.core.helm:
-        name: showroom
-        chart_ref: "{{ masworld_showroom_chart_local_dir }}/.copies/{{ masworld_showroom_chart_name }}-{{ masworld_cluster_id | default(inventory_hostname) }}.tgz"
-        release_namespace: "{{ masworld_showroom_namespace }}"
-        create_namespace: false
-        wait: true
-        wait_timeout: "600s"
-        values:
+    - name: Write Showroom Helm values file
+      ansible.builtin.copy:
+        content: |
           deployer:
             domain: "{{ _masworld_cluster_domain }}"
           guid: "{{ masworld_seat_number }}"
@@ -188,13 +186,30 @@
               setup: "false"
           wetty:
             setup: "false"
+        dest: "/tmp/showroom-values-{{ masworld_cluster_id | default(inventory_hostname) }}.yaml"
+        mode: "0600"
+      no_log: true
+
+    - name: Deploy Showroom via Helm chart
+      ansible.builtin.command:
+        cmd: >-
+          helm upgrade --install showroom
+          {{ masworld_showroom_chart_local_dir }}/.copies/{{ masworld_showroom_chart_name }}-{{ masworld_cluster_id | default(inventory_hostname) }}.tgz
+          --namespace {{ masworld_showroom_namespace }}
+          --values /tmp/showroom-values-{{ masworld_cluster_id | default(inventory_hostname) }}.yaml
+          --wait --timeout 300s
+          --burst-limit 300 --qps 50
       environment:
-        HELM_BURST_LIMIT: "300"
-        HELM_QPS: "200"
+        KUBECONFIG: "/tmp/kubeconfig-{{ masworld_cluster_id | default(inventory_hostname) }}"
       register: _masworld_showroom_helm
       retries: 5
-      delay: 30
+      delay: 60
       until: _masworld_showroom_helm is not failed
+
+    - name: Remove Showroom values file
+      ansible.builtin.file:
+        path: "/tmp/showroom-values-{{ masworld_cluster_id | default(inventory_hostname) }}.yaml"
+        state: absent
 
     - name: Remove per-cluster chart copy
       ansible.builtin.file:

@@ -6,7 +6,7 @@ masworld_showroom_enabled: true
 masworld_showroom_chart_version: "v2.1.8"
 
 # Showroom content repository
-masworld_showroom_content_repo: "https://github.com/rh-fran6/mas-world.git"
+masworld_showroom_content_repo: "https://github.com/rh-fran6/mas-word.git"
 
 # Content branch or tag
 masworld_showroom_content_ref: "main"
