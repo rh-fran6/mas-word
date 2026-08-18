@@ -1,0 +1,360 @@
+---
+# One-time cleanup: Remove all traces of community Keycloak from clusters.
+#
+# Removes: Keycloak CRs, KeycloakRealmImport/KeycloakRealm CRs, Subscription,
+# CSV, operator deployment, CRDs, OperatorGroup, and leftover pods/services
+# in the masworld-keycloak namespace. Preserves the namespace, PostgreSQL,
+# OpenLDAP, and secrets so RHBK can reuse them.
+#
+# Usage:
+#   make cleanup-community-keycloak
+#   ansible-playbook playbooks/cleanup-community-keycloak.yml --vault-password-file secrets/.vault-pass
+
+# ═══════════════════════════════════════════════════════════════════════
+# Play 1: Build fleet inventory (localhost)
+# ═══════════════════════════════════════════════════════════════════════
+- name: "Community Keycloak Cleanup — Fleet Setup"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../secrets/cluster-credentials.yml
+
+  tasks:
+    - name: Display cleanup banner
+      ansible.builtin.debug:
+        msg: |
+          ╔══════════════════════════════════════════════════════════════╗
+          ║  Removing ALL community Keycloak from fleet clusters        ║
+          ╚══════════════════════════════════════════════════════════════╝
+
+    - name: Build cluster list
+      ansible.builtin.set_fact:
+        masworld_enabled_clusters: "{{ cluster_credentials | to_cluster_list }}"
+      no_log: true
+
+    - name: Register clusters for parallel cleanup
+      ansible.builtin.add_host:
+        name: "{{ item.id }}"
+        groups: cleanup_fleet
+        ansible_connection: local
+        ansible_python_interpreter: "{{ ansible_playbook_python }}"
+        cluster: "{{ item }}"
+        masworld_admin_username: "{{ masworld_admin_username | default('cluster-admin') }}"
+      loop: "{{ masworld_enabled_clusters }}"
+      loop_control:
+        label: "{{ item.id }}"
+      no_log: true
+      changed_when: false
+
+# ═══════════════════════════════════════════════════════════════════════
+# Play 2: Per-cluster cleanup (parallel)
+# ═══════════════════════════════════════════════════════════════════════
+- name: "Community Keycloak Cleanup — Per Cluster"
+  hosts: cleanup_fleet
+  strategy: free
+  connection: local
+  gather_facts: false
+
+  vars:
+    masworld_keycloak_namespace: masworld-keycloak
+
+  vars_files:
+    - ../secrets/cluster-credentials.yml
+
+  module_defaults:
+    group/kubernetes.core.k8s:
+      host: "{{ masworld_cluster_api_url }}"
+      api_key: "{{ masworld_api_token }}"
+      validate_certs: false
+
+  tasks:
+    - name: Skip hub clusters
+      ansible.builtin.meta: end_host
+      when: cluster.purpose | default('attendee') == 'hub'
+
+    # ── Authenticate to cluster (OAuth token exchange) ─────────────────
+    - name: Set per-cluster connection variables
+      ansible.builtin.set_fact:
+        masworld_cluster_api_url: "{{ cluster.api_url | default('') }}"
+        masworld_admin_password: "{{ cluster.admin_password | default('') }}"
+      no_log: true
+
+    - name: "{{ inventory_hostname }} — Discover OAuth server URL"
+      ansible.builtin.uri:
+        url: "{{ masworld_cluster_api_url }}/.well-known/oauth-authorization-server"
+        method: GET
+        validate_certs: false
+        status_code: [200]
+      register: _cleanup_oauth_metadata
+      retries: 3
+      delay: 10
+      until: _cleanup_oauth_metadata is not failed
+
+    - name: "{{ inventory_hostname }} — Request OAuth token"
+      ansible.builtin.uri:
+        url: "{{ _cleanup_oauth_metadata.json.authorization_endpoint }}?response_type=token&client_id=openshift-challenging-client"
+        method: GET
+        user: "{{ masworld_admin_username | default('cluster-admin') }}"
+        password: "{{ masworld_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        follow_redirects: none
+        status_code: [302]
+      register: _cleanup_oauth_response
+      retries: 3
+      delay: 10
+      until: _cleanup_oauth_response is not failed
+      no_log: true
+
+    - name: "{{ inventory_hostname }} — Extract bearer token"
+      ansible.builtin.set_fact:
+        masworld_api_token: "{{ _cleanup_oauth_response.location | regex_search('access_token=([^&]+)', '\\1') | first }}"
+      no_log: true
+
+    - name: "{{ inventory_hostname }} — Starting community Keycloak cleanup"
+      ansible.builtin.debug:
+        msg: "Authenticated. Removing all community Keycloak resources from {{ inventory_hostname }}"
+
+    # ── 1. Delete Keycloak custom resources ────────────────────────────
+    - name: Delete KeycloakRealmImport CRs (modern API)
+      kubernetes.core.k8s:
+        api_version: k8s.keycloak.org/v2beta1
+        kind: KeycloakRealmImport
+        namespace: "{{ masworld_keycloak_namespace }}"
+        name: "{{ item }}"
+        state: absent
+        wait: true
+        wait_timeout: 60
+      loop:
+        - masworld-realm
+      failed_when: false
+
+    - name: Delete KeycloakRealm CRs (legacy API)
+      kubernetes.core.k8s:
+        api_version: keycloak.org/v1alpha1
+        kind: KeycloakRealm
+        namespace: "{{ masworld_keycloak_namespace }}"
+        name: "{{ item }}"
+        state: absent
+        wait: true
+        wait_timeout: 60
+      loop:
+        - masworld-realm
+      failed_when: false
+
+    - name: Delete Keycloak CR (modern API)
+      kubernetes.core.k8s:
+        api_version: k8s.keycloak.org/v2beta1
+        kind: Keycloak
+        name: masworld-keycloak
+        namespace: "{{ masworld_keycloak_namespace }}"
+        state: absent
+        wait: true
+        wait_timeout: 120
+      failed_when: false
+
+    - name: Delete Keycloak CR (legacy API)
+      kubernetes.core.k8s:
+        api_version: keycloak.org/v1alpha1
+        kind: Keycloak
+        name: masworld-keycloak
+        namespace: "{{ masworld_keycloak_namespace }}"
+        state: absent
+        wait: true
+        wait_timeout: 120
+      failed_when: false
+
+    # ── 2. Delete operator subscription and CSV ────────────────────────
+    - name: Get community keycloak-operator Subscription
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: keycloak-operator
+        namespace: "{{ masworld_keycloak_namespace }}"
+      register: _community_kc_sub
+      failed_when: false
+
+    - name: Capture installed CSV name
+      ansible.builtin.set_fact:
+        _community_kc_csv_name: "{{ _community_kc_sub.resources[0].status.installedCSV | default('') }}"
+      when: (_community_kc_sub.resources | default([])) | length > 0
+
+    - name: Delete community keycloak-operator Subscription
+      kubernetes.core.k8s:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: keycloak-operator
+        namespace: "{{ masworld_keycloak_namespace }}"
+        state: absent
+      failed_when: false
+
+    - name: Delete community keycloak-operator CSV
+      kubernetes.core.k8s:
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        name: "{{ _community_kc_csv_name }}"
+        namespace: "{{ masworld_keycloak_namespace }}"
+        state: absent
+      when: _community_kc_csv_name | default('') | length > 0
+      failed_when: false
+
+    # ── 3. Delete operator deployment and pods ─────────────────────────
+    - name: Delete community keycloak-operator deployment
+      kubernetes.core.k8s:
+        api_version: apps/v1
+        kind: Deployment
+        name: keycloak-operator
+        namespace: "{{ masworld_keycloak_namespace }}"
+        state: absent
+      failed_when: false
+
+    - name: Delete Keycloak StatefulSet (operator-managed)
+      kubernetes.core.k8s:
+        api_version: apps/v1
+        kind: StatefulSet
+        name: masworld-keycloak
+        namespace: "{{ masworld_keycloak_namespace }}"
+        state: absent
+        wait: true
+        wait_timeout: 60
+      failed_when: false
+
+    - name: Delete Keycloak server pods
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Pod
+        name: masworld-keycloak-0
+        namespace: "{{ masworld_keycloak_namespace }}"
+        state: absent
+      failed_when: false
+
+    # ── 4. Delete operator-created services and routes ─────────────────
+    - name: Delete Keycloak service (operator-managed)
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Service
+        name: "{{ item }}"
+        namespace: "{{ masworld_keycloak_namespace }}"
+        state: absent
+      loop:
+        - masworld-keycloak-service
+        - masworld-keycloak-discovery
+      failed_when: false
+
+    - name: Get all routes in namespace
+      kubernetes.core.k8s_info:
+        api_version: route.openshift.io/v1
+        kind: Route
+        namespace: "{{ masworld_keycloak_namespace }}"
+      register: _kc_routes
+      failed_when: false
+
+    - name: Delete Keycloak-related routes
+      kubernetes.core.k8s:
+        api_version: route.openshift.io/v1
+        kind: Route
+        name: "{{ item.metadata.name }}"
+        namespace: "{{ masworld_keycloak_namespace }}"
+        state: absent
+      loop: "{{ _kc_routes.resources | default([]) | selectattr('metadata.name', 'match', '.*keycloak.*') | list }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      failed_when: false
+
+    # ── 5. Delete OperatorGroup ────────────────────────────────────────
+    - name: Delete keycloak OperatorGroup
+      kubernetes.core.k8s:
+        api_version: operators.coreos.com/v1
+        kind: OperatorGroup
+        name: keycloak-operator-group
+        namespace: "{{ masworld_keycloak_namespace }}"
+        state: absent
+      failed_when: false
+
+    # ── 6. Delete community Keycloak CRDs ──────────────────────────────
+    - name: Delete community Keycloak CRDs
+      kubernetes.core.k8s:
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: "{{ item }}"
+        state: absent
+      loop:
+        - keycloaks.k8s.keycloak.org
+        - keycloakrealmimports.k8s.keycloak.org
+        - keycloakoidcclients.k8s.keycloak.org
+        - keycloaksamlclients.k8s.keycloak.org
+        - keycloaks.keycloak.org
+        - keycloakrealms.keycloak.org
+        - keycloakclients.keycloak.org
+        - keycloakbackups.keycloak.org
+        - keycloakusers.keycloak.org
+      failed_when: false
+
+    # ── 7. Clean up any leftover operator-managed resources ────────────
+    - name: Delete any remaining keycloak-operator ServiceAccount
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: ServiceAccount
+        name: keycloak-operator
+        namespace: "{{ masworld_keycloak_namespace }}"
+        state: absent
+      failed_when: false
+
+    - name: Delete operator-created RoleBindings
+      kubernetes.core.k8s:
+        api_version: rbac.authorization.k8s.io/v1
+        kind: RoleBinding
+        name: "{{ item }}"
+        namespace: "{{ masworld_keycloak_namespace }}"
+        state: absent
+      loop:
+        - keycloak-operator
+        - keycloak-operator-role-binding
+      failed_when: false
+
+    - name: Delete operator-created ClusterRoleBindings
+      kubernetes.core.k8s:
+        api_version: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        name: "{{ item }}"
+        state: absent
+      loop:
+        - keycloak-operator-clusterrole-binding
+      failed_when: false
+
+    # ── 8. Verify cleanup ──────────────────────────────────────────────
+    - name: List remaining pods in namespace
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ masworld_keycloak_namespace }}"
+      register: _remaining_pods
+      failed_when: false
+
+    - name: "{{ inventory_hostname }} — Cleanup complete"
+      ansible.builtin.debug:
+        msg: >-
+          Community Keycloak removed. Remaining pods:
+          {{ _remaining_pods.resources | default([]) | map(attribute='metadata.name') | list }}
+
+# ═══════════════════════════════════════════════════════════════════════
+# Play 3: Summary
+# ═══════════════════════════════════════════════════════════════════════
+- name: "Community Keycloak Cleanup — Summary"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Display cleanup summary
+      ansible.builtin.debug:
+        msg: |
+          ══════════════════════════════════════════════════════════════
+            COMMUNITY KEYCLOAK CLEANUP COMPLETE
+          ══════════════════════════════════════════════════════════════
+            All community Keycloak resources removed from fleet.
+            PostgreSQL, OpenLDAP, and secrets preserved for RHBK.
+            Run 'make deploy-cluster-ready' to install RHBK.
+          ══════════════════════════════════════════════════════════════

@@ -3,7 +3,7 @@
 masworld_manage_enabled: true
 
 # Manage subscription channel
-masworld_manage_channel: "9.1.x"
+masworld_manage_channel: "9.2.x"
 
 # Database type for Manage
 masworld_manage_db_type: "db2"

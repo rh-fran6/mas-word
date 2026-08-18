@@ -1,0 +1,322 @@
+---
+# Per-cluster lab reset tasks.
+# Called by reset-lab.yml for each target cluster.
+# Removes student-installed resources. NEVER touches MAS, Keycloak, LDAP,
+# OAuth, Showroom, or Db2.
+
+- name: Set per-cluster variables for {{ cluster.id }}
+  ansible.builtin.set_fact:
+    _reset_cluster_id: "{{ cluster.id }}"
+    _reset_seat: "{{ '%02d' | format(cluster.seat_number | int) }}"
+    _reset_api_url: "{{ cluster.api_url | default('') }}"
+    _reset_admin_password: "{{ cluster.admin_password | default('') }}"
+    _reset_student_ns: "student-{{ '%02d' | format(cluster.seat_number | int) }}"
+    _reset_logging_ns: openshift-logging
+  no_log: true
+
+# ── Authenticate ─────────────────────────────────────────────────────
+- name: "{{ cluster.id }} — Discover OAuth server"
+  ansible.builtin.uri:
+    url: "{{ _reset_api_url }}/.well-known/oauth-authorization-server"
+    method: GET
+    validate_certs: false
+    status_code: [200]
+  register: _reset_oauth_meta
+  retries: 3
+  delay: 10
+  until: _reset_oauth_meta is not failed
+
+- name: "{{ cluster.id }} — Request OAuth token"
+  ansible.builtin.uri:
+    url: "{{ _reset_oauth_meta.json.authorization_endpoint }}?response_type=token&client_id=openshift-challenging-client"
+    method: GET
+    user: "{{ masworld_admin_username | default('cluster-admin') }}"
+    password: "{{ _reset_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    follow_redirects: none
+    status_code: [302]
+  register: _reset_oauth_resp
+  retries: 3
+  delay: 10
+  until: _reset_oauth_resp is not failed
+  no_log: true
+
+- name: "{{ cluster.id }} — Extract bearer token"
+  ansible.builtin.set_fact:
+    _reset_api_token: "{{ _reset_oauth_resp.location | regex_search('access_token=([^&]+)', '\\1') | first }}"
+  no_log: true
+
+- name: "{{ cluster.id }} — Set oc CLI context"
+  ansible.builtin.command:
+    cmd: "oc login {{ _reset_api_url }} --token={{ _reset_api_token }} --insecure-skip-tls-verify"
+  environment:
+    KUBECONFIG: "/tmp/kubeconfig-reset-{{ cluster.id }}"
+  register: _reset_oc_login
+  changed_when: false
+  no_log: true
+
+# ── Reset tasks (with K8S auth) ─────────────────────────────────────
+- name: "{{ cluster.id }} — Perform lab reset"
+  environment:
+    K8S_AUTH_HOST: "{{ _reset_api_url }}"
+    K8S_AUTH_API_KEY: "{{ _reset_api_token }}"
+    K8S_AUTH_VERIFY_SSL: "false"
+    KUBECONFIG: "/tmp/kubeconfig-reset-{{ cluster.id }}"
+  block:
+    # ── 1. Delete log-test pod ──────────────────────────────────────
+    - name: "{{ cluster.id }} — Delete log-test pod"
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Pod
+        name: "log-test-{{ _reset_seat }}"
+        namespace: "{{ _reset_student_ns }}"
+        state: absent
+      failed_when: false
+
+    # ── 2. Delete UIPlugin ──────────────────────────────────────────
+    - name: "{{ cluster.id }} — Delete UIPlugin"
+      kubernetes.core.k8s:
+        api_version: observability.openshift.io/v1alpha1
+        kind: UIPlugin
+        name: logging
+        state: absent
+      failed_when: false
+
+    # ── 3. Delete ClusterLogForwarder ───────────────────────────────
+    - name: "{{ cluster.id }} — Delete ClusterLogForwarder"
+      kubernetes.core.k8s:
+        api_version: observability.openshift.io/v1
+        kind: ClusterLogForwarder
+        name: collector
+        namespace: "{{ _reset_logging_ns }}"
+        state: absent
+      failed_when: false
+
+    - name: "{{ cluster.id }} — Wait for collector pods to terminate"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ _reset_logging_ns }}"
+        label_selectors:
+          - app.kubernetes.io/component=collector
+      register: _reset_collector_pods
+      until: _reset_collector_pods.resources | default([]) | length == 0
+      retries: 12
+      delay: 10
+      failed_when: false
+
+    # ── 4. Delete LokiStack ─────────────────────────────────────────
+    - name: "{{ cluster.id }} — Delete LokiStack"
+      kubernetes.core.k8s:
+        api_version: loki.grafana.com/v1
+        kind: LokiStack
+        name: logging-loki
+        namespace: "{{ _reset_logging_ns }}"
+        state: absent
+      failed_when: false
+
+    - name: "{{ cluster.id }} — Wait for LokiStack pods to terminate"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ _reset_logging_ns }}"
+        label_selectors:
+          - app.kubernetes.io/instance=logging-loki
+      register: _reset_loki_pods
+      until: _reset_loki_pods.resources | default([]) | length == 0
+      retries: 30
+      delay: 10
+      failed_when: false
+
+    # ── 5. Delete S3 storage secret (student-created) ───────────────
+    - name: "{{ cluster.id }} — Delete S3 storage secret"
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Secret
+        name: logging-loki-s3
+        namespace: "{{ _reset_logging_ns }}"
+        state: absent
+      failed_when: false
+
+    # ── 6. Delete collector ServiceAccount and ClusterRoleBindings ──
+    - name: "{{ cluster.id }} — Remove collector ClusterRoleBindings"
+      ansible.builtin.command:
+        cmd: "oc adm policy remove-cluster-role-from-user {{ item }} -z collector -n {{ _reset_logging_ns }}"
+      environment:
+        KUBECONFIG: "/tmp/kubeconfig-reset-{{ cluster.id }}"
+      loop:
+        - collect-application-logs
+        - collect-infrastructure-logs
+        - collect-audit-logs
+      changed_when: true
+      failed_when: false
+
+    - name: "{{ cluster.id }} — Delete collector ServiceAccount"
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: ServiceAccount
+        name: collector
+        namespace: "{{ _reset_logging_ns }}"
+        state: absent
+      failed_when: false
+
+    # ── 7. Delete operator Subscriptions ────────────────────────────
+    - name: "{{ cluster.id }} — Delete Logging Operator Subscription"
+      kubernetes.core.k8s:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: cluster-logging
+        namespace: "{{ _reset_logging_ns }}"
+        state: absent
+      failed_when: false
+
+    - name: "{{ cluster.id }} — Delete Loki Operator Subscription"
+      kubernetes.core.k8s:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: loki-operator
+        namespace: "{{ _reset_logging_ns }}"
+        state: absent
+      failed_when: false
+
+    - name: "{{ cluster.id }} — Delete COO Subscription"
+      kubernetes.core.k8s:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: cluster-observability-operator
+        namespace: openshift-operators
+        state: absent
+      failed_when: false
+
+    # ── 8. Delete operator CSVs ─────────────────────────────────────
+    - name: "{{ cluster.id }} — Find CSVs in logging namespace"
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        namespace: "{{ _reset_logging_ns }}"
+      register: _reset_logging_csvs
+      failed_when: false
+
+    - name: "{{ cluster.id }} — Delete logging CSVs"
+      kubernetes.core.k8s:
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        name: "{{ item.metadata.name }}"
+        namespace: "{{ _reset_logging_ns }}"
+        state: absent
+      loop: "{{ _reset_logging_csvs.resources | default([]) }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      failed_when: false
+
+    - name: "{{ cluster.id }} — Find COO CSVs"
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        namespace: openshift-operators
+      register: _reset_coo_csvs
+      failed_when: false
+
+    - name: "{{ cluster.id }} — Delete COO CSVs"
+      kubernetes.core.k8s:
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        name: "{{ item.metadata.name }}"
+        namespace: openshift-operators
+        state: absent
+      loop: >-
+        {{ _reset_coo_csvs.resources | default([])
+           | selectattr('metadata.name', 'search', 'cluster-observability-operator')
+           | list }}
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      failed_when: false
+
+    # ── 9. Delete student-created OperatorGroup ─────────────────────
+    - name: "{{ cluster.id }} — Delete OperatorGroup in logging namespace"
+      kubernetes.core.k8s:
+        api_version: operators.coreos.com/v1
+        kind: OperatorGroup
+        name: openshift-logging
+        namespace: "{{ _reset_logging_ns }}"
+        state: absent
+      failed_when: false
+
+    # ── 10. Delete OpenShift Groups from LDAP sync ──────────────────
+    - name: "{{ cluster.id }} — Delete synced OpenShift groups"
+      kubernetes.core.k8s:
+        api_version: user.openshift.io/v1
+        kind: Group
+        name: "{{ item }}"
+        state: absent
+      loop:
+        - mas-admins
+        - mas-users
+      failed_when: false
+
+    # ── 11. Clean up student namespace pods/deployments ─────────────
+    - name: "{{ cluster.id }} — Delete student-created pods"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ _reset_student_ns }}"
+      register: _reset_student_pods
+      failed_when: false
+
+    - name: "{{ cluster.id }} — Remove student pods"
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Pod
+        name: "{{ item.metadata.name }}"
+        namespace: "{{ _reset_student_ns }}"
+        state: absent
+      loop: "{{ _reset_student_pods.resources | default([]) }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      when: item.metadata.labels['masworld.redhat.com/component'] | default('') == ''
+      failed_when: false
+
+    # ── 12. Clean up temp files ─────────────────────────────────────
+    - name: "{{ cluster.id }} — Remove temp files"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/ldap-group-sync.yaml
+        - /tmp/ldap-bind-password
+      failed_when: false
+
+    # ── Summary ─────────────────────────────────────────────────────
+    - name: "{{ cluster.id }} — Lab reset complete"
+      ansible.builtin.debug:
+        msg: |
+          ============================================================
+          LAB RESET COMPLETE — {{ cluster.id }} (seat {{ _reset_seat }})
+          ============================================================
+          Removed:
+            - UIPlugin (logging)
+            - ClusterLogForwarder (collector)
+            - LokiStack (logging-loki)
+            - S3 storage secret (logging-loki-s3)
+            - Collector SA + ClusterRoleBindings
+            - Operator Subscriptions + CSVs (Logging, Loki, COO)
+            - OperatorGroup (openshift-logging)
+            - OpenShift groups (mas-admins, mas-users)
+            - Student-created pods
+            - Temp files
+          NOT touched:
+            - MAS (mas-inst1-core, mas-inst1-manage)
+            - Db2
+            - Keycloak / OpenLDAP
+            - OAuth / htpasswd
+            - Showroom
+            - S3 credentials ConfigMap
+            - Lab account (Keycloak user + RBAC)
+          ============================================================
+
+# ── Clean up kubeconfig ────────────────────────────────────────────
+- name: "{{ cluster.id }} — Remove temp kubeconfig"
+  ansible.builtin.file:
+    path: "/tmp/kubeconfig-reset-{{ cluster.id }}"
+    state: absent

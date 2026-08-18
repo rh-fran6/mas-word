@@ -22,6 +22,9 @@
 - name: Log in to ROSA with offline token
   ansible.builtin.command: rosa login --token={{ rosa_token }}
   register: rosa_login_result
+  retries: 3
+  delay: 10
+  until: rosa_login_result.rc == 0
   changed_when: false
   failed_when: rosa_login_result.rc != 0
   no_log: true
@@ -39,12 +42,14 @@
       - rosa_token is defined
     fail_msg: "Required variables are missing. See docs/configuration-guide.md"
 
-- name: Validate facilitator count is exactly 1
+- name: Validate exactly one facilitator in credentials
   ansible.builtin.assert:
     that:
       - cluster_categories.facilitator is defined
-      - cluster_categories.facilitator.count == 1
-    fail_msg: "Facilitator category must exist with count=1"
+      - cluster_credentials | dict2items
+        | selectattr('key', 'match', '^' ~ cluster_prefix ~ '-facilitator-')
+        | list | length == 1
+    fail_msg: "Exactly one facilitator cluster must exist in cluster-credentials.yml"
 
 - name: Validate minimum replicas per category
   ansible.builtin.assert:
@@ -72,6 +77,9 @@
     AWS_SECRET_ACCESS_KEY: "{{ cluster_definitions[0].aws_secret_access_key }}"
     AWS_DEFAULT_REGION: "{{ cluster_definitions[0].aws_region }}"
   register: rosa_whoami_result
+  retries: 3
+  delay: 10
+  until: rosa_whoami_result.rc == 0
   changed_when: false
   failed_when: rosa_whoami_result.rc != 0
   no_log: true

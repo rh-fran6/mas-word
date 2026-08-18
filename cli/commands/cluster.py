@@ -162,7 +162,7 @@ def _resolve_cluster_vars(
     cluster_creds = _load_cluster_credentials(cluster_cfg.id)
 
     if auth_method in ("password", "username-password"):
-        password = cluster_creds.get("admin_password", "")
+        password = cluster_creds.get("admin_password", "cluster-admin")
         if not password:
             secret_ref = cluster_cfg.connection.admin_secret_ref
             password = _resolve_secret(provider, secret_ref, "admin password")

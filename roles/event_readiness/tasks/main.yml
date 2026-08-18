@@ -1,5 +1,30 @@
 ---
 # Event Readiness: end-to-end validation
+
+# --- Clean Up Old Readiness Reports ---
+- name: Ensure readiness report directory exists (for cleanup)
+  ansible.builtin.file:
+    path: "{{ masworld_readiness_report_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Clean up old readiness report files (>7 days)
+  ansible.builtin.find:
+    paths: "{{ masworld_readiness_report_dir }}"
+    age: 7d
+    recurse: false
+  register: _old_readiness_reports
+  failed_when: false
+
+- name: Remove old readiness reports
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ _old_readiness_reports.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  when: _old_readiness_reports.files | default([]) | length > 0
+
 - name: Run event readiness checks
   block:
     # ── Initialize Results ──────────────────────────────────────────────
@@ -339,7 +364,7 @@
 
     - name: Set readiness report path
       ansible.builtin.set_fact:
-        readiness_report_path: "{{ masworld_readiness_report_dir }}/readiness-{{ now(utc=true, fmt='%Y%m%d-%H%M%S') }}.yml"
+        readiness_report_path: "{{ masworld_readiness_report_dir }}/readiness-{{ masworld_cluster_id | default('unknown') }}-{{ now(utc=true, fmt='%Y%m%d-%H%M%S') }}.yml"
 
     - name: Write readiness report
       ansible.builtin.copy:

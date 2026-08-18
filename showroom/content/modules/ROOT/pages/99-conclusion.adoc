@@ -11,16 +11,18 @@ In this workshop, you:
 * [x] Navigated Maximo Application Suite and explored its OpenShift foundation
 * [x] Observed fleet management with Red Hat Advanced Cluster Management
 * [x] Explored OpenShift and MAS update mechanisms
-* [x] Configured and queried logs with OpenShift Logging and Loki
-* [x] Explored identity provider integration with Keycloak
-* [x] Understood production architecture considerations
+* [x] *Installed* the OpenShift Logging stack from scratch (Logging Operator, Loki Operator, Cluster Observability Operator)
+* [x] Deployed a LokiStack with S3 backend and configured log forwarding
+* [x] Queried logs with LogQL through the OpenShift Console
+* [x] Synced LDAP users to Maximo and configured OpenShift group sync
+* [x] Understood production architecture considerations and troubleshooting techniques
 
 == Key Takeaways
 
 . *MAS on OpenShift* provides a consistent, scalable platform for enterprise asset management
 . *RHACM* enables centralized governance and visibility across your MAS fleet
-. *OpenShift Logging + Loki* delivers scalable, queryable observability with S3 backend
-. *Identity integration* connects MAS to your enterprise directory
+. *OpenShift Logging + Loki* delivers scalable, queryable observability with S3 backend -- and you can install it yourself
+. *Identity integration* connects MAS to your enterprise directory through the LDAP -> Keycloak -> OpenShift -> MAS chain
 . *Automation* (Ansible, operators, GitOps) ensures repeatable, auditable deployments
 
 == Next Steps
@@ -28,9 +30,9 @@ In this workshop, you:
 * Review the production architecture guidance from this workshop
 * Explore the additional resources linked in each section
 * Connect with the presenters for questions:
-** *Ernie Steagall* (ONEOK) — MAS operations perspective
-** *Francis Anyaegbu* (Red Hat) — OpenShift platform
-** *Myles Vivian* (Cohesive) — Observability
+** *Ernie Steagall* (ONEOK) -- MAS operations perspective
+** *Francis Anyaegbu* (Red Hat) -- OpenShift platform
+** *Myles Vivian* (Cohesive) -- Observability
 
 == Resources
 

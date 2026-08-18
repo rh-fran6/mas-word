@@ -1,0 +1,66 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ masworld_lab_clusterrole_name }}
+  labels:
+    masworld.redhat.com/component: lab-accounts
+rules:
+  # Cluster-wide read access (exploration exercises)
+  - apiGroups: [""]
+    resources: [nodes, namespaces, persistentvolumes]
+    verbs: [get, list, watch]
+  - apiGroups: ["config.openshift.io"]
+    resources: [clusterversions, infrastructures, oauths, ingresses]
+    verbs: [get, list, watch]
+  - apiGroups: ["machineconfiguration.openshift.io"]
+    resources: [machineconfigpools]
+    verbs: [get, list, watch]
+
+  # Read MAS CRDs (click-through, no modifications)
+  - apiGroups: ["core.mas.ibm.com"]
+    resources: ["*"]
+    verbs: [get, list, watch]
+  - apiGroups: ["apps.mas.ibm.com"]
+    resources: ["*"]
+    verbs: [get, list, watch]
+
+  # Read operators cluster-wide (navigation exercise)
+  - apiGroups: ["operators.coreos.com"]
+    resources: [subscriptions, clusterserviceversions, installplans, operatorgroups]
+    verbs: [get, list, watch]
+  - apiGroups: ["packages.operators.coreos.com"]
+    resources: [packagemanifests]
+    verbs: [get, list, watch]
+
+  # Read pods, services, events cluster-wide
+  - apiGroups: [""]
+    resources: [pods, pods/log, services, configmaps, events, secrets, serviceaccounts, persistentvolumeclaims]
+    verbs: [get, list, watch]
+  - apiGroups: ["apps"]
+    resources: [deployments, statefulsets, daemonsets, replicasets]
+    verbs: [get, list, watch]
+  - apiGroups: ["route.openshift.io"]
+    resources: [routes]
+    verbs: [get, list, watch]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: [roles, rolebindings, clusterroles, clusterrolebindings]
+    verbs: [get, list, watch]
+
+  # OpenShift group sync (identity exercise)
+  - apiGroups: ["user.openshift.io"]
+    resources: [groups, users, identities]
+    verbs: [get, list, watch, create, update, patch, delete]
+
+  # COO UIPlugin (cluster-scoped, observability exercise)
+  - apiGroups: ["observability.openshift.io"]
+    resources: [uiplugins]
+    verbs: [get, list, watch, create, update, patch, delete]
+
+  # Self-access for auth checks
+  - apiGroups: ["authorization.openshift.io"]
+    resources: [selfsubjectrulesreviews]
+    verbs: [create]
+  - apiGroups: ["authorization.k8s.io"]
+    resources: [selfsubjectaccessreviews, selfsubjectrulesreviews]
+    verbs: [create]

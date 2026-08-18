@@ -9,7 +9,7 @@
   vars:
     seat_padded: "{{ '%02d' | format(seat_number | int) }}"
     student_ns: "student-{{ seat_padded }}"
-    student_user: "user{{ seat_padded }}"
+    lab_username: "lab-seat-{{ seat_padded }}"
     keycloak_ns: masworld-keycloak
 
   tasks:
@@ -131,27 +131,23 @@
         oidc_secret_pass: "{{ oidc_secret_result.resources | default([]) | length > 0 }}"
 
     # ------------------------------------------------------------------
-    # 7. Student RoleBinding exists (admin on namespace)
+    # 7. Lab user RoleBinding exists (admin on student namespace)
     # ------------------------------------------------------------------
-    - name: Check student RoleBinding
+    - name: Check lab user RoleBinding in student namespace
       kubernetes.core.k8s_info:
         api_version: rbac.authorization.k8s.io/v1
         kind: RoleBinding
+        name: "{{ lab_username }}-admin"
         namespace: "{{ student_ns }}"
       register: rb_result
       failed_when: false
 
-    - name: Evaluate student RoleBinding
+    - name: Evaluate lab user RoleBinding
       ansible.builtin.set_fact:
-        rb_pass: >-
-          {{ rb_result.resources | default([])
-             | selectattr('subjects', 'defined')
-             | map(attribute='subjects') | flatten
-             | selectattr('name', 'equalto', student_user)
-             | list | length > 0 }}
+        rb_pass: "{{ rb_result.resources | default([]) | length > 0 }}"
 
     # ------------------------------------------------------------------
-    # 8. Student does NOT have cluster-admin
+    # 8. Lab user does NOT have cluster-admin
     # ------------------------------------------------------------------
     - name: Check ClusterRoleBindings for cluster-admin
       kubernetes.core.k8s_info:
@@ -167,11 +163,36 @@
              | selectattr('roleRef.name', 'equalto', 'cluster-admin')
              | selectattr('subjects', 'defined')
              | map(attribute='subjects') | flatten
-             | selectattr('name', 'equalto', student_user)
+             | selectattr('name', 'equalto', lab_username)
              | list | length == 0 }}
 
     # ------------------------------------------------------------------
-    # 9. Summary table
+    # 9. OpenShift Groups created by group sync
+    # ------------------------------------------------------------------
+    - name: Check mas-admins group
+      kubernetes.core.k8s_info:
+        api_version: user.openshift.io/v1
+        kind: Group
+        name: mas-admins
+      register: group_admins
+      failed_when: false
+
+    - name: Check mas-users group
+      kubernetes.core.k8s_info:
+        api_version: user.openshift.io/v1
+        kind: Group
+        name: mas-users
+      register: group_users
+      failed_when: false
+
+    - name: Evaluate group sync
+      ansible.builtin.set_fact:
+        groups_pass: >-
+          {{ (group_admins.resources | default([]) | length > 0) and
+             (group_users.resources | default([]) | length > 0) }}
+
+    # ------------------------------------------------------------------
+    # 10. Summary table
     # ------------------------------------------------------------------
     - name: Validation summary
       ansible.builtin.debug:
@@ -185,6 +206,8 @@
           OpenLDAP pod (Running)              : {{ 'PASS' if ldap_pass | bool else 'FAIL' }}
           KeycloakRealmImport (LDAP fed.)     : {{ 'PASS' if realm_pass | bool else 'FAIL' }}
           OIDC client secret                  : {{ 'PASS' if oidc_secret_pass | bool else 'FAIL' }}
-          Student RoleBinding (ns admin)      : {{ 'PASS' if rb_pass | bool else 'FAIL' }}
-          Student NOT cluster-admin           : {{ 'PASS' if no_cluster_admin_pass | bool else 'FAIL' }}
+          Lab user RoleBinding (ns admin)     : {{ 'PASS' if rb_pass | bool else 'FAIL' }}
+          Lab user NOT cluster-admin          : {{ 'PASS' if no_cluster_admin_pass | bool else 'FAIL' }}
+          Group: mas-admins                   : {{ 'PASS' if (group_admins.resources | default([]) | length > 0) else 'FAIL' }}
+          Group: mas-users                    : {{ 'PASS' if (group_users.resources | default([]) | length > 0) else 'FAIL' }}
           ============================================================

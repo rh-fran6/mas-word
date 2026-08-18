@@ -12,8 +12,8 @@
     - name: Confirm destruction
       ansible.builtin.pause:
         prompt: >-
-          WARNING: This will destroy ALL {{ cluster_categories | dict2items
-          | map(attribute='value.count') | sum }} clusters with prefix '{{ cluster_prefix }}'.
+          WARNING: This will destroy ALL {{ cluster_credentials | length }} clusters
+          with prefix '{{ cluster_prefix }}'.
           Type 'yes' to confirm
       register: destroy_confirm
       when: not (auto_confirm | default(false) | bool)

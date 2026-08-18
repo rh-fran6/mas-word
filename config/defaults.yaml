@@ -23,8 +23,8 @@ fleet:
 components:
   mas:
     enabled: true
-    version: "9.1.x"
-    channel: "9.1.x"
+    version: "9.2.x"
+    channel: "9.2.x"
     install_core: true
     install_manage: true
     catalog_source: ibm-operator-catalog

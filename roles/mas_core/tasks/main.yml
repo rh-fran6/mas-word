@@ -3,11 +3,17 @@
 - name: Install MAS Core
   block:
     # ── Configure IBM Operator Catalogs ─────────────────────────────────
-    - name: Configure IBM Operator Catalog source
+    - name: Configure IBM Operator Catalog source (custom)
       ansible.builtin.include_role:
         name: ibm.mas_devops.ibm_catalogs
       vars:
         mas_catalog_version: "{{ masworld_mas_catalog_source }}"
+      when: masworld_mas_catalog_source | default('', true) | length > 0
+
+    - name: Configure IBM Operator Catalog source (collection default)
+      ansible.builtin.include_role:
+        name: ibm.mas_devops.ibm_catalogs
+      when: masworld_mas_catalog_source | default('', true) | length == 0
 
     # ── Auto-detect MAS domain from cluster Ingress ───────────────────
     - name: Auto-detect MAS domain from cluster Ingress
@@ -29,6 +35,177 @@
       ansible.builtin.debug:
         msg: "MAS domain: {{ masworld_mas_domain }}"
 
+    # ── Detect cert-manager cluster resource namespace ────────────────
+    - name: Detect cert-manager cluster resource namespace
+      when: cert_manager_cluster_resource_namespace is not defined or cert_manager_cluster_resource_namespace == ''
+      block:
+        - name: Lookup cert-manager pods
+          kubernetes.core.k8s_info:
+            kind: Pod
+            label_selectors:
+              - app in (cainjector, ibm-cert-manager-cainjector)
+          register: _masworld_cm_pods
+
+        - name: Set cert-manager namespace
+          ansible.builtin.set_fact:
+            _masworld_cm_namespace: "{{ _masworld_cm_pods | json_query('resources[*].metadata.namespace') | unique | first }}"
+
+        - name: Lookup CertManager CR for cluster resource namespace
+          kubernetes.core.k8s_info:
+            api_version: operator.openshift.io/v1alpha1
+            name: cluster
+            kind: CertManager
+          register: _masworld_certmanager_cr
+          failed_when: false
+
+        - name: Set cert-manager controller args if available
+          ansible.builtin.set_fact:
+            _masworld_cm_args: >-
+              {{ _masworld_certmanager_cr.resources[0].spec.unsupportedConfigOverrides.controller.args }}
+          when:
+            - _masworld_certmanager_cr.resources | default([]) | length > 0
+            - _masworld_certmanager_cr.resources[0].spec.unsupportedConfigOverrides.controller.args is defined
+
+        - name: Extract cluster resource namespace from CertManager CR
+          ansible.builtin.set_fact:
+            cert_manager_cluster_resource_namespace: >-
+              {{ item | regex_search('(?<=--cluster-resource-namespace=).*') }}
+          when:
+            - _masworld_cm_args is defined
+            - (item | regex_search('(?<=--cluster-resource-namespace=).*')) is not none
+          loop: "{{ _masworld_cm_args | default([]) }}"
+
+        - name: Fall back to cert-manager namespace
+          ansible.builtin.set_fact:
+            cert_manager_cluster_resource_namespace: "{{ _masworld_cm_namespace }}"
+          when: cert_manager_cluster_resource_namespace is not defined or cert_manager_cluster_resource_namespace == ''
+
+    # ── Create self-signed CA ClusterIssuer for MAS 9.2+ ───────────────
+    - name: Create self-signed bootstrap ClusterIssuer
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: cert-manager.io/v1
+          kind: ClusterIssuer
+          metadata:
+            name: mas-selfsigned-issuer
+          spec:
+            selfSigned: {}
+
+    - name: Wait for self-signed ClusterIssuer to be ready
+      kubernetes.core.k8s_info:
+        api_version: cert-manager.io/v1
+        kind: ClusterIssuer
+        name: mas-selfsigned-issuer
+      register: _masworld_selfsigned_issuer
+      until:
+        - _masworld_selfsigned_issuer.resources | length > 0
+        - _masworld_selfsigned_issuer.resources[0].status.conditions | default([])
+          | selectattr('type', 'equalto', 'Ready')
+          | selectattr('status', 'equalto', 'True')
+          | list | length > 0
+      retries: 10
+      delay: 5
+
+    - name: Create root CA Certificate
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: cert-manager.io/v1
+          kind: Certificate
+          metadata:
+            name: mas-ca-certificate
+            namespace: "{{ cert_manager_cluster_resource_namespace }}"
+          spec:
+            isCA: true
+            commonName: mas-ca
+            secretName: mas-ca-secret  # pragma: allowlist secret
+            issuerRef:
+              name: mas-selfsigned-issuer
+              kind: ClusterIssuer
+            duration: 87600h
+            renewBefore: 8760h
+
+    - name: Wait for root CA Certificate to be issued
+      kubernetes.core.k8s_info:
+        api_version: cert-manager.io/v1
+        kind: Certificate
+        name: mas-ca-certificate
+        namespace: "{{ cert_manager_cluster_resource_namespace }}"
+      register: _masworld_ca_cert
+      until:
+        - _masworld_ca_cert.resources | length > 0
+        - _masworld_ca_cert.resources[0].status.conditions | default([])
+          | selectattr('type', 'equalto', 'Ready')
+          | selectattr('status', 'equalto', 'True')
+          | list | length > 0
+      retries: 30
+      delay: 10
+
+    - name: Create CA ClusterIssuer for MAS
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: cert-manager.io/v1
+          kind: ClusterIssuer
+          metadata:
+            name: mas-ca-clusterissuer
+          spec:
+            ca:
+              secretName: mas-ca-secret  # pragma: allowlist secret
+
+    - name: Wait for CA ClusterIssuer to be ready
+      kubernetes.core.k8s_info:
+        api_version: cert-manager.io/v1
+        kind: ClusterIssuer
+        name: mas-ca-clusterissuer
+      register: _masworld_ca_issuer
+      until:
+        - _masworld_ca_issuer.resources | length > 0
+        - _masworld_ca_issuer.resources[0].status.conditions | default([])
+          | selectattr('type', 'equalto', 'Ready')
+          | selectattr('status', 'equalto', 'True')
+          | list | length > 0
+      retries: 10
+      delay: 5
+
+    # ── Pre-grant RBAC for ClusterIssuer access ─────────────────────────
+    - name: Create ClusterRole for cert-manager access
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRole
+          metadata:
+            name: "mas-{{ masworld_mas_instance_id }}-clusterissuer-access"
+          rules:
+            - apiGroups: ["cert-manager.io"]
+              resources: ["clusterissuers", "issuers"]
+              verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+            - apiGroups: ["cert-manager.io"]
+              resources: ["certificates", "certificaterequests"]
+              verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+            - apiGroups: [""]
+              resources: ["secrets"]
+              verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+    - name: Bind ClusterRole to MAS namespace service accounts
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: "mas-{{ masworld_mas_instance_id }}-clusterissuer-access"
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: "mas-{{ masworld_mas_instance_id }}-clusterissuer-access"
+          subjects:
+            - kind: Group
+              apiGroup: rbac.authorization.k8s.io
+              name: "system:serviceaccounts:mas-{{ masworld_mas_instance_id }}-core"
+
     # ── Install MAS Core ────────────────────────────────────────────────
     - name: Install MAS Core via ibm.mas_devops
       ansible.builtin.include_role:
@@ -39,9 +216,20 @@
         mas_domain: "{{ masworld_mas_domain }}"
         ibm_entitlement_key: "{{ masworld_ibm_entitlement_key | default(omit, true) }}"
         mas_config_dir: "{{ _masworld_config_dir }}"
+        mas_cluster_issuer: "mas-ca-clusterissuer"
+
+    # ── Generate Workspace config file ────────────────────────────────────
+    - name: Generate MAS Workspace config
+      ansible.builtin.include_role:
+        name: ibm.mas_devops.gencfg_workspace
+      vars:
+        mas_instance_id: "{{ masworld_mas_instance_id }}"
+        mas_workspace_id: "{{ masworld_mas_workspace_id }}"
+        mas_workspace_name: "{{ masworld_mas_workspace_name | default('MAS World') }}"
+        mas_config_dir: "{{ _masworld_config_dir }}"
 
     # ── Configure MAS Workspace ─────────────────────────────────────────
-    - name: Configure MAS workspace
+    - name: Apply MAS configuration (workspace + config files)
       ansible.builtin.include_role:
         name: ibm.mas_devops.suite_config
       vars:

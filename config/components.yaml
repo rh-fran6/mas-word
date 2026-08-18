@@ -6,10 +6,8 @@ components:
     version: "4.21"
 
   mas:
-    version: "9.1.x"
-    channel: "9.1.x"
-    catalog_tag: "v9-260625-amd64"
-    catalog_image: "icr.io/cpopen/ibm-maximo-operator-catalog:v9-260625-amd64"
+    version: "9.2.x"
+    channel: "9.2.x"
 
   logging:
     channel: "stable-6.6"
@@ -19,16 +17,15 @@ components:
     api_version: "loki.grafana.com/v1"
 
   acm:
-    version: "2.16"
+    version: "2.15"
 
   gitops:
     channel: "gitops-1.21"
 
   mongodb:
-    version: "7.0"
+    version: "8.0"
 
   sls:
     channel: "3.x"
 
-  db2:
-    version: "11.5"
+  db2: {}

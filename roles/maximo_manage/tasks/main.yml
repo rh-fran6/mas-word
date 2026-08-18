@@ -2,6 +2,106 @@
 # Maximo Manage installation and activation
 - name: Install and activate Maximo Manage
   block:
+    # ── Pre-Db2: Create SecurityContextConstraints for ROSA HCP ────────
+    - name: Ensure db2u-scc SecurityContextConstraints exists
+      kubernetes.core.k8s:
+        state: present
+        template: "{{ role_path }}/templates/db2u-scc.yml.j2"
+      vars:
+        db2_namespace: "db2u"
+      when: masworld_manage_db_type == 'db2'
+
+    - name: Label db2u namespace for privileged pod security
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: db2u
+            labels:
+              pod-security.kubernetes.io/enforce: privileged
+              pod-security.kubernetes.io/warn: privileged
+              pod-security.kubernetes.io/audit: privileged
+      when: masworld_manage_db_type == 'db2'
+
+    # ── Pre-Db2: Check for stale Db2 deployment ───────────────────────
+    - name: Check if Db2uCluster or Db2uInstance exists in a failed state
+      kubernetes.core.k8s_info:
+        api_version: db2u.databases.ibm.com/v1
+        kind: "{{ item }}"
+        name: "db2u-manage"
+        namespace: db2u
+      register: _db2_existing_check
+      loop:
+        - Db2uCluster
+        - Db2uInstance
+      when: masworld_manage_db_type == 'db2'
+      ignore_errors: true
+
+    - name: Identify stale Db2 CR
+      ansible.builtin.set_fact:
+        _db2_stale_cr: >-
+          {{ _db2_existing_check.results | default([])
+             | selectattr('resources', 'defined')
+             | selectattr('resources', 'ne', [])
+             | list | first | default(none) }}
+      when: masworld_manage_db_type == 'db2'
+
+    - name: Clean up stale Db2 deployment if in failed state
+      when:
+        - masworld_manage_db_type == 'db2'
+        - _db2_stale_cr is not none
+        - _db2_stale_cr.resources[0].status.state | default('') not in ['Ready', '']
+      vars:
+        _stale_kind: "{{ _db2_stale_cr.item }}"
+        _stale_state: "{{ _db2_stale_cr.resources[0].status.state | default('unknown') }}"
+      block:
+        - name: Delete stale Db2 CR ({{ _stale_kind }})
+          kubernetes.core.k8s:
+            state: absent
+            api_version: db2u.databases.ibm.com/v1
+            kind: "{{ _stale_kind }}"
+            name: "db2u-manage"
+            namespace: db2u
+            wait: true
+            wait_timeout: 300
+
+        - name: Delete stale Db2 PVCs
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: PersistentVolumeClaim
+            name: "{{ item }}"
+            namespace: db2u
+          loop:
+            - c-db2u-manage-meta
+            - c-db2u-manage-backup
+
+        - name: Wait for PVCs to be deleted
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: PersistentVolumeClaim
+            namespace: db2u
+            field_selectors:
+              - "metadata.name=c-db2u-manage-meta"
+          register: _db2_pvc_check
+          until: _db2_pvc_check.resources | length == 0
+          retries: 60
+          delay: 30
+
+        - name: Delete stale Formation-created SCC
+          kubernetes.core.k8s:
+            state: absent
+            api_version: security.openshift.io/v1
+            kind: SecurityContextConstraints
+            name: "db2u-c-db2u-manage-scc"
+          ignore_errors: true
+
+        - name: Report stale Db2 cleanup
+          ansible.builtin.debug:
+            msg: "Cleaned up stale {{ _stale_kind }} (was {{ _stale_state }}). Will recreate."
+
     # ── Install Db2 (in-cluster database) ───────────────────────────────
     - name: Install Db2 database via ibm.mas_devops
       ansible.builtin.include_role:
@@ -33,16 +133,91 @@
         mas_app_id: manage
         mas_app_channel: "{{ masworld_manage_channel }}"
         mas_config_dir: "{{ _masworld_config_dir }}"
+        ibm_entitlement_key: "{{ masworld_ibm_entitlement_key | default(omit, true) }}"
+        mas_app_install_retries: 60
+
+    # ── Pre-activation: Ensure Db2 config is correct and recover crashed maxinst ──
+    - name: Ensure Db2 DFT_TABLE_ORG=ROW at database level
+      ansible.builtin.shell: |
+        oc exec -n db2u c-db2u-manage-db2u-0 -c db2u -- \
+          bash -c 'su - db2inst1 -c "db2 connect to BLUDB; db2 update db cfg using DFT_TABLE_ORG ROW immediate"'
+      register: _db2_row_fix
+      changed_when: "'DB20000I' in _db2_row_fix.stdout | default('')"
+      failed_when: false
+
+    - name: Check for crashed maxinst pod
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          POD=$(oc get pods -n mas-{{ masworld_mas_instance_id }}-manage --no-headers 2>/dev/null | grep maxinst | awk '{print $1}')
+          if [ -n "$POD" ]; then
+            oc logs -n mas-{{ masworld_mas_instance_id }}-manage "$POD" --tail=10 2>/dev/null | grep -c 'completed with errors' || true
+          else
+            echo "0"
+          fi
+        executable: /bin/bash
+      register: _maxinst_crash_check
+      changed_when: false
+      failed_when: false
+
+    - name: Recover crashed maxinst
+      when: (_maxinst_crash_check.stdout | default('0') | trim | int) > 0
+      block:
+        - name: Delete crashed maxinst pod to force restart
+          ansible.builtin.shell:
+            cmd: |
+              set -o pipefail
+              oc delete pod -n mas-{{ masworld_mas_instance_id }}-manage \
+                $(oc get pods -n mas-{{ masworld_mas_instance_id }}-manage --no-headers 2>/dev/null | grep maxinst | awk '{print $1}') \
+                --grace-period=30 2>/dev/null || true
+            executable: /bin/bash
+          register: _maxinst_delete
+          changed_when: "'deleted' in _maxinst_delete.stdout | default('')"
+
+        - name: Delete Manage operator pod to force re-validation
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Pod
+            namespace: "mas-{{ masworld_mas_instance_id }}-manage"
+          register: _manage_ns_pods_pre
+
+        - name: Restart Manage operator
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Pod
+            namespace: "mas-{{ masworld_mas_instance_id }}-manage"
+            name: "{{ item }}"
+          loop: >-
+            {{ _manage_ns_pods_pre.resources
+               | map(attribute='metadata.name')
+               | select('search', 'mas-manage-operator')
+               | list }}
+          loop_control:
+            label: "{{ item }}"
+
+        - name: Wait for replacement pods
+          ansible.builtin.wait_for:
+            timeout: 120
+          changed_when: false
+
+        - name: Report recovery actions
+          ansible.builtin.debug:
+            msg: "Crashed maxinst pod deleted and operator restarted. New maxinst will re-initialize."
 
     # ── Activate Manage Workspace ───────────────────────────────────────
     - name: Activate Manage workspace via ibm.mas_devops
       ansible.builtin.include_role:
-        name: ibm.mas_devops.suite_app_configure
+        name: ibm.mas_devops.suite_app_config
       vars:
         mas_instance_id: "{{ masworld_mas_instance_id }}"
         mas_workspace_id: "{{ masworld_mas_workspace_id }}"
         mas_app_id: manage
-        mas_appws_components: "{{ masworld_manage_components | join(',') }}"
+        mas_appws_components: >-
+          {{ masworld_manage_components
+             | map('regex_replace', '$', '=latest')
+             | join(',')
+             | ibm.mas_devops.appws_components }}
         mas_config_dir: "{{ _masworld_config_dir }}"
 
     # ── Wait for ManageWorkspace Ready ──────────────────────────────────
@@ -79,14 +254,75 @@
         msg: "Maximo Manage installed and activated. URL: {{ manage_url }}"
 
   rescue:
+    - name: Capture failed task info
+      ansible.builtin.set_fact:
+        _manage_failed_task: "{{ ansible_failed_task.name | default('unknown task') }}"
+        _manage_failed_msg: "{{ ansible_failed_result.msg | default('unknown error') }}"
+
+    - name: Capture Db2uCluster status for diagnostics
+      kubernetes.core.k8s_info:
+        api_version: db2u.databases.ibm.com/v1
+        kind: Db2uCluster
+        name: "db2u-manage"
+        namespace: db2u
+      register: _db2_rescue_status
+      ignore_errors: true
+
+    - name: Capture Db2 pod status for diagnostics
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: db2u
+        label_selectors:
+          - "formation_id=db2u-manage"
+      register: _db2_rescue_pods
+      ignore_errors: true
+
+    - name: Capture Db2 PVC status for diagnostics
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: PersistentVolumeClaim
+        namespace: db2u
+      register: _db2_rescue_pvcs
+      ignore_errors: true
+
     - name: Set Manage failed facts
       ansible.builtin.set_fact:
         manage_ready: false
         manage_url: ""
 
-    - name: Report Manage failure
+    - name: Report Manage failure with diagnostics
+      vars:
+        _db2_state: "{{ _db2_rescue_status.resources[0].status.state | default('UNKNOWN') }}"
+        _db2_conditions: "{{ _db2_rescue_status.resources[0].status.conditions | default([]) }}"
+        _db2_pod_summary: >-
+          {{ _db2_rescue_pods.resources | default([])
+             | map(attribute='metadata.name')
+             | zip(_db2_rescue_pods.resources | default([]) | map(attribute='status.phase', default='Unknown'))
+             | map('join', '=')
+             | list }}
+        _db2_pvc_pending: >-
+          {{ _db2_rescue_pvcs.resources | default([])
+             | selectattr('status.phase', 'equalto', 'Pending')
+             | map(attribute='metadata.name')
+             | list }}
       ansible.builtin.fail:
-        msg: >-
-          Maximo Manage installation failed: {{ ansible_failed_result.msg | default('unknown error') }}.
-          Manage activation typically takes 60-90 minutes — check ManageWorkspace CR
-          in namespace mas-{{ masworld_mas_instance_id }}-manage.
+        msg: |
+          ════════════════════════════════════════════════════════════════
+           MAXIMO MANAGE INSTALLATION FAILED
+          ════════════════════════════════════════════════════════════════
+           Failed task:        {{ _manage_failed_task }}
+           Error:              {{ _manage_failed_msg | truncate(200) }}
+
+           Db2uCluster state:  {{ _db2_state }}
+           Db2 conditions:     {{ _db2_conditions | map(attribute='message', default='') | list }}
+           Db2 pods:           {{ _db2_pod_summary | default(['none found']) }}
+           Pending PVCs:       {{ _db2_pvc_pending | default(['none']) }}
+
+           COMMON CAUSES ON ROSA HCP:
+           - SCC not created: oc get scc db2u-scc
+           - Pods stuck:      oc get pods -n db2u
+           - PVCs unbound:    oc get pvc -n db2u
+           - Events:          oc get events -n db2u --sort-by=.lastTimestamp
+           - Init container:  oc logs <pod> -n db2u -c init-kernel
+          ════════════════════════════════════════════════════════════════

@@ -68,6 +68,7 @@ env/
 reports/
 readiness-*.yml
 readiness-*.json
+cluster-report.txt
 
 # Molecule
 molecule/*/.molecule/
@@ -75,6 +76,9 @@ molecule/*/molecule/.cache/
 
 # Ansible facts cache
 .cache/
+
+# Ephemeral per-cluster Helm chart copies
+charts/.copies/
 
 # Claude Code
 .claude/

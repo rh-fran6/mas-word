@@ -1,0 +1,132 @@
+---
+# Discover per-cluster ROSA tokens by SSH-ing into each cluster's bastion host.
+# Each cluster lives in its own OCM account, so we extract the token from
+# each bastion (`rosa token`) and use isolated OCM_CONFIG files to avoid
+# cross-cluster login conflicts.
+#
+# Sets:
+#   _cluster_rosa_tokens  — dict { cluster_name: rosa_token_string }
+#   _rosa_managed_names   — list of cluster names visible to ROSA
+#   _rosa_managed_ids     — dict { cluster_name: rosa_ocm_id }
+
+- name: Create per-cluster OCM config directory
+  ansible.builtin.file:
+    path: "/tmp/rosa-cluster-ocm-configs"
+    state: directory
+    mode: "0700"
+
+- name: Extract ROSA token from each bastion host
+  ansible.builtin.command:
+    cmd: >-
+      sshpass -p '{{ item.bastion_password }}'
+      ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 -o BatchMode=no
+      {{ item.bastion_username }}@{{ item.bastion_host }}
+      'rosa token'
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _bastion_token_results
+  retries: 6
+  delay: 30
+  until: _bastion_token_results.rc == 0 and (_bastion_token_results.stdout | default('') | trim | length > 0)
+  failed_when: false
+  changed_when: false
+  no_log: true
+  when: item.bastion_host is defined and item.bastion_host | length > 0
+
+- name: Build per-cluster token map
+  ansible.builtin.set_fact:
+    _cluster_rosa_tokens: >-
+      {{ _cluster_rosa_tokens | default({}, true) | combine({
+        item.item.name: item.stdout | default('') | trim
+      }) }}
+  loop: "{{ _bastion_token_results.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: item is not skipped
+  no_log: true
+
+- name: Report bastion token extraction results
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.name }}: bastion token extraction
+      {{ 'succeeded' if (_cluster_rosa_tokens[item.name] | default('') | length > 0)
+         else 'FAILED — SSH unreachable or rosa token unavailable' }}
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Login to ROSA with per-cluster token
+  ansible.builtin.command:
+    cmd: "rosa login --token={{ _cluster_rosa_tokens[item.name] }}"
+  environment:
+    OCM_CONFIG: "/tmp/rosa-cluster-ocm-configs/{{ item.name }}.json"
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _drt_rosa_login
+  retries: 6
+  delay: 30
+  until: _drt_rosa_login is not failed
+  when: _cluster_rosa_tokens[item.name] | default('') | length > 0
+  failed_when: false
+  changed_when: false
+  no_log: true
+
+- name: Discover ROSA clusters per-account
+  ansible.builtin.shell: |
+    set -o pipefail
+    rosa list clusters --output json 2>/dev/null || echo '[]'
+  args:
+    executable: /bin/bash
+  environment:
+    OCM_CONFIG: "/tmp/rosa-cluster-ocm-configs/{{ item.name }}.json"
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _rosa_list_per_cluster
+  retries: 6
+  delay: 30
+  until: _rosa_list_per_cluster is not failed
+  changed_when: false
+  failed_when: false
+  when: _cluster_rosa_tokens[item.name] | default('') | length > 0
+  no_log: true
+
+- name: Match ROSA clusters to credential keys and build maps
+  vars:
+    _rosa_clusters: "{{ item.stdout | default('[]', true) | from_json }}"
+    _cred_key: "{{ item.item.name }}"
+    _rosa_name_from_api: "{{ item.item.api_url | default('') | regex_search('api\\.([^.]+)\\.', '\\1') | first | default('') }}"
+    _matched_cluster: "{{ _rosa_clusters | selectattr('name', 'equalto', _rosa_name_from_api) | list | first | default({}) }}"
+  ansible.builtin.set_fact:
+    _rosa_managed_names: >-
+      {{ (_rosa_managed_names | default([], true)) + [_cred_key] }}
+    _rosa_managed_ids: >-
+      {{ (_rosa_managed_ids | default({}, true)) | combine({
+        _cred_key: _matched_cluster.id | default('')
+      }) }}
+    _rosa_name_map: >-
+      {{ (_rosa_name_map | default({}, true)) | combine({
+        _cred_key: _matched_cluster.name | default('')
+      }) }}
+  loop: "{{ _rosa_list_per_cluster.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name | default('n/a') }}"
+  when:
+    - item is not skipped
+    - (_rosa_clusters | selectattr('name', 'equalto', _rosa_name_from_api) | list | length) > 0
+
+- name: Display ROSA cluster mapping
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.name }}:
+      {{ 'ROSA name=' ~ _rosa_name_map[item.name] ~ ', OCM ID=' ~ _rosa_managed_ids[item.name]
+         if item.name in (_rosa_managed_names | default([]))
+         else 'not matched to any ROSA cluster' }}
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"

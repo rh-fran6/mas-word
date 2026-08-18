@@ -1,0 +1,243 @@
+---
+# Per-cluster fix for crashed maxinst. Included by fix-maxinst.yml.
+- name: "═══ {{ cluster_id }} ═══"
+  ansible.builtin.debug:
+    msg: "Starting fix on {{ cluster_id }}"
+
+- name: Resolve cluster credentials
+  ansible.builtin.set_fact:
+    _cluster: "{{ cluster_credentials[cluster_id] }}"
+    _api_url: "{{ cluster_credentials[cluster_id].api_url }}"
+  no_log: true
+
+- name: Get OAuth token
+  block:
+    - name: Discover OAuth server
+      ansible.builtin.uri:
+        url: "{{ _api_url }}/.well-known/oauth-authorization-server"
+        method: GET
+        validate_certs: false
+        timeout: 15
+      register: _oauth_meta
+      retries: 3
+      delay: 10
+      until: _oauth_meta is not failed
+
+    - name: Request token
+      ansible.builtin.uri:
+        url: "{{ _oauth_meta.json.authorization_endpoint }}?response_type=token&client_id=openshift-challenging-client"
+        method: GET
+        user: "cluster-admin"
+        password: "{{ _cluster.admin_password | default('cluster-admin') }}"
+        force_basic_auth: true
+        validate_certs: false
+        follow_redirects: none
+        status_code: [302]
+      register: _oauth_resp
+      no_log: true
+
+    - name: Extract token
+      ansible.builtin.set_fact:
+        _api_token: "{{ _oauth_resp.location | regex_search('access_token=([^&]+)', '\\1') | first }}"
+      no_log: true
+  rescue:
+    - name: Report auth failure
+      ansible.builtin.debug:
+        msg: "SKIP {{ cluster_id }} — cannot authenticate (API unreachable or auth failed)"
+    - name: Set skip flag
+      ansible.builtin.set_fact:
+        _skip_cluster: true
+
+- name: Apply fixes
+  when: not (_skip_cluster | default(false))
+  module_defaults:
+    group/kubernetes.core.k8s:
+      host: "{{ _api_url }}"
+      api_key: "{{ _api_token }}"
+      validate_certs: false
+  block:
+    # ── 1. Check current state ──────────────────────────────────────
+    - name: Get ManageWorkspace status
+      kubernetes.core.k8s_info:
+        api_version: apps.mas.ibm.com/v1
+        kind: ManageWorkspace
+        name: "{{ mas_instance_id }}-{{ mas_workspace_id }}"
+        namespace: "mas-{{ mas_instance_id }}-manage"
+      register: _mw
+
+    - name: Extract DeploymentReady condition
+      ansible.builtin.set_fact:
+        _deploy_ready: >-
+          {{ _mw.resources[0].status.conditions | default([])
+             | selectattr('type', 'equalto', 'DeploymentReady')
+             | first | default({}) }}
+      when: _mw.resources | length > 0
+
+    - name: Report current state
+      ansible.builtin.debug:
+        msg: >-
+          {{ cluster_id }}: DeploymentReady={{ _deploy_ready.status | default('?') }}
+          — {{ _deploy_ready.message | default('no message') | truncate(120) }}
+      when: _mw.resources | length > 0
+
+    - name: Skip if already Ready
+      ansible.builtin.set_fact:
+        _skip_cluster: true
+      when:
+        - _mw.resources | length > 0
+        - (_deploy_ready.status | default('False')) == 'True'
+
+    - name: Report skip
+      ansible.builtin.debug:
+        msg: "{{ cluster_id }}: DeploymentReady=True — no fix needed, skipping"
+      when: _skip_cluster | default(false)
+
+    # ── 2. Set DFT_TABLE_ORG=ROW ────────────────────────────────────
+    - name: Write kubeconfig for oc commands
+      ansible.builtin.shell: |
+        oc login {{ _api_url }} --token={{ _api_token }} --insecure-skip-tls-verify=true 2>&1 | tail -1
+      environment:
+        KUBECONFIG: "/tmp/kubeconfig-fix-{{ cluster_id }}"
+      register: _oc_login
+      changed_when: false
+      failed_when: false
+      no_log: true
+      when: not (_skip_cluster | default(false))
+
+    - name: Set Db2 DFT_TABLE_ORG=ROW at database level
+      ansible.builtin.shell: |
+        oc exec -n db2u c-db2u-manage-db2u-0 -c db2u -- \
+          bash -c 'su - db2inst1 -c "db2 connect to BLUDB; db2 update db cfg using DFT_TABLE_ORG ROW immediate"'
+      environment:
+        KUBECONFIG: "/tmp/kubeconfig-fix-{{ cluster_id }}"
+      register: _db2_fix
+      changed_when: "'DB20000I' in _db2_fix.stdout | default('')"
+      failed_when: false
+      when: not (_skip_cluster | default(false))
+
+    - name: Report Db2 fix
+      ansible.builtin.debug:
+        msg: "{{ cluster_id }}: Db2 fix — {{ _db2_fix.stdout_lines | default(['no output']) | last }}"
+      when: not (_skip_cluster | default(false))
+
+    # ── 3. Delete crashed maxinst pod ───────────────────────────────
+    - name: Check maxinst pod logs for crash
+      ansible.builtin.shell: |
+        POD=$(oc get pods -n mas-{{ mas_instance_id }}-manage --no-headers 2>/dev/null | grep maxinst | awk '{print $1}')
+        if [ -n "$POD" ]; then
+          ERRORS=$(oc logs -n mas-{{ mas_instance_id }}-manage "$POD" --tail=10 2>/dev/null | grep -c 'completed with errors' || true)
+          AGE=$(oc get pod -n mas-{{ mas_instance_id }}-manage "$POD" -o jsonpath='{.metadata.creationTimestamp}' 2>/dev/null)
+          echo "pod=$POD errors=$ERRORS created=$AGE"
+        else
+          echo "pod=NONE errors=0"
+        fi
+      environment:
+        KUBECONFIG: "/tmp/kubeconfig-fix-{{ cluster_id }}"
+      register: _maxinst_status
+      changed_when: false
+      failed_when: false
+      when: not (_skip_cluster | default(false))
+
+    - name: Report maxinst status
+      ansible.builtin.debug:
+        msg: "{{ cluster_id }}: maxinst — {{ _maxinst_status.stdout | default('unknown') }}"
+      when: not (_skip_cluster | default(false))
+
+    - name: Delete crashed maxinst pod
+      ansible.builtin.shell: |
+        POD=$(oc get pods -n mas-{{ mas_instance_id }}-manage --no-headers 2>/dev/null | grep maxinst | awk '{print $1}')
+        if [ -n "$POD" ]; then
+          oc delete pod -n mas-{{ mas_instance_id }}-manage "$POD" --grace-period=30 2>&1
+        else
+          echo "no maxinst pod to delete"
+        fi
+      environment:
+        KUBECONFIG: "/tmp/kubeconfig-fix-{{ cluster_id }}"
+      register: _maxinst_delete
+      changed_when: "'deleted' in _maxinst_delete.stdout | default('')"
+      failed_when: false
+      when:
+        - not (_skip_cluster | default(false))
+        - "'errors=0' not in _maxinst_status.stdout | default('errors=0')"
+
+    - name: Wait for new maxinst pod
+      ansible.builtin.shell: |
+        for i in $(seq 1 12); do
+          POD=$(oc get pods -n mas-{{ mas_instance_id }}-manage --no-headers 2>/dev/null | grep maxinst | awk '{print $1, $2, $3}')
+          if [ -n "$POD" ]; then
+            echo "$POD"
+            break
+          fi
+          sleep 10
+        done
+      environment:
+        KUBECONFIG: "/tmp/kubeconfig-fix-{{ cluster_id }}"
+      register: _maxinst_new
+      changed_when: false
+      failed_when: false
+      when:
+        - not (_skip_cluster | default(false))
+        - _maxinst_delete is changed
+
+    - name: Report new maxinst
+      ansible.builtin.debug:
+        msg: "{{ cluster_id }}: new maxinst — {{ _maxinst_new.stdout | default('not found yet') }}"
+      when: _maxinst_delete is changed
+
+    # ── 4. Restart Manage operator ──────────────────────────────────
+    - name: Find and delete Manage operator pod
+      ansible.builtin.shell: |
+        POD=$(oc get pods -n mas-{{ mas_instance_id }}-manage --no-headers 2>/dev/null | grep 'manage-operator' | awk '{print $1}')
+        if [ -n "$POD" ]; then
+          oc delete pod -n mas-{{ mas_instance_id }}-manage "$POD" --grace-period=30 2>&1
+        else
+          echo "no operator pod found"
+        fi
+      environment:
+        KUBECONFIG: "/tmp/kubeconfig-fix-{{ cluster_id }}"
+      register: _op_delete
+      changed_when: "'deleted' in _op_delete.stdout | default('')"
+      failed_when: false
+      when: not (_skip_cluster | default(false))
+
+    - name: Report operator restart
+      ansible.builtin.debug:
+        msg: "{{ cluster_id }}: operator — {{ _op_delete.stdout | default('no action') | trim }}"
+      when: not (_skip_cluster | default(false))
+
+    # ── 5. Verify post-fix state ────────────────────────────────────
+    - name: Wait for operator replacement
+      ansible.builtin.wait_for:
+        timeout: 90
+      changed_when: false
+      when: not (_skip_cluster | default(false))
+
+    - name: Check post-fix pod state
+      ansible.builtin.shell: |
+        echo "--- operator ---"
+        oc get pods -n mas-{{ mas_instance_id }}-manage --no-headers 2>/dev/null | grep 'manage-operator'
+        echo "--- maxinst ---"
+        oc get pods -n mas-{{ mas_instance_id }}-manage --no-headers 2>/dev/null | grep maxinst
+      environment:
+        KUBECONFIG: "/tmp/kubeconfig-fix-{{ cluster_id }}"
+      register: _post_fix
+      changed_when: false
+      failed_when: false
+      when: not (_skip_cluster | default(false))
+
+    - name: Report post-fix state
+      ansible.builtin.debug:
+        msg: |
+          {{ cluster_id }}: POST-FIX STATE
+          {{ _post_fix.stdout | default('no output') }}
+      when: not (_skip_cluster | default(false))
+
+    # ── Cleanup temp kubeconfig ─────────────────────────────────────
+    - name: Remove temp kubeconfig
+      ansible.builtin.file:
+        path: "/tmp/kubeconfig-fix-{{ cluster_id }}"
+        state: absent
+
+- name: Reset skip flag
+  ansible.builtin.set_fact:
+    _skip_cluster: false

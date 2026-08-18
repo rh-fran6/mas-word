@@ -1,0 +1,66 @@
+---
+# Reset lab environment for one or more seats.
+# Removes all student-installed components (logging operators, LokiStack, CLF,
+# UIPlugin, synced groups, test pods) while preserving MAS, Keycloak, LDAP,
+# OAuth, Showroom, and all infrastructure.
+#
+# Usage:
+#   make lab-reset SEAT=20              # reset seat 20 only
+#   make lab-reset-fleet                # reset all seats
+#   make lab-reset-fleet SEAT_START=1 SEAT_END=10  # seats 1-10
+- name: Reset lab environment
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    masworld_env_config: "{{ lookup('ansible.builtin.file', playbook_dir + '/../config/environment.yaml') | from_yaml }}"
+
+  vars_files:
+    - "{{ playbook_dir }}/../secrets/cluster-credentials.yml"
+
+  tasks:
+    - name: Load cluster credentials
+      ansible.builtin.set_fact:
+        _all_clusters: "{{ masworld_clusters | default([]) }}"
+      no_log: true
+
+    - name: Filter to non-hub clusters
+      ansible.builtin.set_fact:
+        _target_clusters: >-
+          {{ _all_clusters
+             | rejectattr('purpose', 'equalto', 'hub')
+             | list }}
+
+    - name: Apply seat range filter
+      ansible.builtin.set_fact:
+        _target_clusters: >-
+          {{ _target_clusters
+             | seat_range(seat_start | default(omit), seat_end | default(omit)) }}
+      when: seat_start is defined or seat_end is defined
+
+    - name: Apply single seat filter
+      ansible.builtin.set_fact:
+        _target_clusters: >-
+          {{ _target_clusters
+             | selectattr('seat_number', 'equalto', seat | int)
+             | list }}
+      when: seat is defined
+
+    - name: Validate target list
+      ansible.builtin.assert:
+        that: _target_clusters | length > 0
+        fail_msg: "No clusters matched the filter. Check seat/seat_start/seat_end values."
+
+    - name: Display reset targets
+      ansible.builtin.debug:
+        msg: >-
+          Resetting lab on {{ _target_clusters | length }} cluster(s):
+          {{ _target_clusters | map(attribute='id') | list | join(', ') }}
+
+    - name: Reset each cluster
+      ansible.builtin.include_tasks: _reset-lab-single.yml
+      loop: "{{ _target_clusters }}"
+      loop_control:
+        loop_var: cluster
+        label: "{{ cluster.id }}"

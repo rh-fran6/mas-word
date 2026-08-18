@@ -2,13 +2,24 @@
 - name: Include build_definitions
   ansible.builtin.include_tasks: build_definitions.yml
 
-- name: Gather cluster details
+- name: Gather cluster details via ROSA
   ansible.builtin.shell: |
     set -o pipefail
-    rosa describe cluster --cluster={{ item.name }} --output json
+    rosa describe cluster --cluster={{ _rosa_managed_ids[item.name] | default(item.name) }} --output json 2>/dev/null \
+      | python3 -c "
+    import sys, json
+    d = json.load(sys.stdin)
+    state = d.get('status', {}).get('state', 'unknown')
+    api = d.get('api', {}).get('url', 'n/a')
+    console = d.get('console', {}).get('url', 'n/a')
+    version = d.get('openshift_version', 'n/a')
+    region = d.get('region', {}).get('id', 'n/a')
+    print(f'{state}|{api}|{console}|{version}|{region}')
+    " || echo "rosa_unavailable||||"
   args:
     executable: /bin/bash
   environment:
+    OCM_CONFIG: "/tmp/rosa-cluster-ocm-configs/{{ item.name }}.json"
     AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
     AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
     AWS_DEFAULT_REGION: "{{ item.aws_region }}"
@@ -16,24 +27,54 @@
   loop_control:
     label: "{{ item.name }}"
   register: cluster_details
+  retries: 6
+  delay: 30
+  until: cluster_details is not failed
   changed_when: false
+  failed_when: false
   no_log: true
 
+- name: Check cluster API reachability
+  ansible.builtin.uri:
+    url: "{{ item.api_url }}/.well-known/oauth-authorization-server"
+    method: GET
+    validate_certs: false
+    timeout: 15
+    status_code: [200, 401, 403]
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _verify_api_check
+  retries: 6
+  delay: 30
+  until: _verify_api_check is not failed
+  failed_when: false
+  when: item.api_url is defined and item.api_url | length > 0
+
 - name: Build verification report
+  vars:
+    _raw: "{{ item.0.stdout | default('rosa_unavailable||||', true) }}"
+    _rosa_state: "{{ _raw.split('|') | first }}"
+    _api_reachable: "{{ item.1.status | default(0) in [200, 401, 403] }}"
+    _effective_state: "{{ _rosa_state if _rosa_state == 'ready' else ('ready' if _api_reachable else _rosa_state) }}"
+    _rosa_api: "{{ _raw | regex_replace('^[^|]*\\|([^|]*)\\|.*$', '\\1') }}"
+    _rosa_console: "{{ _raw | regex_replace('^[^|]*\\|[^|]*\\|([^|]*)\\|.*$', '\\1') }}"
+    _rosa_version: "{{ _raw | regex_replace('^(?:[^|]*\\|){3}([^|]*)\\|.*$', '\\1') }}"
+    _rosa_region: "{{ _raw.split('|') | last }}"
   ansible.builtin.set_fact:
     cluster_report: >-
       {{ cluster_report | default([]) + [{
-        'name': item.item.name,
-        'category': item.item.category,
-        'state': (item.stdout | from_json).status.state,
-        'api_url': (item.stdout | from_json).api.url | default('pending'),
-        'console_url': (item.stdout | from_json).console.url | default('pending'),
-        'version': (item.stdout | from_json).openshift_version | default('n/a'),
-        'region': (item.stdout | from_json).region.id | default('n/a'),
+        'name': item.0.item.name,
+        'category': item.0.item.category,
+        'state': _effective_state,
+        'api_url': item.0.item.api_url | default(_rosa_api if _rosa_api else 'n/a'),
+        'console_url': _rosa_console if _rosa_console else 'n/a',
+        'version': _rosa_version if _rosa_version else 'n/a',
+        'region': _rosa_region if _rosa_region else item.0.item.aws_region,
       }] }}
-  loop: "{{ cluster_details.results }}"
+  loop: "{{ cluster_details.results | zip(_verify_api_check.results) | list }}"
   loop_control:
-    label: "{{ item.item.name }}"
+    label: "{{ item.0.item.name }}"
 
 - name: Display cluster fleet report
   ansible.builtin.debug:

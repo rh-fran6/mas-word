@@ -1,0 +1,28 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ masworld_lab_clusterrole_name }}-ns-admin
+  labels:
+    masworld.redhat.com/component: lab-accounts
+rules:
+  # Full control in targeted namespaces (openshift-logging, openshift-operators, openshift-operators-redhat)
+  # Bound via RoleBinding, not ClusterRoleBinding
+  - apiGroups: [""]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: ["apps"]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: ["operators.coreos.com"]
+    resources: [subscriptions, operatorgroups, installplans, clusterserviceversions]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["loki.grafana.com"]
+    resources: [lokistacks]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["observability.openshift.io"]
+    resources: [clusterlogforwarders]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: [roles, rolebindings]
+    verbs: [get, list, watch, create, update, patch, delete]

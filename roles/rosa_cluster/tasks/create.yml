@@ -20,6 +20,7 @@
   args:
     executable: /bin/bash
   environment:
+    OCM_CONFIG: "/tmp/rosa-cluster-ocm-configs/{{ cluster_definitions[0].name }}.json"
     AWS_ACCESS_KEY_ID: "{{ cluster_definitions[0].aws_access_key_id }}"
     AWS_SECRET_ACCESS_KEY: "{{ cluster_definitions[0].aws_secret_access_key }}"
     AWS_DEFAULT_REGION: "{{ cluster_definitions[0].aws_region }}"
@@ -67,6 +68,7 @@
   args:
     executable: /bin/bash
   environment:
+    OCM_CONFIG: "/tmp/rosa-cluster-ocm-configs/{{ item.name }}.json"
     AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
     AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
     AWS_DEFAULT_REGION: "{{ item.aws_region }}"
@@ -101,11 +103,12 @@
 - name: Check for existing clusters
   ansible.builtin.shell: |
     set -o pipefail
-    rosa describe cluster --cluster={{ item.name }} --output json 2>/dev/null \
+    rosa describe cluster --cluster={{ _rosa_managed_ids[item.name] | default(item.name) }} --output json 2>/dev/null \
       | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',{}).get('state','unknown'))"
   args:
     executable: /bin/bash
   environment:
+    OCM_CONFIG: "/tmp/rosa-cluster-ocm-configs/{{ item.name }}.json"
     AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
     AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
     AWS_DEFAULT_REGION: "{{ item.aws_region }}"
@@ -158,6 +161,7 @@
   args:
     executable: /bin/bash
   environment:
+    OCM_CONFIG: "/tmp/rosa-cluster-ocm-configs/{{ item.name }}.json"
     AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
     AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
     AWS_DEFAULT_REGION: "{{ item.aws_region }}"

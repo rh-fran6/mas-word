@@ -8,7 +8,13 @@
         _masworld_ibm_entitlement_key: >-
           {{ masworld_ibm_entitlement_key
              | default(lookup('ansible.builtin.env', 'IBM_ENTITLEMENT_KEY'), true)
-             | default(lookup('ansible.builtin.env', 'MAS_IBM_ENTITLEMENT_KEY'), true) }}
+             | default(lookup('ansible.builtin.env', 'MAS_IBM_ENTITLEMENT_KEY'), true)
+             | default(lookup('ansible.builtin.file', playbook_dir + '/../secrets/entitlement.dat', errors='ignore'), true) }}
+        masworld_ibm_entitlement_key: >-
+          {{ masworld_ibm_entitlement_key
+             | default(lookup('ansible.builtin.env', 'IBM_ENTITLEMENT_KEY'), true)
+             | default(lookup('ansible.builtin.env', 'MAS_IBM_ENTITLEMENT_KEY'), true)
+             | default(lookup('ansible.builtin.file', playbook_dir + '/../secrets/entitlement.dat', errors='ignore'), true) }}
       no_log: true
 
     - name: Validate IBM entitlement key is present
@@ -63,11 +69,17 @@
         _masworld_config_dir: "/tmp/masworld-config-{{ masworld_cluster_name }}"
 
     # ── Configure IBM Operator Catalog ─────────────────────────────────
-    - name: Configure IBM Operator Catalog source
+    - name: Configure IBM Operator Catalog source (custom)
       ansible.builtin.include_role:
         name: ibm.mas_devops.ibm_catalogs
       vars:
         mas_catalog_version: "{{ masworld_mas_catalog_source }}"
+      when: masworld_mas_catalog_source | default('', true) | length > 0
+
+    - name: Configure IBM Operator Catalog source (collection default)
+      ansible.builtin.include_role:
+        name: ibm.mas_devops.ibm_catalogs
+      when: masworld_mas_catalog_source | default('', true) | length == 0
 
     # ── Install IBM Cert Manager ────────────────────────────────────────
     - name: Install IBM Certificate Manager via ibm.mas_devops
@@ -94,6 +106,8 @@
         sls_mongodb_cfg_file: "{{ _masworld_config_dir }}/mongo-mongoce.yml"
         mas_instance_id: "{{ masworld_mas_instance_id | default('inst1') }}"
         mas_config_dir: "{{ _masworld_config_dir }}"
+        ibm_entitlement_key: "{{ _masworld_ibm_entitlement_key }}"
+        entitlement_file: "{{ masworld_sls_entitlement_file | default(playbook_dir + '/../secrets/license.dat') }}"
 
     # ── Install DRO (generates BasCfg for MAS) ──────────────────────────
     - name: Install Data Reporter Operator via ibm.mas_devops

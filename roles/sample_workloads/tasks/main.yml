@@ -23,6 +23,17 @@
               masworld.redhat.com/purpose: workshop-exercises
 
     # ── Deploy Logging Exercise Workload ────────────────────────────────
+    - name: Delete existing logging exercise pod (bare Pods cannot be patched)
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Pod
+        name: "log-generator-seat-{{ masworld_seat_number | pad(2) }}"
+        namespace: "{{ masworld_sample_namespace }}"
+        wait: true
+        wait_timeout: 60
+      failed_when: false
+
     - name: Deploy logging exercise pod
       kubernetes.core.k8s:
         state: present

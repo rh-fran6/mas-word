@@ -46,12 +46,14 @@
       Required variables missing. Need: cluster_prefix, cluster_categories,
       cluster_credentials (secrets/cluster-credentials.yml), rosa_token (secrets/rosa-token.yml)
 
-- name: Validate facilitator count is exactly 1
+- name: Validate exactly one facilitator in credentials
   ansible.builtin.assert:
     that:
       - cluster_categories.facilitator is defined
-      - cluster_categories.facilitator.count == 1
-    fail_msg: "Facilitator category must exist with count=1"
+      - cluster_credentials | dict2items
+        | selectattr('key', 'match', '^' ~ cluster_prefix ~ '-facilitator-')
+        | list | length == 1
+    fail_msg: "Exactly one facilitator cluster must exist in cluster-credentials.yml"
 
 - name: Validate minimum replicas per category
   ansible.builtin.assert:
@@ -74,6 +76,10 @@
 
 - name: Log in to ROSA
   ansible.builtin.command: rosa login --token={{ rosa_token }}
+  register: _gf_rosa_login
+  retries: 3
+  delay: 10
+  until: _gf_rosa_login is not failed
   changed_when: false
   no_log: true
   environment:
@@ -82,6 +88,9 @@
 - name: Verify ROSA login
   ansible.builtin.command: rosa whoami
   register: _gf_whoami
+  retries: 3
+  delay: 10
+  until: _gf_whoami is not failed
   changed_when: false
   no_log: true
 

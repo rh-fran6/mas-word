@@ -2,11 +2,11 @@
 # Naming prefix for all clusters in this fleet
 cluster_prefix: "lab"
 
-# Cluster categories — each has uniform worker node sizing within the category.
-# Adjust 'count' and 'instance_type' per your deployment needs.
+# Per-category sizing defaults.
+# Cluster inventory is driven by secrets/cluster-credentials.yml —
+# each key there is matched to a category here for instance sizing.
 cluster_categories:
   facilitator:
-    count: 1
     instance_type: "m6a.4xlarge"
     initial_replicas: 2
     autoscaling:
@@ -16,7 +16,6 @@ cluster_categories:
       machinepool_name: "autoscale-workers"
 
   hub:
-    count: 1
     instance_type: "m5.2xlarge"
     initial_replicas: 2
     autoscaling:
@@ -26,7 +25,6 @@ cluster_categories:
       machinepool_name: "autoscale-workers"
 
   seat:
-    count: 8
     instance_type: "m6a.4xlarge"
     initial_replicas: 2
     autoscaling:

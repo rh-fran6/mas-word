@@ -6,13 +6,13 @@ masworld_mas_prerequisites_enabled: true
 masworld_ibm_entitlement_key_ref: "secret://mas-world/ibm/entitlement-key"
 
 # IBM Operator Catalog source tag
-masworld_mas_catalog_source: "v9-260625-amd64"
+masworld_mas_catalog_source: ""
 
 # Cert Manager version — empty string means use collection default
 masworld_cert_manager_version: ""
 
 # MongoDB version
-masworld_mongodb_version: "7.0"
+masworld_mongodb_version: "8.0"
 
 # SLS version — empty string means use collection default
 masworld_sls_version: ""

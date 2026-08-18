@@ -1,9 +1,85 @@
 # Changelog
 
-> **Last updated:** 2026-07-24
+> **Last updated:** 2026-08-08
 >
 > All notable changes to the MAS World 2026 Workshop Automation system.
 > Format: `[YYYY-MM-DD] Category: Description`
+
+---
+
+## [2026-08-08] Upgrade to MAS 9.2 with Fresh IBM Collection
+
+### Changed
+- **MAS version** — All version pins updated from `9.1.x` to `9.2.x` across `config/components.yaml`, `config/defaults.yaml`, `roles/mas_core/defaults/main.yml`, `roles/mas_prerequisites/defaults/main.yml`, `roles/maximo_manage/defaults/main.yml`.
+- **MongoDB version** — `7.0` → `8.0` (MAS 9.2 default) in `config/components.yaml` and `roles/mas_prerequisites/defaults/main.yml`.
+- **IBM collection management** — Removed vendored `ibm.mas_devops` 37.10.0 with 6 local patches. Now installed fresh from Galaxy (`>=37.12.0`) via `requirements.yml`. (See DEC-X-012)
+- **Catalog source handling** — Removed hardcoded `catalog_tag` and `catalog_image` from `config/components.yaml`. Roles pass `masworld_mas_catalog_source | default(omit, true)` so the collection uses its built-in catalog tag.
+- **Db2 version pin removed** — `config/components.yaml` no longer pins `db2.version: "11.5"`. The collection auto-detects from the IBM catalog.
+- **Stale Db2 cleanup** — Now checks both `Db2uCluster` and `Db2uInstance` CR types for failed-state cleanup (future-proofs for `db2u_kind` changes).
+- **Makefile `setup` target** — Now runs `ansible-galaxy collection install` (was `ansible-galaxy install`) and calls `patch-collection` automatically.
+
+### Added
+- **`make patch-collection` target** — Applies ansible-core 2.21 compatibility fix to IBM collection's `suite_db2_setup_for_manage` role. Fixes `regex_search()` returning string in `until`/`assert` conditionals (upstream bug persists as of 37.12.1). Uses Python regex with negative lookahead for idempotent application.
+- **Dual CR type cleanup test** — Verifies `maximo_manage` role checks both `Db2uCluster` and `Db2uInstance` kinds.
+
+---
+
+## [2026-08-08] EFS Access Point UID=0 for Db2 chown + Stale Cleanup
+
+### Added
+- **StorageClass auto-replace** — `efs_csi_driver/tasks/main.yml` checks if the existing StorageClass has wrong `uid` parameter. If so, it deletes and recreates it (StorageClass parameters are immutable in Kubernetes).
+- **Stale Db2 auto-cleanup** — `maximo_manage/tasks/main.yml` now checks if a Db2uCluster exists in `NotReady` state before installing. If found, it deletes the CR, PVCs (meta + backup), and Formation-created SCC, then waits up to 30 minutes for PVC deletion (blocked by `kubernetes.io/pvc-protection` finalizer until mounting pods terminate). (See DEC-X-011)
+- **EFS StorageClass UID/GID tests (3)** — Defaults include uid/gid 0, StorageClass includes uid/gid parameters, auto-replace on UID mismatch.
+- **Stale Db2 cleanup tests (2)** — Cleanup runs before db2 role, deletes meta and backup PVCs.
+
+### Fixed
+- **Db2 instdb job `chown` failure on EFS** — Root cause: EFS access points enforce user identity — all NFS operations appear as the configured UID regardless of container UID. NFS only allows root (UID 0) to call `chown`. Fix: set `uid: "0"` and `gid: "0"` in the EFS StorageClass (matching IBM's own `ocp_efs` role), so access points enforce root identity. Also set `directoryPerms: "777"` so the access point root directory is accessible by Db2's UID 700. Validated on seat-01 — Db2uCluster reached `Ready` in ~13 minutes. (See DEC-X-011)
+
+---
+
+## [2026-08-08] Db2 SecurityContextConstraints for ROSA HCP
+
+### Added
+- **`roles/maximo_manage/templates/db2u-scc.yml.j2`** — New SCC template derived from the Db2u operator CSV documentation. Grants `allowPrivilegedContainer: true` with capabilities `SYS_RESOURCE`, `IPC_OWNER`, `SYS_NICE`, `CHOWN`, `DAC_OVERRIDE`, `FSETID`, `FOWNER`, `SETGID`, `SETUID`, `SETFCAP`, `SETPCAP`, `SYS_CHROOT`, `KILL`, `AUDIT_WRITE`. Grants to `db2u-operator`, `db2u`, and `default` service accounts in the `db2u` namespace. (See DEC-X-010)
+- **Pre-Db2 SCC creation** — `maximo_manage/tasks/main.yml` now creates the `db2u-scc` SCC and labels the `db2u` namespace with `pod-security.kubernetes.io/enforce: privileged` BEFORE calling the vendored `ibm.mas_devops.db2` role. This ensures Db2 pods have the security context they need on ROSA HCP.
+- **Db2 security & diagnostics tests (8)** — SCC template existence, required capabilities, ordering before db2 role, namespace PSA labels, rescue status/pod/PVC capture, ROSA HCP common causes, extended wait timeout, service account grants.
+
+### Changed
+- **Vendored Db2 wait timeout** — `db2ucluster.yml` and `db2uinstance.yml` wait retries increased from 24 (2 hours) to 36 (3 hours) to accommodate ROSA HCP + EFS mount latency.
+
+### Fixed
+- **Db2uCluster stuck at NotReady/Processing on ROSA HCP** — Root cause: missing `db2u-scc` SCC. The Db2u operator's CSV documents this SCC as required, but neither the vendored role nor project code created it. On ROSA HCP, the stricter security model prevented Formation init containers from starting for kernel parameter tuning. Fix: create the SCC and label the namespace before Db2 deployment. (See DEC-X-010)
+- **Generic "unknown error" in maximo_manage rescue block** — Replaced with structured diagnostics: Db2uCluster CR status, pod phases (with `formation_id=db2u-manage` label selector), pending PVC names, and a "COMMON CAUSES ON ROSA HCP" section with specific `oc` commands for troubleshooting.
+
+---
+
+## [2026-08-08] Parallel Cluster Operations + Regression Fixes
+
+### Added
+- **`playbooks/deploy-cluster-ready.yml`** — New 3-play parallel playbook. Play 1 (localhost): preflight + fleet ops + EFS discovery + `add_host` cluster registration. Play 2 (cluster_fleet, `strategy: free`): parallel per-cluster wait/prepare/validate. Play 3 (localhost): aggregate results. (See DEC-X-005)
+- **EFS parallel provisioning** — Full EFS stack (AWS filesystem + CSI driver operator + StorageClass) now runs per-cluster in the parallel phase (`strategy: free`), not sequentially in Play 1. Each cluster calls the idempotent `aws_efs` role to create-or-find its EFS, then `efs_csi_driver` installs the operator and StorageClass. Aligned with the parallel model used by all other per-cluster operations. (See DEC-X-009)
+- **EFS preflight check** — `scenario_preflight/tasks/cluster-ready.yml` now includes Phase 7 (EFS Filesystem Check) that queries AWS for existing EFS filesystems per non-hub cluster. Reports FOUND/NOT FOUND as advisory information before provisioning runs.
+- **Per-cluster KUBECONFIG isolation** — `KUBECONFIG=/tmp/kubeconfig-{{ cluster.id }}` prevents `oc login` race conditions when IBM MAS DevOps roles use raw `oc` CLI commands during parallel execution. (See DEC-X-006)
+- **Parallel playbook tests (11)** — Validates 3-play structure, `strategy: free`, `add_host` registration, Python interpreter propagation, KUBECONFIG isolation, ACM hub exclusion, EFS discovery, AWS credential passthrough, no-pause guard.
+
+### Changed
+- **Vendored IBM MAS DevOps `pause` → `wait_for`** — Replaced `ansible.builtin.pause` with `ansible.builtin.wait_for: timeout` in `db2` and `suite_db2_setup_for_manage` roles. The `pause` module bypasses the host loop, which is incompatible with `strategy: free`. (See DEC-X-007)
+- **`Makefile`** — `deploy-cluster-ready` target now invokes `deploy-cluster-ready.yml` directly instead of routing through `deploy.yml`. Sequential fallback preserved via `make deploy SCENARIO=cluster-ready`.
+- **`_prepare-single-cluster.yml`** — Added `KUBECONFIG` environment variable to `oc login` task and role deployment block. Added `oc login` step before IBM MAS DevOps roles.
+
+### Fixed
+- **Python interpreter for dynamic hosts** — `add_host` now explicitly sets `ansible_python_interpreter: "{{ ansible_playbook_python }}"` to ensure the `kubernetes` library is importable on dynamic hosts.
+- **`admin_password` default** — Uses `default('cluster-admin', true)` to handle `null` values (not just undefined).
+- **`default(X, true)` for null safety** — All nullable variables in `_prepare-single-cluster.yml` and `cluster-ready.yml` use the `true` flag to fall through `null` to the default.
+- **Retry logic** — All network tasks (URI, command, k8s_info) now have `retries: 3, delay: 3`.
+- **Cluster preflight guard** — All downstream K8S blocks gated with `when: _preflight_checks.api_reachable`.
+- **Facilitator count test** — Updated `test_cluster_ready_validates_facilitator_count` to match credential-derived validation pattern (`selectattr` + `length == 1`).
+- **ACM hub self-registration** — Added `masworld_cluster_purpose != 'hub'` guard to `acm_registration` in `_prepare-single-cluster.yml`. Hub clusters are the ACM management plane and should not register as managed spokes.
+- **ACM operator CatalogSource** — Changed `masworld_acm_operator_source` from `redhat-marketplace` to `redhat-operators`. The ACM operator is published in `redhat-operators`, not `redhat-marketplace`. This was the root cause of the subscription never resolving.
+- **ACM operator channel** — Changed default from `release-2.13` to `release-2.15`, aligned with `components.yaml`. Channel is now dynamically resolved from `masworld_components.components.acm.version` when available. Updated `components.yaml` ACM version from `2.16` (not released) to `2.15`.
+- **ACM subscription diagnostics** — Rescue block now queries Subscription and InstallPlan state before reporting failure, with common-cause checklist. Early failure detection added for unhealthy CatalogSource conditions.
+- **ACM operator readiness detection** — Replaced deployment label check (`app=multiclusterhub-operator`) with ClusterServiceVersion phase check (`Succeeded`). The label didn't match the actual OLM-managed deployment, causing the operator wait to time out even when the operator was running. (See DEC-X-008)
+- **EFS CSI driver skipped in cluster-ready path** — `masworld_efs_filesystem_id` was never populated in `deploy-cluster-ready.yml` because EFS provisioning only runs in `prepare-fleet.yml`. Moved full EFS stack (aws_efs + efs_csi_driver) into `_prepare-single-cluster.yml` so it runs per-cluster in parallel. (See DEC-X-009)
 
 ---
 

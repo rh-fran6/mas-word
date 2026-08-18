@@ -3,6 +3,35 @@
 
 Welcome to *MAS World 2026*, a hands-on workshop exploring IBM Maximo Application Suite on Red Hat OpenShift.
 
+[IMPORTANT]
+====
+*Your Lab Credentials*
+
+[cols="1,2"]
+|===
+| Username | `{lab_username}`
+| Password | `{lab_password}`
+| Login method | Select *Keycloak* on the OpenShift login screen
+|===
+
+Log in to the OpenShift Console using these credentials. Your lab user has permissions to install operators and configure logging, but *cannot* modify MAS components.
+====
+
+[NOTE]
+====
+*S3 Storage Credentials (for Observability exercise)*
+
+[cols="1,2"]
+|===
+| Bucket Name | `{s3_bucket_name}`
+| Access Key ID | `{s3_access_key_id}`
+| Secret Access Key | `{s3_secret_access_key}`
+| Region | `{s3_region}`
+|===
+
+You will need these when deploying the LokiStack in Exercise 5.
+====
+
 == What You Will Learn
 
 In this workshop, you will:
@@ -10,42 +39,80 @@ In this workshop, you will:
 * Navigate Maximo Application Suite and understand its OpenShift foundation
 * Use Red Hat Advanced Cluster Management to observe and govern a fleet of Maximo environments
 * Apply updates to your Maximo environment
-* Configure observability with OpenShift Logging and Loki
-* Integrate an external identity provider with Keycloak
+* *Install and configure* the OpenShift Logging stack (Logging Operator, Loki Operator, Cluster Observability Operator)
+* Integrate an external identity provider and sync LDAP users to Maximo
 * Understand production architecture considerations
 
 == Your Environment
 
 You have a dedicated OpenShift {ocp_version} cluster with:
 
-* IBM Maximo Application Suite {mas_version} (Core + Manage)
-* OpenShift Logging with Loki
-* Red Hat Advanced Cluster Management (fleet view)
+* IBM Maximo Application Suite {mas_version} (Core + Manage) -- *read-only, do not modify*
 * Keycloak for identity provider exercises
+* OpenLDAP with pre-configured users (alice, bob, carol, dave) for Maximo sync
+* Pre-created S3 bucket for log storage
 * This Showroom lab guide
 
-== Workshop Structure
+== Quick Links
 
-Each section follows this pattern:
+[cols="1,2"]
+|===
+| Resource | URL
 
-. A brief introduction explaining the topic
-. A presenter demonstration (where applicable)
-. A hands-on exercise for you to complete
-. Automated validation to confirm success
-. A solve path if you need help
+| OpenShift Console
+| {openshift_console_url}
 
-== Getting Started
+| Maximo Suite Navigator
+| {mas_url}
 
-Use the tabs on the right to access:
+| Maximo Manage
+| {manage_url}
+|===
 
-* *Terminal* — browser-based command line
-* *OpenShift Console* — your cluster's web console
-* *Maximo* — IBM Maximo Application Suite
-* *Grafana* — log visualization
+== Workshop Exercises
 
-Your credentials:
+[cols="1,3,1"]
+|===
+| Exercise | Topic | Duration
 
-* *Username*: `{user}`
-* *Password*: provided by your facilitator
+| 01
+| Access and Readiness -- log in and verify your environment
+| 15 min
+
+| 02
+| Navigation and Search -- explore the Maximo UI
+| 20 min
+
+| 03
+| ACM Fleet Management -- observe the fleet from the hub
+| 20 min
+
+| 04
+| Updates -- understand the update lifecycle
+| 15 min
+
+| 05
+| *Observability and Logging* -- install operators, deploy LokiStack, query logs
+| 45 min
+
+| 06
+| Identity Integration -- sync LDAP users to Maximo, configure group sync
+| 30 min
+
+| 07
+| Production Architecture -- sizing, HA, and operational considerations
+| 20 min
+
+| 08
+| Troubleshooting -- diagnose common issues
+| 20 min
+|===
+
+== Important Notes
+
+* Your MAS environment is *pre-installed and read-only*. You can explore all MAS components but cannot install, delete, or modify them.
+* The logging and observability stack is *not* pre-installed -- you will install it yourself in Exercise 5.
+* If you get stuck or badly misconfigure something, ask your facilitator to run the lab reset procedure for your seat.
+* Your student namespace is `student-{seat_number}`.
 
 Click *Next* to verify your environment is ready.

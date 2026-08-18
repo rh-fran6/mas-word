@@ -5,11 +5,12 @@
 - name: Get cluster IDs for cleanup
   ansible.builtin.shell: |
     set -o pipefail
-    rosa describe cluster --cluster={{ item.name }} --output json 2>/dev/null \
+    rosa describe cluster --cluster={{ _rosa_managed_ids[item.name] | default(item.name) }} --output json 2>/dev/null \
       | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" || echo ""
   args:
     executable: /bin/bash
   environment:
+    OCM_CONFIG: "/tmp/rosa-cluster-ocm-configs/{{ item.name }}.json"
     AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
     AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
     AWS_DEFAULT_REGION: "{{ item.aws_region }}"
@@ -39,10 +40,11 @@
 - name: Delete ROSA HCP clusters (async)
   ansible.builtin.shell: |
     set -o pipefail
-    rosa delete cluster --cluster={{ item.name }} --yes --best-effort 2>&1
+    rosa delete cluster --cluster={{ _rosa_managed_ids[item.name] | default(item.name) }} --yes --best-effort 2>&1
   args:
     executable: /bin/bash
   environment:
+    OCM_CONFIG: "/tmp/rosa-cluster-ocm-configs/{{ item.name }}.json"
     AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
     AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
     AWS_DEFAULT_REGION: "{{ item.aws_region }}"
@@ -93,10 +95,11 @@
 - name: Wait for clusters to be fully uninstalled
   ansible.builtin.shell: |
     set -o pipefail
-    rosa describe cluster --cluster={{ item.name }} --output json 2>&1
+    rosa describe cluster --cluster={{ _rosa_managed_ids[item.name] | default(item.name) }} --output json 2>&1
   args:
     executable: /bin/bash
   environment:
+    OCM_CONFIG: "/tmp/rosa-cluster-ocm-configs/{{ item.name }}.json"
     AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
     AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
     AWS_DEFAULT_REGION: "{{ item.aws_region }}"

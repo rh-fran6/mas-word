@@ -28,7 +28,7 @@ oc get events -n openshift-console --sort-by=.lastTimestamp | tail -10
 
 == Cannot Log In
 
-. Verify the OAuth configuration includes htpasswd:
+. Verify the OAuth configuration includes Keycloak:
 +
 [source,role="execute"]
 ----
@@ -42,7 +42,8 @@ oc get oauth cluster -o jsonpath='{.spec.identityProviders[*].name}'
 oc get pods -n openshift-authentication --no-headers
 ----
 +
-. If authentication fails, ask your facilitator to verify your credentials.
+. If authentication fails, confirm you are selecting *Keycloak* (not htpasswd) and using the credentials from the Welcome page.
+. If your login still fails, ask your facilitator to verify your Keycloak account.
 
 == Maximo Not Accessible
 
@@ -65,6 +66,110 @@ oc get manageworkspace -n mas-inst1-manage --no-headers
 [source,role="execute"]
 ----
 oc get pods -n mas-inst1-manage --no-headers | grep -v Running
+----
+
+== Operator Installation Issues
+
+If you encounter problems installing operators in Exercise 5:
+
+=== Subscription Stuck in "UpgradePending"
+
+. Check the install plan:
++
+[source,role="execute"]
+----
+oc get installplan -n openshift-logging --no-headers
+----
++
+. If an install plan is not approved:
++
+[source,role="execute"]
+----
+oc get installplan -n openshift-logging -o jsonpath='{range .items[*]}{.metadata.name}{" approved="}{.spec.approved}{"\n"}{end}'
+----
++
+. Approve a pending install plan:
++
+[source,role="execute"]
+----
+PLAN=$(oc get installplan -n openshift-logging -o jsonpath='{.items[?(@.spec.approved==false)].metadata.name}')
+if [ -n "$PLAN" ]; then oc patch installplan $PLAN -n openshift-logging --type merge -p '{"spec":{"approved":true}}'; fi
+----
+
+=== CSV Not Reaching "Succeeded"
+
+. Check the CSV status:
++
+[source,role="execute"]
+----
+oc get csv -n openshift-logging -o custom-columns=NAME:.metadata.name,PHASE:.status.phase --no-headers
+----
++
+. Check CSV events for errors:
++
+[source,role="execute"]
+----
+oc get csv -n openshift-logging -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.status.message}{"\n"}{end}'
+----
++
+. If a CSV is stuck, try deleting the Subscription and recreating it:
++
+[source,role="execute"]
+----
+oc delete subscription cluster-logging -n openshift-logging
+# Then re-apply the Subscription from Exercise 5
+----
+
+=== OperatorGroup Already Exists
+
+If you get an error that the OperatorGroup already exists, that's fine -- it means it was already created. Proceed to the next step.
+
+=== Permission Denied
+
+If you get a "forbidden" error:
+
+[source,role="execute"]
+----
+oc auth can-i create subscription.operators.coreos.com -n openshift-logging
+----
+
+If the result is `no`, contact your facilitator -- your lab account may not have the correct RBAC.
+
+== LokiStack Issues
+
+=== LokiStack Not Becoming Ready
+
+. Check LokiStack status:
++
+[source,role="execute"]
+----
+oc get lokistack logging-loki -n openshift-logging -o jsonpath='{range .status.conditions[*]}{.type}{"="}{.status}{" "}{.message}{"\n"}{end}'
+----
++
+. Check if the S3 secret is correct:
++
+[source,role="execute"]
+----
+oc get secret logging-loki-s3 -n openshift-logging -o jsonpath='{.data.bucketnames}' | base64 -d
+----
++
+. Verify the S3 bucket name matches what's shown on the Welcome page.
+. Check the Loki pods for errors:
++
+[source,role="execute"]
+----
+oc get pods -n openshift-logging -l app.kubernetes.io/instance=logging-loki --no-headers
+oc logs -n openshift-logging -l app.kubernetes.io/component=compactor --tail=20 2>/dev/null || echo "No compactor pods yet"
+----
+
+=== S3 Credential Issues
+
+If LokiStack fails with access errors, verify your S3 credentials:
+
+[source,role="execute"]
+----
+oc delete secret logging-loki-s3 -n openshift-logging
+# Recreate with the correct values from the Welcome page (Exercise 5, Step 4)
 ----
 
 == Logging Queries Return No Results
@@ -108,8 +213,28 @@ oc get pods -n masworld-keycloak --no-headers
 oc get route -n masworld-keycloak --no-headers
 ----
 
+== Group Sync Issues
+
+If `oc adm groups sync` fails:
+
+. Verify LDAP connectivity:
++
+[source,role="execute"]
+----
+oc exec deploy/openldap -n masworld-keycloak -- ldapsearch -x -H ldap://localhost:3389 -b "dc=masworld,dc=example,dc=com" -D "cn=Directory Manager" -w "$(oc get secret openldap-admin-secret -n masworld-keycloak -o jsonpath='{.data.password}' | base64 -d)" "(objectClass=groupOfNames)" dn
+----
++
+. Ensure the bind password file is correct:
++
+[source,role="execute"]
+----
+cat /tmp/ldap-bind-password
+----
++
+If empty, recreate it per Exercise 6, Step 2.
+
 == Getting Help
 
 * Raise your hand or use the event chat to reach a facilitator
-* Francis Anyaegbu (Red Hat) — environment support
-* Myles Vivian (Cohesive) — observability support
+* Francis Anyaegbu (Red Hat) -- environment support
+* Myles Vivian (Cohesive) -- observability support

@@ -7,7 +7,7 @@ masworld_mas_instance_id: "inst1"
 masworld_mas_workspace_id: "masworld"
 
 # MAS subscription channel
-masworld_mas_channel: "9.1.x"
+masworld_mas_channel: "9.2.x"
 
 # MAS domain — empty string means auto-detect from cluster
 masworld_mas_domain: ""
@@ -17,4 +17,4 @@ masworld_mas_core_ready_retries: 60
 masworld_mas_core_ready_delay: 60
 
 # IBM catalog source tag
-masworld_mas_catalog_source: "v9-260625-amd64"
+masworld_mas_catalog_source: ""

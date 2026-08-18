@@ -1,0 +1,273 @@
+---
+# Diagnostic playbook: investigate ManageWorkspace state on a specific cluster.
+# Usage:
+#   ansible-playbook playbooks/diagnose-manage.yml -e cluster_id=lab-seat-20
+#   ansible-playbook playbooks/diagnose-manage.yml -e cluster_id=lab-seat-20 -e verbose=true
+- name: "Diagnose ManageWorkspace on target cluster"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../secrets/cluster-credentials.yml
+
+  vars:
+    verbose: false
+    mas_instance_id: inst1
+    mas_workspace_id: masworld
+
+  module_defaults:
+    group/kubernetes.core.k8s:
+      host: "{{ _api_url }}"
+      api_key: "{{ _api_token }}"
+      validate_certs: false
+
+  tasks:
+    - name: Resolve cluster from credentials
+      ansible.builtin.set_fact:
+        _cluster: "{{ cluster_credentials[cluster_id] }}"
+        _api_url: "{{ cluster_credentials[cluster_id].api_url }}"
+      no_log: true
+
+    - name: Get OAuth token
+      block:
+        - name: Discover OAuth server
+          ansible.builtin.uri:
+            url: "{{ _api_url }}/.well-known/oauth-authorization-server"
+            method: GET
+            validate_certs: false
+            timeout: 15
+          register: _oauth_meta
+          retries: 3
+          delay: 10
+          until: _oauth_meta is not failed
+
+        - name: Request token
+          ansible.builtin.uri:
+            url: "{{ _oauth_meta.json.authorization_endpoint }}?response_type=token&client_id=openshift-challenging-client"
+            method: GET
+            user: "cluster-admin"
+            password: "{{ _cluster.admin_password | default('cluster-admin') }}"
+            force_basic_auth: true
+            validate_certs: false
+            follow_redirects: none
+            status_code: [302]
+          register: _oauth_resp
+          no_log: true
+
+        - name: Extract token
+          ansible.builtin.set_fact:
+            _api_token: "{{ _oauth_resp.location | regex_search('access_token=([^&]+)', '\\1') | first }}"
+          no_log: true
+      rescue:
+        - name: Report auth failure
+          ansible.builtin.fail:
+            msg: |
+              ════════════════════════════════════════════════════════════════
+                ✖ CANNOT REACH {{ cluster_id }}
+              ════════════════════════════════════════════════════════════════
+                API:    {{ _api_url }}
+                Error:  Authentication or DNS resolution failed
+                Action: Check VPN connectivity and retry
+              ════════════════════════════════════════════════════════════════
+
+    # ── Gather all data ──────────────────────────────────────────────
+    - name: Get ManageWorkspace CR
+      kubernetes.core.k8s_info:
+        api_version: apps.mas.ibm.com/v1
+        kind: ManageWorkspace
+        name: "{{ mas_instance_id }}-{{ mas_workspace_id }}"
+        namespace: "mas-{{ mas_instance_id }}-manage"
+      register: _mw
+
+    - name: Get all pods in Manage namespace
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "mas-{{ mas_instance_id }}-manage"
+      register: _manage_pods
+
+    - name: Get server bundle pods
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "mas-{{ mas_instance_id }}-manage"
+        label_selectors:
+          - "mas.ibm.com/appType=serverBundle"
+      register: _sb_pods
+
+    - name: Get ManageApp CR
+      kubernetes.core.k8s_info:
+        api_version: apps.mas.ibm.com/v1
+        kind: ManageApp
+        namespace: "mas-{{ mas_instance_id }}-manage"
+      register: _ma
+
+    - name: Get Db2uCluster CR
+      kubernetes.core.k8s_info:
+        api_version: db2u.databases.ibm.com/v1
+        kind: Db2uCluster
+        name: "db2u-manage"
+        namespace: "db2u"
+      register: _db2
+
+    - name: Get recent events
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Event
+        namespace: "mas-{{ mas_instance_id }}-manage"
+      register: _events
+
+    # ── Extract key facts ────────────────────────────────────────────
+    - name: Extract ManageWorkspace facts
+      ansible.builtin.set_fact:
+        _mw_exists: "{{ _mw.resources | length > 0 }}"
+        _mw_conditions: "{{ _mw.resources[0].status.conditions | default([]) if _mw.resources | length > 0 else [] }}"
+
+    - name: Extract condition values
+      when: _mw_exists | bool
+      ansible.builtin.set_fact:
+        _ready_cond: >-
+          {{ _mw_conditions | selectattr('type', 'equalto', 'Ready') | first | default({}) }}
+        _deploy_ready_cond: >-
+          {{ _mw_conditions | selectattr('type', 'equalto', 'DeploymentReady') | first | default({}) }}
+        _build_ready_cond: >-
+          {{ _mw_conditions | selectattr('type', 'equalto', 'BuildReady') | first | default({}) }}
+        _deploy_cr_cond: >-
+          {{ _mw_conditions | selectattr('type', 'equalto', 'DeploymentCR') | first | default({}) }}
+
+    - name: Extract pod facts
+      ansible.builtin.set_fact:
+        _maxinst_pod: >-
+          {{ _manage_pods.resources | default([])
+             | selectattr('metadata.name', 'search', 'maxinst')
+             | list | first | default({}) }}
+        _operator_pod: >-
+          {{ _manage_pods.resources | default([])
+             | selectattr('metadata.name', 'search', 'manage-operator')
+             | list | first | default({}) }}
+        _mcp_pod: >-
+          {{ _manage_pods.resources | default([])
+             | selectattr('metadata.name', 'search', 'mcp')
+             | list | first | default({}) }}
+
+    - name: Extract Db2 facts
+      ansible.builtin.set_fact:
+        _db2_state: "{{ _db2.resources[0].status.state | default('UNKNOWN') if _db2.resources | length > 0 else 'NOT FOUND' }}"
+        _db2_table_org: >-
+          {{ _db2.resources[0].spec.environment.database.settings.dftTableOrg | default('NOT SET')
+             if _db2.resources | length > 0 else 'N/A' }}
+
+    # ── Determine overall verdict ────────────────────────────────────
+    - name: Determine verdict
+      ansible.builtin.set_fact:
+        _verdict: >-
+          {% if not (_mw_exists | bool) %}NO_CR
+          {% elif (_ready_cond.status | default('')) == 'True' %}READY
+          {% elif (_deploy_ready_cond.message | default('')) is search('Maxinst: Completed')
+            or (_deploy_ready_cond.message | default('')) is search('UpdateDB/Maxinst: Completed') %}MAXINST_DONE_WAITING
+          {% elif (_deploy_ready_cond.message | default('')) is search('row organization') %}MAXINST_RUNNING
+          {% elif (_deploy_ready_cond.status | default('')) == 'False' %}DEPLOY_FAILED
+          {% else %}UNKNOWN{% endif %}
+
+    - name: Determine maxinst status
+      ansible.builtin.set_fact:
+        _maxinst_status: >-
+          {% if _maxinst_pod == {} %}NOT_FOUND
+          {% elif (_maxinst_pod.status.phase | default('')) != 'Running' %}{{ _maxinst_pod.status.phase | default('?') }}
+          {% elif (_maxinst_pod.status.containerStatuses[0].restartCount | default(0) | int) > 0 %}CRASH_LOOPING
+          {% else %}RUNNING{% endif %}
+        _maxinst_age: >-
+          {{ _maxinst_pod.metadata.creationTimestamp | default('?') }}
+
+    # ── Print the report ─────────────────────────────────────────────
+    - name: Print diagnosis report
+      vars:
+        _sb_count: "{{ _sb_pods.resources | length }}"
+        _sb_ready: >-
+          {{ _sb_pods.resources | default([])
+             | selectattr('status.phase', 'equalto', 'Running')
+             | list | length }}
+        _op_age: "{{ _operator_pod.metadata.creationTimestamp | default('?') }}"
+        _op_restarts: "{{ _operator_pod.status.containerStatuses[0].restartCount | default(0) if _operator_pod != {} else '?' }}"
+        _mcp_restarts: "{{ _mcp_pod.status.containerStatuses[0].restartCount | default(0) if _mcp_pod != {} else '?' }}"
+        _warning_events: >-
+          {{ _events.resources | default([])
+             | selectattr('type', 'equalto', 'Warning')
+             | list | sort(attribute='lastTimestamp', reverse=true)
+             | list }}
+      ansible.builtin.debug:
+        msg: |
+          ════════════════════════════════════════════════════════════════
+          {% if _verdict | trim == 'READY' %}
+            ✔ {{ cluster_id | upper }}  —  MANAGE IS READY
+          {% elif _verdict | trim == 'MAXINST_RUNNING' %}
+            ⏳ {{ cluster_id | upper }}  —  MAXINST RUNNING (WAIT 30-60 MIN)
+          {% elif _verdict | trim == 'MAXINST_DONE_WAITING' %}
+            ⏳ {{ cluster_id | upper }}  —  MAXINST DONE, DEPLOYING BUNDLES
+          {% elif _verdict | trim == 'NO_CR' %}
+            ✖ {{ cluster_id | upper }}  —  NO MANAGEWORKSPACE CR FOUND
+          {% else %}
+            ✖ {{ cluster_id | upper }}  —  DEPLOYMENT FAILED
+          {% endif %}
+          ════════════════════════════════════════════════════════════════
+
+          {% if _verdict | trim == 'READY' %}
+            Status:         READY — ManageWorkspace is fully deployed
+            Deployment:     {{ _deploy_ready_cond.message | default('') | truncate(100) }}
+            Server Bundles: {{ _sb_count }} pods ({{ _sb_ready }} running)
+            Manage URL:     {{ _mw.resources[0].status.url | default('not set') }}
+          {% elif _verdict | trim == 'MAXINST_RUNNING' %}
+            Status:         WAITING — maxinst is re-initializing the database
+            What's happening:
+              Maxinst pod is initializing Maximo tables in Db2. Typically
+              completes in 30-60 minutes. The "row organization" error
+              clears once maxinst finishes. No action needed — just wait.
+            Maxinst pod:    {{ _maxinst_pod.metadata.name | default('?') }}
+            Maxinst state:  {{ _maxinst_status | trim }} (since {{ _maxinst_age | trim }})
+            Server Bundles: {{ _sb_count }} (will deploy after maxinst completes)
+            Next check:     Re-run this diagnostic in 20-30 minutes
+          {% elif _verdict | trim == 'MAXINST_DONE_WAITING' %}
+            Status:         PROGRESSING — maxinst completed, server bundles deploying
+            Deployment:     {{ _deploy_ready_cond.message | default('') | truncate(100) }}
+            Server Bundles: {{ _sb_count }} pods ({{ _sb_ready }} running)
+            Next check:     Re-run in 15-30 minutes
+          {% elif _verdict | trim == 'DEPLOY_FAILED' %}
+            Status:         FAILED
+            Error:          {{ _deploy_ready_cond.message | default('unknown') | truncate(200) }}
+            Maxinst pod:    {{ _maxinst_pod.metadata.name | default('NOT FOUND') }}
+            Maxinst state:  {{ _maxinst_status | trim }} (since {{ _maxinst_age | trim }})
+            Server Bundles: {{ _sb_count }} pods ({{ _sb_ready }} running)
+            Action:         Investigate operator logs or re-run fix-maxinst.yml
+          {% else %}
+            No ManageWorkspace CR found in mas-{{ mas_instance_id }}-manage.
+            Action:         Run make deploy-cluster-ready for this seat.
+          {% endif %}
+
+          ── Component Health ──────────────────────────────────────────
+            Db2:            {{ _db2_state | trim }} (dftTableOrg={{ _db2_table_org | trim }})
+            Operator:       {{ 'Running' if _operator_pod != {} else 'NOT FOUND' }} (started {{ _op_age }}, restarts={{ _op_restarts }})
+            Maxinst:        {{ _maxinst_status | trim }} (started {{ _maxinst_age | trim }})
+            MCP:            {{ _mcp_pod.status.phase | default('NOT FOUND') if _mcp_pod != {} else 'NOT FOUND' }} (restarts={{ _mcp_restarts }})
+            Server Bundles: {{ _sb_count }} deployed, {{ _sb_ready }} running
+
+          {% if verbose | bool %}
+          ── ManageWorkspace Conditions (raw) ──────────────────────────
+          {% for c in _mw_conditions %}
+            {{ '%-18s' | format(c.type + ':') }} {{ c.status }} — {{ c.message | default('') | truncate(200) }}
+          {% endfor %}
+
+          ── All Pods ─────────────────────────────────────────────────
+          {% for p in _manage_pods.resources | default([]) %}
+            {{ '%-60s' | format(p.metadata.name) }} {{ p.status.phase }}  restarts={{ p.status.containerStatuses[0].restartCount | default(0) }}  age={{ p.metadata.creationTimestamp }}
+          {% endfor %}
+
+          ── Recent Warnings (last 5) ─────────────────────────────────
+          {% for e in _warning_events[:5] %}
+            {{ e.lastTimestamp }}: {{ e.reason }} — {{ e.message | truncate(120) }}
+          {% endfor %}
+          {% if _warning_events | length == 0 %}
+            (none)
+          {% endif %}
+          {% endif %}
+          ════════════════════════════════════════════════════════════════

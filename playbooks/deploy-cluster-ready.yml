@@ -1,0 +1,209 @@
+---
+# Parallel cluster-ready deployment playbook.
+#
+# Uses Ansible dynamic inventory (add_host) + strategy: free to run
+# per-cluster operations in parallel across all clusters simultaneously.
+#
+# Usage:
+#   make deploy-cluster-ready INSTANCE_TYPE=m5.2xlarge
+#   ansible-playbook playbooks/deploy-cluster-ready.yml \
+#     -e workshop_machinepool_instance_type=m5.2xlarge
+
+# ═══════════════════════════════════════════════════════════════════════
+# Play 1: Preflight + Fleet Operations (sequential, on localhost)
+# ═══════════════════════════════════════════════════════════════════════
+- name: "MAS World 2026 — Cluster-Ready Preflight & Fleet Ops"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    deployment_scenario: cluster-ready
+    masworld_config_dir: "{{ config_dir | default('config') }}"
+    masworld_environment: "{{ env | default('development') }}"
+
+  vars_files:
+    - ../secrets/cluster-credentials.yml
+
+  module_defaults:
+    group/kubernetes.core.k8s:
+      host: "{{ masworld_cluster_api_url | default(omit, true) }}"
+      api_key: "{{ masworld_api_token | default(omit, true) }}"
+      validate_certs: false
+    group/ibm.mas_devops.k8s:
+      host: "{{ masworld_cluster_api_url | default(omit, true) }}"
+      api_key: "{{ masworld_api_token | default(omit, true) }}"
+
+  pre_tasks:
+    - name: Display deployment banner
+      ansible.builtin.debug:
+        msg: |
+          ╔══════════════════════════════════════════════════════════════╗
+          ║  MAS World 2026 — Parallel Cluster-Ready Deployment        ║
+          ╚══════════════════════════════════════════════════════════════╝
+      tags: [always]
+
+    - name: Load component versions
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../config/components.yaml"
+        name: masworld_components
+      tags: [always]
+
+    - name: Set rosa_version from components
+      ansible.builtin.set_fact:
+        rosa_version: "{{ masworld_components.components.openshift.version }}"
+      tags: [always]
+
+    - name: Load environment configuration
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../{{ masworld_config_dir }}/environments/{{ masworld_environment }}.yaml"
+        name: masworld_env_config
+      tags: [always]
+
+    - name: Resolve IBM entitlement key
+      ansible.builtin.set_fact:
+        _resolved_entitlement_key: >-
+          {{ lookup('ansible.builtin.env', 'IBM_ENTITLEMENT_KEY')
+             | default(lookup('ansible.builtin.file', playbook_dir + '/../secrets/entitlement.dat', errors='ignore'), true) }}
+      no_log: true
+      tags: [always]
+
+  roles:
+    - role: scenario_preflight
+      tags: [preflight]
+
+  tasks:
+    # ── Step 1: Workshop Machinepool ──────────────────────────────────
+    - name: "=== CLUSTER-READY Step 1/3: Configure Workshop Autoscaler ==="
+      ansible.builtin.debug:
+        msg: >-
+          Creating workshop machinepool '{{ workshop_machinepool_name }}'
+          ({{ workshop_machinepool_instance_type }},
+          {{ workshop_machinepool_min_replicas }}-{{ workshop_machinepool_max_replicas }} replicas)
+          on all clusters...
+
+    - name: Create workshop machine pools
+      ansible.builtin.include_role:
+        name: rosa_cluster
+      vars:
+        rosa_action: workshop_machinepool
+
+    # ── Build cluster list and register dynamic hosts ─────────────────
+    - name: Build enabled cluster list for Phase 2
+      ansible.builtin.set_fact:
+        masworld_enabled_clusters: >-
+          {{ cluster_credentials | to_cluster_list
+             | seat_range(seat_start | default(none), seat_end | default(none)) }}
+      no_log: true
+
+    - name: "=== CLUSTER-READY Steps 2-3: Parallel Per-Cluster Operations ==="
+      ansible.builtin.debug:
+        msg: >-
+          Registering {{ masworld_enabled_clusters | length }} clusters
+          for parallel execution (strategy: free, forks: {{ ansible_forks | default(10) }})...
+
+    - name: Register each cluster as a dynamic host for parallel execution
+      ansible.builtin.add_host:
+        name: "{{ item.id }}"
+        groups: cluster_fleet
+        ansible_connection: local
+        ansible_python_interpreter: "{{ ansible_playbook_python }}"
+        cluster: "{{ item }}"
+        masworld_env_config: "{{ masworld_env_config | default({}) }}"
+        masworld_components: "{{ masworld_components | default({}) }}"
+        masworld_admin_username: "{{ masworld_admin_username | default('cluster-admin') }}"
+        masworld_aws_access_key_id: "{{ item.aws_access_key_id | default('') }}"
+        masworld_aws_secret_access_key: "{{ item.aws_secret_access_key | default('') }}"
+        masworld_aws_region: "{{ item.aws_region | default(aws_default_region) }}"
+        masworld_ibm_entitlement_key: "{{ _resolved_entitlement_key | default('') }}"
+        _machinepool_nodes_verified: false
+      loop: "{{ masworld_enabled_clusters }}"
+      loop_control:
+        label: "{{ item.id }}"
+      no_log: true
+      changed_when: false
+
+# ═══════════════════════════════════════════════════════════════════════
+# Play 2: Per-Cluster Operations (parallel, strategy: free)
+# ═══════════════════════════════════════════════════════════════════════
+- name: "MAS World 2026 — Parallel Cluster Preparation"
+  hosts: cluster_fleet
+  strategy: free
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../secrets/cluster-credentials.yml
+
+  module_defaults:
+    group/kubernetes.core.k8s:
+      host: "{{ masworld_cluster_api_url | default(omit, true) }}"
+      api_key: "{{ masworld_api_token | default(omit, true) }}"
+      validate_certs: false
+    group/ibm.mas_devops.k8s:
+      host: "{{ masworld_cluster_api_url | default(omit, true) }}"
+      api_key: "{{ masworld_api_token | default(omit, true) }}"
+
+  tasks:
+    # ── Step 2: Wait for machinepool nodes ────────────────────────────
+    - name: "{{ inventory_hostname }} — Wait for machinepool nodes"
+      ansible.builtin.include_tasks: _wait-machinepool-nodes.yml
+
+    - name: "{{ inventory_hostname }} — Mark nodes as verified"
+      ansible.builtin.set_fact:
+        _machinepool_nodes_verified: true
+
+    # ── Step 3: Prepare cluster ───────────────────────────────────────
+    - name: "{{ inventory_hostname }} — Prepare cluster"
+      ansible.builtin.include_tasks: _prepare-single-cluster.yml
+
+    # ── Validate cluster ──────────────────────────────────────────────
+    - name: "{{ inventory_hostname }} — Validate cluster"
+      ansible.builtin.include_tasks: _validate-single-cluster.yml
+
+# ═══════════════════════════════════════════════════════════════════════
+# Play 3: Aggregate Results (sequential, on localhost)
+# ═══════════════════════════════════════════════════════════════════════
+- name: "MAS World 2026 — Fleet Results"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Aggregate fleet preparation results
+      ansible.builtin.set_fact:
+        masworld_fleet_results: >-
+          {{ groups['cluster_fleet'] | default([])
+             | map('extract', hostvars, 'masworld_fleet_results')
+             | select('defined')
+             | flatten
+             | list }}
+        masworld_validation_results: >-
+          {{ groups['cluster_fleet'] | default([])
+             | map('extract', hostvars, 'masworld_validation_results')
+             | select('defined')
+             | flatten
+             | list }}
+
+    - name: Identify failed clusters
+      ansible.builtin.set_fact:
+        _failed_hosts: >-
+          {{ groups['cluster_fleet'] | default([])
+             | difference(ansible_play_hosts_all | default([]))
+             | list }}
+
+    - name: Display fleet preparation summary
+      ansible.builtin.debug:
+        msg: |
+          ══════════════════════════════════════════════════════════════
+            CLUSTER-READY DEPLOYMENT COMPLETE (PARALLEL)
+          ══════════════════════════════════════════════════════════════
+            Total clusters: {{ groups['cluster_fleet'] | default([]) | length }}
+            Successful:     {{ masworld_fleet_results | length }}
+            Failed:         {{ (groups['cluster_fleet'] | default([]) | length) - (masworld_fleet_results | length) }}
+
+            Results:
+          {% for r in masworld_fleet_results | default([]) %}
+              {{ r.cluster_id }}: {{ r.result }} ({{ r.purpose }})
+          {% endfor %}
+          ══════════════════════════════════════════════════════════════

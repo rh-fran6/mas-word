@@ -1,6 +1,7 @@
 ---
 # Observability exercise – prepare
-# Verifies that logging infrastructure is ready for the student exercise.
+# Verifies prerequisites are in place BEFORE the student starts.
+# Does NOT check for installed operators (student installs them).
 - name: Prepare observability exercise
   hosts: localhost
   connection: local
@@ -9,87 +10,11 @@
   vars:
     seat_padded: "{{ '%02d' | format(seat_number | int) }}"
     student_ns: "student-{{ seat_padded }}"
-    logging_ns: openshift-logging
+    lab_username: "lab-seat-{{ seat_padded }}"
 
   tasks:
     # ------------------------------------------------------------------
-    # 1. Check logging operator CSVs
-    # ------------------------------------------------------------------
-    - name: Check logging operator CSVs in {{ logging_ns }}
-      kubernetes.core.k8s_info:
-        api_version: operators.coreos.com/v1alpha1
-        kind: ClusterServiceVersion
-        namespace: "{{ logging_ns }}"
-      register: csv_result
-      failed_when: false
-
-    - name: Evaluate CSV status
-      ansible.builtin.set_fact:
-        csv_ready: >-
-          {{ csv_result.resources | default([])
-             | selectattr('status.phase', 'defined')
-             | selectattr('status.phase', 'equalto', 'Succeeded')
-             | list | length > 0 }}
-
-    - name: Report CSV status
-      ansible.builtin.debug:
-        msg: >-
-          Logging operator CSVs: {{ 'READY' if csv_ready | bool else 'NOT READY – no Succeeded CSVs found in ' + logging_ns }}
-
-    # ------------------------------------------------------------------
-    # 2. Check LokiStack readiness
-    # ------------------------------------------------------------------
-    - name: Check LokiStack CR
-      kubernetes.core.k8s_info:
-        api_version: loki.grafana.com/v1
-        kind: LokiStack
-        namespace: "{{ logging_ns }}"
-      register: lokistack_result
-      failed_when: false
-
-    - name: Evaluate LokiStack status
-      ansible.builtin.set_fact:
-        lokistack_ready: >-
-          {{ lokistack_result.resources | default([])
-             | selectattr('status.conditions', 'defined')
-             | map(attribute='status.conditions') | flatten
-             | selectattr('type', 'equalto', 'Ready')
-             | selectattr('status', 'equalto', 'True')
-             | list | length > 0 }}
-
-    - name: Report LokiStack status
-      ansible.builtin.debug:
-        msg: >-
-          LokiStack: {{ 'READY' if lokistack_ready | bool else 'NOT READY' }}
-
-    # ------------------------------------------------------------------
-    # 3. Check ClusterLogForwarder readiness
-    # ------------------------------------------------------------------
-    - name: Check ClusterLogForwarder CR
-      kubernetes.core.k8s_info:
-        api_version: observability.openshift.io/v1
-        kind: ClusterLogForwarder
-        namespace: "{{ logging_ns }}"
-      register: clf_result
-      failed_when: false
-
-    - name: Evaluate ClusterLogForwarder status
-      ansible.builtin.set_fact:
-        clf_ready: >-
-          {{ clf_result.resources | default([])
-             | selectattr('status.conditions', 'defined')
-             | map(attribute='status.conditions') | flatten
-             | selectattr('type', 'equalto', 'Ready')
-             | selectattr('status', 'equalto', 'True')
-             | list | length > 0 }}
-
-    - name: Report ClusterLogForwarder status
-      ansible.builtin.debug:
-        msg: >-
-          ClusterLogForwarder: {{ 'READY' if clf_ready | bool else 'NOT READY' }}
-
-    # ------------------------------------------------------------------
-    # 4. Ensure student namespace exists
+    # 1. Ensure student namespace exists
     # ------------------------------------------------------------------
     - name: Ensure student namespace exists
       kubernetes.core.k8s:
@@ -104,10 +29,72 @@
       ansible.builtin.debug:
         msg: >-
           Student namespace {{ student_ns }}:
-          {{ 'EXISTS' if ns_result is not failed else 'FAILED TO CREATE – ' + (ns_result.msg | default('unknown error')) }}
+          {{ 'EXISTS' if ns_result is not failed else 'FAILED TO CREATE' }}
 
     # ------------------------------------------------------------------
-    # 5. Delete leftover test pod
+    # 2. Verify S3 credentials ConfigMap is present
+    # ------------------------------------------------------------------
+    - name: Check S3 credentials ConfigMap
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        name: masworld-lab-s3-credentials
+        namespace: showroom
+      register: s3_cm
+      failed_when: false
+
+    - name: Evaluate S3 credentials
+      ansible.builtin.set_fact:
+        s3_ready: "{{ s3_cm.resources | default([]) | length > 0 }}"
+
+    - name: Report S3 credentials status
+      ansible.builtin.debug:
+        msg: >-
+          S3 credentials ConfigMap: {{ 'READY' if s3_ready | bool else 'NOT FOUND – contact facilitator' }}
+
+    # ------------------------------------------------------------------
+    # 3. Verify operator catalog sources are available
+    # ------------------------------------------------------------------
+    - name: Check redhat-operators CatalogSource
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: CatalogSource
+        name: redhat-operators
+        namespace: openshift-marketplace
+      register: catalog_result
+      failed_when: false
+
+    - name: Evaluate catalog availability
+      ansible.builtin.set_fact:
+        catalog_ready: "{{ catalog_result.resources | default([]) | length > 0 }}"
+
+    - name: Report catalog status
+      ansible.builtin.debug:
+        msg: >-
+          Operator catalog (redhat-operators): {{ 'AVAILABLE' if catalog_ready | bool else 'NOT FOUND – operator installs may fail' }}
+
+    # ------------------------------------------------------------------
+    # 4. Verify lab user has permissions for operator namespaces
+    # ------------------------------------------------------------------
+    - name: Check lab user ClusterRoleBinding
+      kubernetes.core.k8s_info:
+        api_version: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        name: "{{ lab_username }}-masworld-lab-operator"
+      register: lab_crb
+      failed_when: false
+
+    - name: Evaluate lab user RBAC
+      ansible.builtin.set_fact:
+        rbac_ready: "{{ lab_crb.resources | default([]) | length > 0 }}"
+
+    - name: Report RBAC status
+      ansible.builtin.debug:
+        msg: >-
+          Lab user RBAC ({{ lab_username }}): {{ 'CONFIGURED' if rbac_ready | bool else 'NOT FOUND – contact facilitator' }}
+
+    # ------------------------------------------------------------------
+    # 5. Delete leftover test pod from previous attempts
     # ------------------------------------------------------------------
     - name: Delete leftover log-test pod if present
       kubernetes.core.k8s:
@@ -132,11 +119,13 @@
       ansible.builtin.debug:
         msg: |
           ============================================================
-          OBSERVABILITY EXERCISE – READINESS STATUS (seat {{ seat_padded }})
+          OBSERVABILITY EXERCISE – PREREQUISITES (seat {{ seat_padded }})
           ============================================================
-          Logging operator CSVs : {{ 'READY' if csv_ready | bool else 'NOT READY' }}
-          LokiStack             : {{ 'READY' if lokistack_ready | bool else 'NOT READY' }}
-          ClusterLogForwarder   : {{ 'READY' if clf_ready | bool else 'NOT READY' }}
-          Student namespace     : {{ student_ns }}
+          Student namespace     : {{ 'READY' if ns_result is not failed else 'FAILED' }}
+          S3 credentials        : {{ 'READY' if s3_ready | bool else 'NOT FOUND' }}
+          Operator catalog      : {{ 'AVAILABLE' if catalog_ready | bool else 'NOT FOUND' }}
+          Lab user RBAC         : {{ 'CONFIGURED' if rbac_ready | bool else 'NOT FOUND' }}
           Leftover test pod     : {{ 'cleaned up' if pod_cleanup.changed | default(false) else 'none (clean)' }}
           ============================================================
+          Operators are NOT pre-installed. You will install them
+          during this exercise.

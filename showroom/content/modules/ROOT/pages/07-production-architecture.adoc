@@ -24,16 +24,16 @@ This workshop demonstrates concepts at conference scale. A production deployment
 | Managed database service or dedicated HA Db2
 
 | Identity
-| htpasswd + Keycloak demo
+| Keycloak + OpenLDAP demo
 | Enterprise IdP (SAML/OIDC) with MFA
 
-| Logging retention
-| Hours (event duration)
-| 30-90+ days per compliance policy
+| Logging
+| Student-installed (Logging + Loki + COO, `1x.extra-small`)
+| Pre-deployed with `1x.medium`+, 30-90 day retention, SIEM integration
 
 | Storage
-| Default StorageClass
-| Production-grade storage with backup
+| Default StorageClass + single S3 bucket per cluster
+| Production-grade storage with lifecycle policies and backup
 
 | Updates
 | Pinned for stability
@@ -68,7 +68,7 @@ The following are reference guidelines. Actual sizing depends on your workload.
 . RHACM enables fleet-wide governance and visibility
 . OpenShift Logging with Loki provides scalable observability
 . Identity integration connects MAS to enterprise directories
-. Automation (Ansible, operators) ensures consistent, repeatable deployments
+. Automation (Ansible, operators, GitOps) ensures consistent, repeatable deployments
 
 == Additional Resources
 

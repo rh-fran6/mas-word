@@ -1,0 +1,278 @@
+---
+# Lab Accounts: create per-seat Keycloak user with scoped RBAC for operator exercises
+- name: Create lab accounts
+  block:
+    - name: Resolve lab username
+      ansible.builtin.set_fact:
+        _lab_username: "{{ masworld_lab_username_prefix }}{{ masworld_seat_number }}"
+
+    - name: Resolve student namespace
+      ansible.builtin.set_fact:
+        _lab_student_ns: "student-{{ masworld_seat_number | pad(2) }}"
+
+    # ── Check for existing credentials ────────────────────────────────
+    - name: Check if lab credentials secret exists
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "{{ masworld_lab_credentials_secret_name }}"
+        namespace: "{{ masworld_lab_credentials_namespace }}"
+      register: _existing_lab_creds
+
+    - name: Use existing lab password
+      ansible.builtin.set_fact:
+        _lab_password: "{{ _existing_lab_creds.resources[0].data.password | b64decode }}"
+      when: _existing_lab_creds.resources | length > 0
+      no_log: true
+
+    - name: Generate lab password (first run only)
+      ansible.builtin.set_fact:
+        _lab_password: "{{ lookup('ansible.builtin.password', '/dev/null length=' + (masworld_lab_password_length | string) + ' chars=ascii_letters,digits') }}"
+      when: _existing_lab_creds.resources | length == 0
+      no_log: true
+
+    # ── Ensure showroom namespace exists ───────────────────────────────
+    - name: Ensure lab credentials namespace exists
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: "{{ masworld_lab_credentials_namespace }}"
+        state: present
+      failed_when: false
+
+    # ── Store credentials in Secret ───────────────────────────────────
+    - name: Create lab credentials secret
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ masworld_lab_credentials_secret_name }}"
+            namespace: "{{ masworld_lab_credentials_namespace }}"
+            labels:
+              masworld.redhat.com/component: lab-accounts
+          type: Opaque
+          stringData:
+            username: "{{ _lab_username }}"
+            password: "{{ _lab_password }}"
+      no_log: true
+
+    # ── Get Keycloak admin credentials ────────────────────────────────
+    - name: Read Keycloak admin secret
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: keycloak-admin-secret
+        namespace: "{{ masworld_keycloak_namespace }}"
+      register: _kc_admin_secret
+      failed_when: _kc_admin_secret.resources | length == 0
+
+    - name: Extract admin credentials
+      ansible.builtin.set_fact:
+        _kc_admin_user: "{{ _kc_admin_secret.resources[0].data.username | b64decode }}"
+        _kc_admin_pass: "{{ _kc_admin_secret.resources[0].data.password | b64decode }}"
+      no_log: true
+
+    # ── Get Keycloak route URL ────────────────────────────────────────
+    - name: Get Keycloak route
+      kubernetes.core.k8s_info:
+        api_version: route.openshift.io/v1
+        kind: Route
+        namespace: "{{ masworld_keycloak_namespace }}"
+      register: _kc_routes
+
+    - name: Set Keycloak URL
+      ansible.builtin.set_fact:
+        _kc_url: "https://{{ (_kc_routes.resources | first).spec.host }}"
+      when: _kc_routes.resources | length > 0
+
+    # ── Get admin access token ────────────────────────────────────────
+    - name: Obtain Keycloak admin token
+      ansible.builtin.uri:
+        url: "{{ _kc_url }}/realms/master/protocol/openid-connect/token"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          grant_type: password
+          client_id: admin-cli
+          username: "{{ _kc_admin_user }}"
+          password: "{{ _kc_admin_pass }}"
+        validate_certs: false
+        status_code: [200]
+      register: _kc_token
+      retries: 3
+      delay: 10
+      until: _kc_token is not failed
+      no_log: true
+
+    # ── Check if user already exists ──────────────────────────────────
+    - name: Check if lab user exists in Keycloak
+      ansible.builtin.uri:
+        url: "{{ _kc_url }}/admin/realms/{{ masworld_keycloak_realm }}/users?username={{ _lab_username }}&exact=true"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ _kc_token.json.access_token }}"
+        validate_certs: false
+        status_code: [200]
+      register: _kc_user_check
+      no_log: true
+
+    # ── Create user if not exists ─────────────────────────────────────
+    - name: Create lab user in Keycloak
+      ansible.builtin.uri:
+        url: "{{ _kc_url }}/admin/realms/{{ masworld_keycloak_realm }}/users"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ _kc_token.json.access_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          username: "{{ _lab_username }}"
+          enabled: true
+          emailVerified: true
+          firstName: "Lab"
+          lastName: "Seat {{ masworld_seat_number }}"
+          email: "{{ _lab_username }}@masworld.example.com"
+          credentials:
+            - type: password
+              value: "{{ _lab_password }}"
+              temporary: false
+        validate_certs: false
+        status_code: [201]
+      when: _kc_user_check.json | length == 0
+      no_log: true
+
+    # ── Update password if user exists ────────────────────────────────
+    - name: Update lab user password in Keycloak
+      when: _kc_user_check.json | length > 0
+      block:
+        - name: Set existing user ID
+          ansible.builtin.set_fact:
+            _kc_user_id: "{{ _kc_user_check.json[0].id }}"
+
+        - name: Reset lab user password
+          ansible.builtin.uri:
+            url: "{{ _kc_url }}/admin/realms/{{ masworld_keycloak_realm }}/users/{{ _kc_user_id }}/reset-password"
+            method: PUT
+            headers:
+              Authorization: "Bearer {{ _kc_token.json.access_token }}"
+              Content-Type: application/json
+            body_format: json
+            body:
+              type: password
+              value: "{{ _lab_password }}"
+              temporary: false
+            validate_certs: false
+            status_code: [204]
+          no_log: true
+
+    # ── Create ClusterRoles ───────────────────────────────────────────
+    - name: Create lab operator ClusterRole
+      kubernetes.core.k8s:
+        state: present
+        template: lab-clusterrole.yml.j2
+
+    - name: Create lab namespace admin ClusterRole
+      kubernetes.core.k8s:
+        state: present
+        template: lab-ns-role.yml.j2
+
+    # ── ClusterRoleBinding for cluster-scoped permissions ─────────────
+    - name: Create ClusterRoleBinding for lab user
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: "{{ _lab_username }}-{{ masworld_lab_clusterrole_name }}"
+            labels:
+              masworld.redhat.com/component: lab-accounts
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: "{{ masworld_lab_clusterrole_name }}"
+          subjects:
+            - apiGroup: rbac.authorization.k8s.io
+              kind: User
+              name: "{{ _lab_username }}"
+
+    # ── RoleBindings for namespace-scoped write permissions ───────────
+    - name: Ensure openshift-logging namespace exists
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Namespace
+        name: openshift-logging
+        state: present
+      failed_when: false
+
+    - name: Create RoleBindings for operator namespaces
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          metadata:
+            name: "{{ _lab_username }}-ns-admin"
+            namespace: "{{ item }}"
+            labels:
+              masworld.redhat.com/component: lab-accounts
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: "{{ masworld_lab_clusterrole_name }}-ns-admin"
+          subjects:
+            - apiGroup: rbac.authorization.k8s.io
+              kind: User
+              name: "{{ _lab_username }}"
+      loop:
+        - openshift-logging
+        - openshift-operators
+        - openshift-operators-redhat
+
+    # ── RoleBinding for student namespace ──────────────────────────────
+    - name: Create RoleBinding for lab user in student namespace
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          metadata:
+            name: "{{ _lab_username }}-admin"
+            namespace: "{{ _lab_student_ns }}"
+            labels:
+              masworld.redhat.com/component: lab-accounts
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: admin
+          subjects:
+            - apiGroup: rbac.authorization.k8s.io
+              kind: User
+              name: "{{ _lab_username }}"
+
+    # ── Success ───────────────────────────────────────────────────────
+    - name: Set lab accounts created facts
+      ansible.builtin.set_fact:
+        lab_accounts_created: true
+        lab_credentials:
+          username: "{{ _lab_username }}"
+          password: "{{ _lab_password }}"
+      no_log: true
+
+    - name: Report lab account created
+      ansible.builtin.debug:
+        msg: "Lab account {{ _lab_username }} created in Keycloak realm {{ masworld_keycloak_realm }} with scoped RBAC."
+
+  rescue:
+    - name: Set lab accounts failed facts
+      ansible.builtin.set_fact:
+        lab_accounts_created: false
+        lab_credentials: {}
+
+    - name: Report lab accounts failure
+      ansible.builtin.fail:
+        msg: >-
+          Lab account creation failed for seat {{ masworld_seat_number }}:
+          {{ ansible_failed_result.msg | default('unknown error') }}.

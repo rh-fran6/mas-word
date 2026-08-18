@@ -46,8 +46,8 @@ def config_dir(tmp_path: Path) -> Path:
         "components": {
             "mas": {
                 "enabled": True,
-                "version": "9.1.x",
-                "channel": "9.1.x",
+                "version": "9.2.x",
+                "channel": "9.2.x",
                 "install_core": True,
                 "install_manage": True,
                 "catalog_source": "ibm-operator-catalog",

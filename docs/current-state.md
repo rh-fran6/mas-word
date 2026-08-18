@@ -84,15 +84,15 @@ Last updated: 2026-07-20 (session 4)
 ## Identity
 
 - `roles/identity_demo/` — deploys per-cluster:
-  - Keycloak operator (community-operators, fast channel)
-  - Keycloak CR instance (`k8s.keycloak.org/v2alpha1`)
-  - OpenLDAP server (bitnami/openldap:2.6) with 4 pre-populated demo users and 2 groups
+  - RHBK operator (redhat-operators, stable-v26.0 channel)
+  - Keycloak CR instance (`k8s.keycloak.org/v2beta1`)
+  - 389 Directory Server (quay.io/389ds/dirsrv:c9s) with 4 pre-populated demo users and 2 groups
   - KeycloakRealmImport with LDAP user federation (UserStorageProvider with attribute mappers + group mapper)
   - OIDC client for OpenShift OAuth integration
-  - OpenShift OAuth CR patched to include Keycloak as OpenID Connect identity provider
+  - HCP-aware IDP wiring: ROSA CLI (`rosa create idp --type=openid`) for HCP clusters, direct OAuth CR patch for non-HCP
   - Full chain: LDAP → Keycloak → OpenShift OAuth → MAS
-- `roles/student_accounts/` — htpasswd generation, OAuth CR patching, namespace + RBAC per seat
-- Status: SCAFFOLDED — requires live cluster (blocker B-02)
+- `roles/student_accounts/` — htpasswd generation, HCP-aware IDP wiring (ROSA CLI for HCP, OAuth CR patch for non-HCP), namespace + RBAC per seat
+- Status: LIVE CLUSTER TESTING — RHBK, 389ds, realm import all verified working on 9 clusters; OIDC IDP wiring via ROSA CLI pending test
 
 ## Showroom
 

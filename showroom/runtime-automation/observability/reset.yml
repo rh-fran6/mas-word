@@ -1,6 +1,7 @@
 ---
 # Observability exercise – reset
-# Cleans up the exercise so the student can start over.
+# Removes all student-installed logging components so they can start over.
+# NEVER touches MAS namespaces, Db2, Keycloak, LDAP, or Showroom.
 - name: Reset observability exercise
   hosts: localhost
   connection: local
@@ -9,36 +10,238 @@
   vars:
     seat_padded: "{{ '%02d' | format(seat_number | int) }}"
     student_ns: "student-{{ seat_padded }}"
-    pod_name: "log-test-{{ seat_padded }}"
+    logging_ns: openshift-logging
 
   tasks:
     # ------------------------------------------------------------------
-    # 1. Delete log-test pod if it exists
+    # 1. Delete log-test pod
     # ------------------------------------------------------------------
-    - name: Delete log-test pod from student namespace
+    - name: Delete log-test pod
       kubernetes.core.k8s:
         api_version: v1
         kind: Pod
-        name: "{{ pod_name }}"
+        name: "log-test-{{ seat_padded }}"
         namespace: "{{ student_ns }}"
         state: absent
-      register: pod_delete
       failed_when: false
 
-    - name: Report cleanup result
-      ansible.builtin.debug:
-        msg: >-
-          {{ 'Deleted pod ' + pod_name + ' from ' + student_ns
-             if pod_delete.changed | default(false)
-             else 'No log-test pod found in ' + student_ns + ' (already clean)' }}
+    # ------------------------------------------------------------------
+    # 2. Delete UIPlugin
+    # ------------------------------------------------------------------
+    - name: Delete UIPlugin
+      kubernetes.core.k8s:
+        api_version: observability.openshift.io/v1alpha1
+        kind: UIPlugin
+        name: logging
+        state: absent
+      failed_when: false
 
     # ------------------------------------------------------------------
-    # 2. Confirmation
+    # 3. Delete ClusterLogForwarder
+    # ------------------------------------------------------------------
+    - name: Delete ClusterLogForwarder
+      kubernetes.core.k8s:
+        api_version: observability.openshift.io/v1
+        kind: ClusterLogForwarder
+        name: collector
+        namespace: "{{ logging_ns }}"
+        state: absent
+      failed_when: false
+
+    - name: Wait for collector pods to terminate
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ logging_ns }}"
+        label_selectors:
+          - app.kubernetes.io/component=collector
+      register: collector_pods
+      until: collector_pods.resources | default([]) | length == 0
+      retries: 12
+      delay: 10
+      failed_when: false
+
+    # ------------------------------------------------------------------
+    # 4. Delete LokiStack
+    # ------------------------------------------------------------------
+    - name: Delete LokiStack
+      kubernetes.core.k8s:
+        api_version: loki.grafana.com/v1
+        kind: LokiStack
+        name: logging-loki
+        namespace: "{{ logging_ns }}"
+        state: absent
+      failed_when: false
+
+    - name: Wait for LokiStack pods to terminate
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ logging_ns }}"
+        label_selectors:
+          - app.kubernetes.io/instance=logging-loki
+      register: loki_pods
+      until: loki_pods.resources | default([]) | length == 0
+      retries: 30
+      delay: 10
+      failed_when: false
+
+    # ------------------------------------------------------------------
+    # 5. Delete S3 storage secret (student-created, not the ConfigMap)
+    # ------------------------------------------------------------------
+    - name: Delete S3 storage secret
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: Secret
+        name: logging-loki-s3
+        namespace: "{{ logging_ns }}"
+        state: absent
+      failed_when: false
+
+    # ------------------------------------------------------------------
+    # 6. Delete collector ServiceAccount and ClusterRoleBindings
+    # ------------------------------------------------------------------
+    - name: Remove collector ClusterRoleBindings
+      ansible.builtin.command:
+        cmd: "oc adm policy remove-cluster-role-from-user {{ item }} -z collector -n {{ logging_ns }}"
+      loop:
+        - collect-application-logs
+        - collect-infrastructure-logs
+        - collect-audit-logs
+      changed_when: true
+      failed_when: false
+
+    - name: Delete collector ServiceAccount
+      kubernetes.core.k8s:
+        api_version: v1
+        kind: ServiceAccount
+        name: collector
+        namespace: "{{ logging_ns }}"
+        state: absent
+      failed_when: false
+
+    # ------------------------------------------------------------------
+    # 7. Delete operator Subscriptions
+    # ------------------------------------------------------------------
+    - name: Delete Logging Operator Subscription
+      kubernetes.core.k8s:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: cluster-logging
+        namespace: "{{ logging_ns }}"
+        state: absent
+      failed_when: false
+
+    - name: Delete Loki Operator Subscription
+      kubernetes.core.k8s:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: loki-operator
+        namespace: "{{ logging_ns }}"
+        state: absent
+      failed_when: false
+
+    - name: Delete COO Subscription
+      kubernetes.core.k8s:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: cluster-observability-operator
+        namespace: openshift-operators
+        state: absent
+      failed_when: false
+
+    # ------------------------------------------------------------------
+    # 8. Delete operator CSVs
+    # ------------------------------------------------------------------
+    - name: Find Logging operator CSVs
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        namespace: "{{ logging_ns }}"
+      register: logging_csvs
+      failed_when: false
+
+    - name: Delete logging-related CSVs
+      kubernetes.core.k8s:
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        name: "{{ item.metadata.name }}"
+        namespace: "{{ logging_ns }}"
+        state: absent
+      loop: "{{ logging_csvs.resources | default([]) }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      failed_when: false
+
+    - name: Find COO CSVs
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        namespace: openshift-operators
+      register: coo_csvs
+      failed_when: false
+
+    - name: Delete COO CSVs
+      kubernetes.core.k8s:
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        name: "{{ item.metadata.name }}"
+        namespace: openshift-operators
+        state: absent
+      loop: >-
+        {{ coo_csvs.resources | default([])
+           | selectattr('metadata.name', 'search', 'cluster-observability-operator')
+           | list }}
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      failed_when: false
+
+    # ------------------------------------------------------------------
+    # 9. Delete student-created OperatorGroup (keep only if pre-existing)
+    # ------------------------------------------------------------------
+    - name: Check OperatorGroup in logging namespace
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1
+        kind: OperatorGroup
+        namespace: "{{ logging_ns }}"
+      register: og_result
+      failed_when: false
+
+    - name: Delete student-created OperatorGroup
+      kubernetes.core.k8s:
+        api_version: operators.coreos.com/v1
+        kind: OperatorGroup
+        name: openshift-logging
+        namespace: "{{ logging_ns }}"
+        state: absent
+      when: og_result.resources | default([]) | length > 0
+      failed_when: false
+
+    # ------------------------------------------------------------------
+    # 10. Confirmation
     # ------------------------------------------------------------------
     - name: Reset confirmation
       ansible.builtin.debug:
         msg: |
           ============================================================
-          Observability exercise reset. You can re-run the exercise
-          from the beginning.
+          OBSERVABILITY EXERCISE – RESET COMPLETE (seat {{ seat_padded }})
           ============================================================
+          Removed:
+            - UIPlugin (logging)
+            - ClusterLogForwarder (collector)
+            - LokiStack (logging-loki)
+            - S3 storage secret (logging-loki-s3)
+            - Collector ServiceAccount and ClusterRoleBindings
+            - Operator Subscriptions (Logging, Loki, COO)
+            - Operator CSVs
+            - OperatorGroup (openshift-logging)
+            - Log-test pod
+
+          NOT touched:
+            - MAS namespaces (mas-inst1-core, mas-inst1-manage)
+            - Db2
+            - Keycloak / OpenLDAP
+            - Showroom
+            - S3 credentials ConfigMap (showroom namespace)
+          ============================================================
+          The student can now re-run Exercise 5 from the beginning.

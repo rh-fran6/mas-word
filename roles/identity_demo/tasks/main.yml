@@ -1,5 +1,5 @@
 ---
-# Identity Demo: Keycloak for IdP exercise
+# Identity Demo: RHBK (Red Hat Build of Keycloak) + PostgreSQL + LDAP for IdP exercise
 - name: Deploy identity demo components
   block:
     # ── Create Keycloak Namespace ───────────────────────────────────────
@@ -14,8 +14,53 @@
             labels:
               masworld.redhat.com/component: identity-demo
 
-    # ── Deploy Keycloak Operator ────────────────────────────────────────
-    - name: Create Keycloak OperatorGroup
+    # ── Clean up leftover community Keycloak resources ──────────────────
+    - name: Remove leftover community keycloak-operator Subscription
+      kubernetes.core.k8s:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: keycloak-operator
+        namespace: "{{ masworld_keycloak_namespace }}"
+        state: absent
+      failed_when: false
+
+    - name: Remove orphaned keycloak-operator deployment
+      kubernetes.core.k8s:
+        api_version: apps/v1
+        kind: Deployment
+        name: keycloak-operator
+        namespace: "{{ masworld_keycloak_namespace }}"
+        state: absent
+      failed_when: false
+
+    # ── Auto-detect operator channel from PackageManifest ─────────────
+    - name: Query RHBK operator PackageManifest
+      kubernetes.core.k8s_info:
+        api_version: packages.operators.coreos.com/v1
+        kind: PackageManifest
+        name: "{{ masworld_keycloak_operator_name }}"
+        namespace: openshift-marketplace
+      register: _masworld_kc_pkg
+      failed_when: false
+
+    - name: Resolve RHBK operator channel from catalog
+      ansible.builtin.set_fact:
+        _masworld_kc_channel: >-
+          {{ _masworld_kc_pkg.resources[0].status.defaultChannel
+             | default(masworld_keycloak_operator_channel) }}
+      when: (_masworld_kc_pkg.resources | default([])) | length > 0
+
+    - name: Fall back to configured channel
+      ansible.builtin.set_fact:
+        _masworld_kc_channel: "{{ masworld_keycloak_operator_channel }}"
+      when: (_masworld_kc_pkg.resources | default([])) | length == 0
+
+    - name: Display resolved operator channel
+      ansible.builtin.debug:
+        msg: "RHBK operator: {{ masworld_keycloak_operator_name }} channel={{ _masworld_kc_channel }} source={{ masworld_keycloak_operator_source }}"
+
+    # ── Deploy RHBK Operator ─────────────────────────────────────────
+    - name: Create RHBK OperatorGroup
       kubernetes.core.k8s:
         state: present
         definition:
@@ -28,36 +73,217 @@
             targetNamespaces:
               - "{{ masworld_keycloak_namespace }}"
 
-    - name: Deploy Keycloak operator Subscription
+    - name: Deploy RHBK operator Subscription
       kubernetes.core.k8s:
         state: present
         definition:
           apiVersion: operators.coreos.com/v1alpha1
           kind: Subscription
           metadata:
-            name: keycloak-operator
+            name: "{{ masworld_keycloak_operator_name }}"
             namespace: "{{ masworld_keycloak_namespace }}"
           spec:
-            channel: "{{ masworld_keycloak_operator_channel }}"
-            name: keycloak-operator
-            source: community-operators
+            channel: "{{ _masworld_kc_channel }}"
+            name: "{{ masworld_keycloak_operator_name }}"
+            source: "{{ masworld_keycloak_operator_source }}"
             sourceNamespace: openshift-marketplace
             installPlanApproval: Automatic
 
-    # ── Wait for Keycloak Operator Ready ────────────────────────────────
-    - name: Wait for Keycloak operator deployment to be available
+    # ── Wait for OLM to resolve and install the operator ──────────────
+    - name: Wait for Subscription to resolve an installable CSV
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: "{{ masworld_keycloak_operator_name }}"
+        namespace: "{{ masworld_keycloak_namespace }}"
+      register: _masworld_kc_sub
+      until:
+        - _masworld_kc_sub.resources | length > 0
+        - _masworld_kc_sub.resources[0].status.installedCSV is defined
+        - _masworld_kc_sub.resources[0].status.installedCSV | default('') | length > 0
+      retries: 20
+      delay: 15
+
+    - name: Wait for RHBK CSV to reach Succeeded phase
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        name: "{{ _masworld_kc_sub.resources[0].status.installedCSV }}"
+        namespace: "{{ masworld_keycloak_namespace }}"
+      register: _masworld_kc_csv
+      until:
+        - _masworld_kc_csv.resources | length > 0
+        - (_masworld_kc_csv.resources[0].status.phase | default('')) == 'Succeeded'
+      retries: 20
+      delay: 15
+
+    - name: Wait for RHBK operator deployment to be available
       kubernetes.core.k8s_info:
         api_version: apps/v1
         kind: Deployment
+        name: rhbk-operator
         namespace: "{{ masworld_keycloak_namespace }}"
-        label_selectors:
-          - "app.kubernetes.io/name=keycloak-operator"
       register: _masworld_keycloak_operator
       until:
         - _masworld_keycloak_operator.resources | length > 0
         - (_masworld_keycloak_operator.resources[0].status.availableReplicas | default(0)) >= 1
       retries: "{{ masworld_keycloak_ready_retries }}"
       delay: "{{ masworld_keycloak_ready_delay }}"
+
+    - name: Display installed RHBK operator version
+      ansible.builtin.debug:
+        msg: >-
+          RHBK operator CSV: {{ _masworld_kc_csv.resources[0].metadata.name }}
+          (API: k8s.keycloak.org/v2beta1)
+
+    # ── Deploy PostgreSQL for Keycloak ─────────────────────────────────
+    - name: Check if Keycloak DB secret exists
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: keycloak-db-secret
+        namespace: "{{ masworld_keycloak_namespace }}"
+      register: _existing_keycloak_db_secret
+
+    - name: Use existing Keycloak DB password
+      ansible.builtin.set_fact:
+        _masworld_keycloak_db_password: "{{ _existing_keycloak_db_secret.resources[0].data.password | b64decode }}"
+      when: _existing_keycloak_db_secret.resources | length > 0
+      no_log: true
+
+    - name: Generate Keycloak DB password (first run only)
+      ansible.builtin.set_fact:
+        _masworld_keycloak_db_password: "{{ lookup('ansible.builtin.password', '/dev/null length=24 chars=ascii_letters,digits') }}"
+      when: _existing_keycloak_db_secret.resources | length == 0
+      no_log: true
+
+    - name: Create Keycloak DB credentials secret
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: keycloak-db-secret
+            namespace: "{{ masworld_keycloak_namespace }}"
+            labels:
+              masworld.redhat.com/component: identity-demo
+          type: Opaque
+          stringData:
+            username: keycloak
+            password: "{{ _masworld_keycloak_db_password }}"
+            POSTGRES_DATABASE: "{{ masworld_keycloak_db_name }}"
+            POSTGRES_EXTERNAL_ADDRESS: masworld-keycloak-db
+            POSTGRES_EXTERNAL_PORT: "5432"
+            POSTGRES_HOST: masworld-keycloak-db
+            POSTGRES_USERNAME: keycloak
+            POSTGRES_PASSWORD: "{{ _masworld_keycloak_db_password }}"
+            POSTGRES_SUPERUSER: "false"
+      no_log: true
+
+    - name: Deploy PostgreSQL for Keycloak
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: keycloak-postgresql
+            namespace: "{{ masworld_keycloak_namespace }}"
+            labels:
+              app: keycloak-postgresql
+              masworld.redhat.com/component: identity-demo
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: keycloak-postgresql
+            strategy:
+              type: Recreate
+            template:
+              metadata:
+                labels:
+                  app: keycloak-postgresql
+                  masworld.redhat.com/component: identity-demo
+              spec:
+                containers:
+                  - name: postgresql
+                    image: "{{ masworld_keycloak_db_image }}"
+                    ports:
+                      - containerPort: 5432
+                        protocol: TCP
+                    env:
+                      - name: POSTGRESQL_USER
+                        valueFrom:
+                          secretKeyRef:
+                            name: keycloak-db-secret
+                            key: username
+                      - name: POSTGRESQL_PASSWORD
+                        valueFrom:
+                          secretKeyRef:
+                            name: keycloak-db-secret
+                            key: password
+                      - name: POSTGRESQL_DATABASE
+                        value: "{{ masworld_keycloak_db_name }}"
+                    resources:
+                      requests:
+                        cpu: 100m
+                        memory: 256Mi
+                      limits:
+                        cpu: 500m
+                        memory: 512Mi
+                    readinessProbe:
+                      exec:
+                        command:
+                          - /usr/libexec/check-container
+                      initialDelaySeconds: 5
+                      periodSeconds: 10
+                    livenessProbe:
+                      exec:
+                        command:
+                          - /usr/libexec/check-container
+                          - --live
+                      initialDelaySeconds: 120
+                      periodSeconds: 10
+                    volumeMounts:
+                      - name: pgdata
+                        mountPath: /var/lib/pgsql/data
+                volumes:
+                  - name: pgdata
+                    emptyDir: {}
+
+    - name: Create PostgreSQL Service for Keycloak
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: masworld-keycloak-db
+            namespace: "{{ masworld_keycloak_namespace }}"
+            labels:
+              app: keycloak-postgresql
+              masworld.redhat.com/component: identity-demo
+          spec:
+            selector:
+              app: keycloak-postgresql
+            ports:
+              - port: 5432
+                targetPort: 5432
+                protocol: TCP
+
+    - name: Wait for PostgreSQL to be ready
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: keycloak-postgresql
+        namespace: "{{ masworld_keycloak_namespace }}"
+      register: _masworld_keycloak_pg
+      until:
+        - _masworld_keycloak_pg.resources | length > 0
+        - (_masworld_keycloak_pg.resources[0].status.availableReplicas | default(0)) >= 1
+      retries: 20
+      delay: 15
 
     # ── Keycloak Admin Password (idempotent: reuse existing) ─────────────
     - name: Check if Keycloak admin secret exists
@@ -95,31 +321,91 @@
             password: "{{ _masworld_keycloak_admin_password }}"
       no_log: true
 
-    # ── Create Keycloak CR Instance ─────────────────────────────────────
+    # ── Deploy Keycloak CR ─────────────────────────────────────────────
+    - name: Check existing Keycloak CR state
+      kubernetes.core.k8s_info:
+        api_version: k8s.keycloak.org/v2beta1
+        kind: Keycloak
+        name: masworld-keycloak
+        namespace: "{{ masworld_keycloak_namespace }}"
+      register: _masworld_kc_existing
+      failed_when: false
+
+    - name: Delete stuck Keycloak CR if Ready=False
+      kubernetes.core.k8s:
+        api_version: k8s.keycloak.org/v2beta1
+        kind: Keycloak
+        name: masworld-keycloak
+        namespace: "{{ masworld_keycloak_namespace }}"
+        state: absent
+        wait: true
+        wait_timeout: 120
+      when:
+        - _masworld_kc_existing.resources | default([]) | length > 0
+        - _masworld_kc_existing.resources[0].status.conditions | default([])
+          | selectattr('type', 'equalto', 'Ready')
+          | selectattr('status', 'equalto', 'False')
+          | selectattr('message', 'defined')
+          | list | length > 0
+      failed_when: false
+
+    # ── Detect cluster ingress domain for Keycloak hostname ────────────
+    - name: Get cluster Ingress domain for Keycloak hostname
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: Ingress
+        name: cluster
+      register: _masworld_kc_cluster_ingress
+
+    - name: Set Keycloak hostname from cluster ingress domain
+      ansible.builtin.set_fact:
+        _masworld_keycloak_hostname: >-
+          masworld-keycloak-ingress-{{ masworld_keycloak_namespace }}.{{ _masworld_kc_cluster_ingress.resources[0].spec.domain }}
+      when: (_masworld_kc_cluster_ingress.resources | default([])) | length > 0
+
     - name: Create Keycloak CR instance
       kubernetes.core.k8s:
         state: present
         definition:
-          apiVersion: k8s.keycloak.org/v2alpha1
+          apiVersion: k8s.keycloak.org/v2beta1
           kind: Keycloak
           metadata:
             name: masworld-keycloak
             namespace: "{{ masworld_keycloak_namespace }}"
             labels:
+              app: masworld-sso
               masworld.redhat.com/component: identity-demo
           spec:
             instances: 1
             db:
               vendor: postgres
+              host: masworld-keycloak-db
+              port: 5432
+              database: "{{ masworld_keycloak_db_name }}"
+              usernameSecret:
+                name: keycloak-db-secret
+                key: username
+              passwordSecret:
+                name: keycloak-db-secret
+                key: password
+            transaction:
+              xaEnabled: false
             http:
               httpEnabled: true
+            proxy:
+              headers: xforwarded
             hostname:
-              strict: false
+              hostname: "{{ _masworld_keycloak_hostname }}"
+            ingress:
+              enabled: true
+            bootstrapAdmin:
+              secret:
+                name: keycloak-admin-secret
 
-    # ── Wait for Keycloak Ready ─────────────────────────────────────────
+    # ── Wait for Keycloak Ready ────────────────────────────────────────
     - name: Wait for Keycloak instance to be Ready
       kubernetes.core.k8s_info:
-        api_version: k8s.keycloak.org/v2alpha1
+        api_version: k8s.keycloak.org/v2beta1
         kind: Keycloak
         name: masworld-keycloak
         namespace: "{{ masworld_keycloak_namespace }}"
@@ -133,8 +419,8 @@
       retries: "{{ masworld_keycloak_ready_retries }}"
       delay: "{{ masworld_keycloak_ready_delay }}"
 
-    # ── Deploy OpenLDAP for LDAP Sync Demo ─────────────────────────────
-    - name: Create OpenLDAP seed data ConfigMap
+    # ── Deploy 389 Directory Server for LDAP Sync Demo ──────────────────
+    - name: Create LDAP seed data ConfigMap
       kubernetes.core.k8s:
         state: present
         definition:
@@ -146,14 +432,7 @@
             labels:
               masworld.redhat.com/component: identity-demo
           data:
-            base.ldif: |
-              dn: {{ masworld_ldap_base_dn }}
-              objectClass: top
-              objectClass: dcObject
-              objectClass: organization
-              o: MAS World Demo
-              dc: masworld
-
+            00-ous.ldif: |
               dn: {{ masworld_ldap_users_ou }}
               objectClass: top
               objectClass: organizationalUnit
@@ -163,7 +442,7 @@
               objectClass: top
               objectClass: organizationalUnit
               ou: groups
-            users.ldif: |
+            01-users.ldif: |
               {% for user in masworld_ldap_demo_users %}
               dn: uid={{ user.uid }},{{ masworld_ldap_users_ou }}
               objectClass: top
@@ -178,7 +457,7 @@
               departmentNumber: {{ user.department }}
 
               {% endfor %}
-            groups.ldif: |
+            02-groups.ldif: |
               {% for group in masworld_ldap_demo_groups %}
               dn: cn={{ group.cn }},{{ masworld_ldap_groups_ou }}
               objectClass: top
@@ -232,12 +511,36 @@
       no_log: true
       when: masworld_ldap_enabled | bool
 
-    - name: Deploy OpenLDAP pod
+    - name: Check existing openldap deployment for stale containers
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: openldap
+        namespace: "{{ masworld_keycloak_namespace }}"
+      register: _masworld_ldap_existing
+      when: masworld_ldap_enabled | bool
+
+    - name: Delete stale openldap deployment (has ghost dirsrv or bitnami container)
+      kubernetes.core.k8s:
+        api_version: apps/v1
+        kind: Deployment
+        name: openldap
+        namespace: "{{ masworld_keycloak_namespace }}"
+        state: absent
+        wait: true
+        wait_timeout: 60
+      when:
+        - masworld_ldap_enabled | bool
+        - _masworld_ldap_existing.resources | default([]) | length > 0
+        - (_masworld_ldap_existing.resources[0].spec.template.spec.containers | map(attribute='name') | list | length) != 1
+          or (_masworld_ldap_existing.resources[0].spec.template.spec.containers[0].image | default('')) is not search('389ds')
+
+    - name: Deploy 389 Directory Server
       kubernetes.core.k8s:
         state: present
         definition:
-          apiVersion: v1
-          kind: Pod
+          apiVersion: apps/v1
+          kind: Deployment
           metadata:
             name: openldap
             namespace: "{{ masworld_keycloak_namespace }}"
@@ -245,42 +548,63 @@
               app: openldap
               masworld.redhat.com/component: identity-demo
           spec:
-            containers:
-              - name: openldap
-                image: docker.io/bitnami/openldap:2.6
-                ports:
-                  - containerPort: 1389
-                    name: ldap
-                env:
-                  - name: LDAP_ROOT
-                    value: "{{ masworld_ldap_base_dn }}"
-                  - name: LDAP_ADMIN_DN
-                    value: "{{ masworld_ldap_admin_dn }}"
-                  - name: LDAP_ADMIN_PASSWORD
-                    valueFrom:
-                      secretKeyRef:
-                        name: openldap-admin-secret
-                        key: password
-                  - name: LDAP_CUSTOM_LDIF_DIR
-                    value: /ldifs
-                volumeMounts:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: openldap
+            strategy:
+              type: Recreate
+            template:
+              metadata:
+                labels:
+                  app: openldap
+                  masworld.redhat.com/component: identity-demo
+              spec:
+                securityContext:
+                  runAsNonRoot: true
+                  seccompProfile:
+                    type: RuntimeDefault
+                containers:
+                  - name: openldap
+                    image: "{{ masworld_ldap_image }}"
+                    securityContext:
+                      allowPrivilegeEscalation: false
+                      capabilities:
+                        drop:
+                          - ALL
+                    ports:
+                      - containerPort: "{{ masworld_ldap_port | int }}"
+                        name: ldap
+                    env:
+                      - name: DS_SUFFIX_NAME
+                        value: "{{ masworld_ldap_base_dn }}"
+                      - name: DS_DM_PASSWORD
+                        valueFrom:
+                          secretKeyRef:
+                            name: openldap-admin-secret
+                            key: password
+                    volumeMounts:
+                      - name: seed-data
+                        mountPath: /ldifs
+                        readOnly: true
+                      - name: dsdata
+                        mountPath: /data
+                    resources:
+                      requests:
+                        cpu: 100m
+                        memory: 256Mi
+                      limits:
+                        cpu: 500m
+                        memory: 512Mi
+                volumes:
                   - name: seed-data
-                    mountPath: /ldifs
-                    readOnly: true
-                resources:
-                  requests:
-                    cpu: 100m
-                    memory: 128Mi
-                  limits:
-                    cpu: 200m
-                    memory: 256Mi
-            volumes:
-              - name: seed-data
-                configMap:
-                  name: openldap-seed
+                    configMap:
+                      name: openldap-seed
+                  - name: dsdata
+                    emptyDir: {}
       when: masworld_ldap_enabled | bool
 
-    - name: Create OpenLDAP Service
+    - name: Create LDAP Service
       kubernetes.core.k8s:
         state: present
         definition:
@@ -295,24 +619,56 @@
             selector:
               app: openldap
             ports:
-              - port: 1389
-                targetPort: 1389
+              - port: "{{ masworld_ldap_port | int }}"
+                targetPort: "{{ masworld_ldap_port | int }}"
                 name: ldap
       when: masworld_ldap_enabled | bool
 
-    - name: Wait for OpenLDAP pod to be running
+    - name: Wait for 389 Directory Server to be ready
       kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Pod
+        api_version: apps/v1
+        kind: Deployment
         name: openldap
         namespace: "{{ masworld_keycloak_namespace }}"
-      register: _masworld_ldap_pod
+      register: _masworld_ldap_deploy
       until:
-        - _masworld_ldap_pod.resources | length > 0
-        - _masworld_ldap_pod.resources[0].status.phase == 'Running'
+        - _masworld_ldap_deploy.resources | length > 0
+        - (_masworld_ldap_deploy.resources[0].status.availableReplicas | default(0)) >= 1
       retries: 15
       delay: 10
       when: masworld_ldap_enabled | bool
+
+    # ── Seed LDAP data (idempotent: ldapadd -c continues on duplicates) ──
+    - name: Get LDAP pod name
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ masworld_keycloak_namespace }}"
+        label_selectors:
+          - app=openldap
+        field_selectors:
+          - status.phase=Running
+      register: _masworld_ldap_pods
+      when: masworld_ldap_enabled | bool
+
+    - name: Seed LDAP directory data
+      kubernetes.core.k8s_exec:
+        namespace: "{{ masworld_keycloak_namespace }}"
+        pod: "{{ _masworld_ldap_pods.resources[0].metadata.name }}"
+        command:
+          - /bin/bash
+          - -c
+          - >-
+            for f in $(ls /ldifs/*.ldif 2>/dev/null | sort); do
+              ldapadd -H ldap://localhost:{{ masworld_ldap_port }}
+              -D "{{ masworld_ldap_admin_dn }}"
+              -w "$DS_DM_PASSWORD" -f "$f" -c 2>/dev/null || true;
+            done
+      register: _masworld_ldap_seed
+      failed_when: false
+      when:
+        - masworld_ldap_enabled | bool
+        - (_masworld_ldap_pods.resources | default([])) | length > 0
 
     # ── OIDC Client Secret (idempotent: reuse existing) ──────────────────
     - name: Check if OIDC client secret exists
@@ -379,7 +735,7 @@
                   vendor:
                     - other
                   connectionUrl:
-                    - "ldap://openldap.{{ masworld_keycloak_namespace }}.svc:1389"
+                    - "ldap://openldap.{{ masworld_keycloak_namespace }}.svc:{{ masworld_ldap_port }}"
                   bindDn:
                     - "{{ masworld_ldap_admin_dn }}"
                   bindCredential:
@@ -391,7 +747,7 @@
                   rdnLDAPAttribute:
                     - uid
                   uuidLDAPAttribute:
-                    - entryUUID
+                    - nsUniqueId
                   userObjectClasses:
                     - inetOrgPerson
                   editMode:
@@ -446,15 +802,28 @@
                         drop.non.existing.groups.during.sync: ["false"]
       no_log: true
 
-    - name: Create realm import with LDAP federation and OIDC client
+    - name: Delete existing realm CR to force reimport
+      kubernetes.core.k8s:
+        api_version: k8s.keycloak.org/v2beta1
+        kind: KeycloakRealmImport
+        name: "{{ masworld_identity_demo_realm }}-realm"
+        namespace: "{{ masworld_keycloak_namespace }}"
+        state: absent
+        wait: true
+        wait_timeout: 60
+      failed_when: false
+
+    - name: Create KeycloakRealmImport with LDAP federation and OIDC client
       kubernetes.core.k8s:
         state: present
         definition:
-          apiVersion: k8s.keycloak.org/v2alpha1
+          apiVersion: k8s.keycloak.org/v2beta1
           kind: KeycloakRealmImport
           metadata:
             name: "{{ masworld_identity_demo_realm }}-realm"
             namespace: "{{ masworld_keycloak_namespace }}"
+            labels:
+              masworld.redhat.com/component: identity-demo
           spec:
             keycloakCRName: masworld-keycloak
             realm: "{{ _masworld_realm_spec }}"
@@ -462,7 +831,7 @@
 
     - name: Wait for realm import to complete
       kubernetes.core.k8s_info:
-        api_version: k8s.keycloak.org/v2alpha1
+        api_version: k8s.keycloak.org/v2beta1
         kind: KeycloakRealmImport
         name: "{{ masworld_identity_demo_realm }}-realm"
         namespace: "{{ masworld_keycloak_namespace }}"
@@ -473,7 +842,7 @@
           | selectattr('type', 'equalto', 'Done')
           | selectattr('status', 'equalto', 'True')
           | list | length > 0
-      retries: 20
+      retries: 30
       delay: 15
 
     # ── Store OIDC Client Secret for OAuth Integration ──────────────────
@@ -495,72 +864,190 @@
       when: masworld_keycloak_oidc_enabled | bool
 
     # ── Get Keycloak Route URL ──────────────────────────────────────────
-    - name: Get Keycloak route
+    - name: Get Keycloak routes in namespace
       kubernetes.core.k8s_info:
         api_version: route.openshift.io/v1
         kind: Route
         namespace: "{{ masworld_keycloak_namespace }}"
-        label_selectors:
-          - "app=keycloak"
-      register: _masworld_keycloak_route
+      register: _masworld_keycloak_routes
+      failed_when: false
 
     - name: Set Keycloak URL from route
       ansible.builtin.set_fact:
         keycloak_url: >-
-          https://{{ (_masworld_keycloak_route.resources | first).spec.host
-                     | default('keycloak.' + masworld_keycloak_namespace + '.svc') }}
-      when: _masworld_keycloak_route.resources | length > 0
+          https://{{ (_masworld_keycloak_routes.resources | default([]) | first).spec.host }}
+      when: (_masworld_keycloak_routes.resources | default([])) | length > 0
 
     - name: Set fallback Keycloak URL
       ansible.builtin.set_fact:
-        keycloak_url: "https://masworld-keycloak.{{ masworld_keycloak_namespace }}.svc"
-      when: _masworld_keycloak_route.resources | length == 0
+        keycloak_url: "https://keycloak.{{ masworld_keycloak_namespace }}.svc"
+      when: (_masworld_keycloak_routes.resources | default([])) | length == 0
 
-    # ── Wire Keycloak as OIDC Provider in OpenShift OAuth ──────────────
-    - name: Get current OAuth identity providers
+    # ── Detect ROSA Hosted Control Plane ──────────────────────────────
+    # On ROSA HCP the OAuth CR is immutable from the guest cluster;
+    # identity providers must be added via the ROSA CLI / OCM API.
+    - name: Check cluster control plane topology
       kubernetes.core.k8s_info:
         api_version: config.openshift.io/v1
-        kind: OAuth
+        kind: Infrastructure
         name: cluster
-      register: _masworld_oauth_cr
+      register: _masworld_infra_cr
       when: masworld_keycloak_oidc_enabled | bool
 
-    - name: Extract existing identity providers (exclude ours if re-running)
+    - name: Set HCP detection flag
       ansible.builtin.set_fact:
-        _masworld_existing_idps: >-
-          {{ _masworld_oauth_cr.resources[0].spec.identityProviders | default([])
-             | rejectattr('name', 'equalto', masworld_keycloak_oidc_provider_name)
-             | list }}
+        _masworld_is_hcp: >-
+          {{ (_masworld_infra_cr.resources | default([{}]) | first)
+             .status.controlPlaneTopology | default('') == 'External' }}
       when: masworld_keycloak_oidc_enabled | bool
 
-    - name: Add Keycloak as OpenID Connect identity provider to OAuth
-      kubernetes.core.k8s:
-        state: present
-        definition:
-          apiVersion: config.openshift.io/v1
-          kind: OAuth
-          metadata:
-            name: cluster
-          spec:
-            identityProviders: "{{ _masworld_existing_idps + [_masworld_keycloak_idp] }}"
-      vars:
-        _masworld_keycloak_idp:
-          name: "{{ masworld_keycloak_oidc_provider_name }}"
-          type: OpenID
-          mappingMethod: claim
-          openID:
-            clientID: "{{ masworld_identity_demo_client_id }}"
-            clientSecret:
-              name: keycloak-oidc-client-secret
-            issuer: "{{ keycloak_url }}/realms/{{ masworld_identity_demo_realm }}"
-            claims:
-              preferredUsername:
-                - preferred_username
-              name:
-                - name
-              email:
-                - email
+    - name: Display control plane topology
+      ansible.builtin.debug:
+        msg: >-
+          Control plane topology: {{ 'Hosted (HCP) — will use ROSA CLI for IDP'
+            if (_masworld_is_hcp | bool) else 'Self-managed — will patch OAuth CR directly' }}
       when: masworld_keycloak_oidc_enabled | bool
+
+    # ── ROSA HCP path: add IDP via rosa CLI ────────────────────────────
+    - name: Add Keycloak OIDC IDP via ROSA CLI (HCP clusters)
+      when:
+        - masworld_keycloak_oidc_enabled | bool
+        - _masworld_is_hcp | bool
+      block:
+        - name: Extract ROSA cluster name from API URL
+          ansible.builtin.set_fact:
+            _masworld_rosa_cluster_name: >-
+              {{ masworld_cluster_api_url | regex_search('api\.([^.]+)\.', '\1') | first }}
+
+        - name: Get ROSA token from bastion host
+          ansible.builtin.command:
+            cmd: >-
+              sshpass -p '{{ cluster.bastion_password }}'
+              ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 -o BatchMode=no
+              {{ cluster.bastion_username }}@{{ cluster.bastion_host }}
+              'rosa token'
+          register: _masworld_rosa_token
+          retries: 3
+          delay: 10
+          until: _masworld_rosa_token.rc == 0 and (_masworld_rosa_token.stdout | default('') | trim | length > 0)
+          changed_when: false
+          no_log: true
+
+        - name: Login to ROSA for this cluster
+          ansible.builtin.command:
+            cmd: "rosa login --token={{ _masworld_rosa_token.stdout | trim }}"
+          environment:
+            OCM_CONFIG: "/tmp/rosa-ocm-idp-{{ masworld_cluster_id | default(cluster.id) }}.json"
+          register: _masworld_rosa_login
+          retries: 3
+          delay: 10
+          until: _masworld_rosa_login is not failed
+          changed_when: false
+          no_log: true
+
+        - name: List existing ROSA identity providers
+          ansible.builtin.command:
+            cmd: "rosa list idp --cluster={{ _masworld_rosa_cluster_name }} --output=json"
+          environment:
+            OCM_CONFIG: "/tmp/rosa-ocm-idp-{{ masworld_cluster_id | default(cluster.id) }}.json"
+            AWS_ACCESS_KEY_ID: "{{ cluster.aws_access_key_id }}"
+            AWS_SECRET_ACCESS_KEY: "{{ cluster.aws_secret_access_key }}"
+            AWS_DEFAULT_REGION: "{{ cluster.aws_region | default('us-east-2') }}"
+          register: _masworld_rosa_idps
+          retries: 3
+          delay: 10
+          until: _masworld_rosa_idps is not failed
+          changed_when: false
+          no_log: true
+
+        - name: Check if Keycloak IDP already exists in ROSA
+          ansible.builtin.set_fact:
+            _masworld_rosa_idp_exists: >-
+              {{ (_masworld_rosa_idps.stdout | default('[]') | from_json)
+                 | selectattr('name', 'equalto', masworld_keycloak_oidc_provider_name)
+                 | list | length > 0 }}
+
+        - name: Create OpenID Connect identity provider via ROSA
+          ansible.builtin.command:
+            cmd: >-
+              rosa create idp
+              --cluster={{ _masworld_rosa_cluster_name }}
+              --type=openid
+              --name={{ masworld_keycloak_oidc_provider_name }}
+              --client-id={{ masworld_identity_demo_client_id }}
+              --client-secret={{ _masworld_realm_spec.clients[0].secret }}
+              --issuer-url={{ keycloak_url }}/realms/{{ masworld_identity_demo_realm }}
+              --email-claims=email
+              --name-claims=name
+              --username-claims=preferred_username
+              --mapping-method=claim
+              --yes
+          environment:
+            OCM_CONFIG: "/tmp/rosa-ocm-idp-{{ masworld_cluster_id | default(cluster.id) }}.json"
+            AWS_ACCESS_KEY_ID: "{{ cluster.aws_access_key_id }}"
+            AWS_SECRET_ACCESS_KEY: "{{ cluster.aws_secret_access_key }}"
+            AWS_DEFAULT_REGION: "{{ cluster.aws_region | default('us-east-2') }}"
+          register: _masworld_rosa_idp_create
+          retries: 3
+          delay: 15
+          until: _masworld_rosa_idp_create is not failed
+          when: not (_masworld_rosa_idp_exists | bool)
+          no_log: true
+
+        - name: Display ROSA IDP result
+          ansible.builtin.debug:
+            msg: >-
+              {{ 'Keycloak OIDC IDP already exists — skipped'
+                 if (_masworld_rosa_idp_exists | bool)
+                 else 'Created Keycloak OIDC IDP via ROSA CLI for ' ~ _masworld_rosa_cluster_name }}
+
+    # ── Non-HCP path: patch OAuth CR directly ──────────────────────────
+    - name: Add Keycloak OIDC IDP via OAuth CR (non-HCP clusters)
+      when:
+        - masworld_keycloak_oidc_enabled | bool
+        - not (_masworld_is_hcp | bool)
+      block:
+        - name: Get current OAuth identity providers
+          kubernetes.core.k8s_info:
+            api_version: config.openshift.io/v1
+            kind: OAuth
+            name: cluster
+          register: _masworld_oauth_cr
+
+        - name: Extract existing identity providers (exclude ours if re-running)
+          ansible.builtin.set_fact:
+            _masworld_existing_idps: >-
+              {{ _masworld_oauth_cr.resources[0].spec.identityProviders | default([])
+                 | rejectattr('name', 'equalto', masworld_keycloak_oidc_provider_name)
+                 | list }}
+
+        - name: Add Keycloak as OpenID Connect identity provider to OAuth
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: config.openshift.io/v1
+              kind: OAuth
+              metadata:
+                name: cluster
+              spec:
+                identityProviders: "{{ _masworld_existing_idps + [_masworld_keycloak_idp] }}"
+          vars:
+            _masworld_keycloak_idp:
+              name: "{{ masworld_keycloak_oidc_provider_name }}"
+              type: OpenID
+              mappingMethod: claim
+              openID:
+                clientID: "{{ masworld_identity_demo_client_id }}"
+                clientSecret:
+                  name: keycloak-oidc-client-secret
+                issuer: "{{ keycloak_url }}/realms/{{ masworld_identity_demo_realm }}"
+                claims:
+                  preferredUsername:
+                    - preferred_username
+                  name:
+                    - name
+                  email:
+                    - email
 
     # ── Set Success Facts ───────────────────────────────────────────────
     - name: Set identity demo ready fact
@@ -570,7 +1057,7 @@
     - name: Report identity demo success
       ansible.builtin.debug:
         msg: >-
-          Identity demo deployed. Keycloak URL: {{ keycloak_url }}.
+          Identity demo deployed (RHBK). Keycloak URL: {{ keycloak_url }}.
           LDAP: {{ 'enabled with ' + (masworld_ldap_demo_users | length | string) + ' demo users' if (masworld_ldap_enabled | bool) else 'disabled' }}.
           OIDC provider: {{ 'wired to OpenShift OAuth' if (masworld_keycloak_oidc_enabled | bool) else 'not configured' }}.
 
@@ -579,6 +1066,190 @@
       ansible.builtin.set_fact:
         identity_demo_ready: false
         keycloak_url: ""
+
+    - name: Collect diagnostic pod status
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ masworld_keycloak_namespace }}"
+      register: _masworld_kc_diag_pods
+      failed_when: false
+
+    - name: Display diagnostic pod status
+      ansible.builtin.debug:
+        msg: >-
+          Pods in {{ masworld_keycloak_namespace }}:
+          {% for pod in (_masworld_kc_diag_pods.resources | default([])) %}
+          {{ pod.metadata.name }}: phase={{ pod.status.phase | default('Unknown') }}
+          restarts={{ (pod.status.containerStatuses | default([{}]) | first).restartCount | default(0) }}
+          {% endfor %}
+      failed_when: false
+
+    - name: Collect Keycloak CR status
+      kubernetes.core.k8s_info:
+        api_version: k8s.keycloak.org/v2beta1
+        kind: Keycloak
+        name: masworld-keycloak
+        namespace: "{{ masworld_keycloak_namespace }}"
+      register: _masworld_kc_diag_cr
+      failed_when: false
+
+    - name: Display Keycloak CR conditions
+      ansible.builtin.debug:
+        msg: >-
+          Keycloak CR status (k8s.keycloak.org/v2beta1):
+          conditions={{ _masworld_kc_diag_cr.resources[0].status.conditions | default([])
+            | map(attribute='type') | zip(_masworld_kc_diag_cr.resources[0].status.conditions | default([])
+            | map(attribute='status')) | map('join', '=') | list }}
+      when: (_masworld_kc_diag_cr.resources | default([])) | length > 0
+      failed_when: false
+
+    - name: Find Keycloak server pod name
+      ansible.builtin.set_fact:
+        _masworld_kc_server_pod: >-
+          {{ (_masworld_kc_diag_pods.resources | default([])
+              | selectattr('metadata.name', 'match', '^masworld-keycloak-\d+$')
+              | list) | first | default(None) }}
+      failed_when: false
+
+    - name: Capture Keycloak server pod logs
+      kubernetes.core.k8s_log:
+        name: "{{ _masworld_kc_server_pod.metadata.name }}"
+        namespace: "{{ masworld_keycloak_namespace }}"
+      register: _masworld_kc_server_log
+      failed_when: false
+      when: _masworld_kc_server_pod is not none and _masworld_kc_server_pod != ''
+
+    - name: Display Keycloak server pod logs (last 100 lines)
+      ansible.builtin.debug:
+        msg: >-
+          Keycloak server ({{ _masworld_kc_server_pod.metadata.name | default('not found') }}) logs:
+          {{ (_masworld_kc_server_log.log | default('NO LOGS CAPTURED')).split('\n')[-100:] | join('\n') }}
+      failed_when: false
+      when: _masworld_kc_server_log is defined
+
+    - name: Capture Keycloak server previous container logs (if restarted)
+      kubernetes.core.k8s_log:
+        name: "{{ _masworld_kc_server_pod.metadata.name }}"
+        namespace: "{{ masworld_keycloak_namespace }}"
+        previous: true
+      register: _masworld_kc_server_prev_log
+      failed_when: false
+      when: _masworld_kc_server_pod is not none and _masworld_kc_server_pod != ''
+
+    - name: Display Keycloak server previous container logs (last 80 lines)
+      ansible.builtin.debug:
+        msg: >-
+          Keycloak server PREVIOUS container logs:
+          {{ (_masworld_kc_server_prev_log.log | default('NO PREVIOUS LOGS')).split('\n')[-80:] | join('\n') }}
+      failed_when: false
+      when:
+        - _masworld_kc_server_prev_log is defined
+        - (_masworld_kc_server_prev_log.log | default('')) | length > 0
+
+    - name: Capture operator pod logs
+      kubernetes.core.k8s_log:
+        name: >-
+          {{ (_masworld_kc_diag_pods.resources | default([])
+              | selectattr('metadata.name', 'match', '.*keycloak-operator-')
+              | list | first).metadata.name }}
+        namespace: "{{ masworld_keycloak_namespace }}"
+      register: _masworld_kc_operator_log
+      failed_when: false
+      when:
+        - (_masworld_kc_diag_pods.resources | default([])
+           | selectattr('metadata.name', 'match', '.*keycloak-operator-')
+           | list | length) > 0
+
+    - name: Display operator pod logs (last 80 lines)
+      ansible.builtin.debug:
+        msg: >-
+          Operator logs:
+          {{ (_masworld_kc_operator_log.log | default('NO LOGS CAPTURED')).split('\n')[-80:] | join('\n') }}
+      failed_when: false
+      when: _masworld_kc_operator_log is defined
+
+    - name: Capture PostgreSQL service type
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Service
+        name: masworld-keycloak-db
+        namespace: "{{ masworld_keycloak_namespace }}"
+      register: _masworld_kc_db_svc_diag
+      failed_when: false
+
+    - name: Display PostgreSQL service type
+      ansible.builtin.debug:
+        msg: >-
+          PostgreSQL service masworld-keycloak-db:
+          type={{ _masworld_kc_db_svc_diag.resources[0].spec.type | default('NOT FOUND') }}
+          clusterIP={{ _masworld_kc_db_svc_diag.resources[0].spec.clusterIP | default('none') }}
+      failed_when: false
+      when: (_masworld_kc_db_svc_diag.resources | default([])) | length > 0
+
+    - name: Capture PostgreSQL deployment spec
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: keycloak-postgresql
+        namespace: "{{ masworld_keycloak_namespace }}"
+      register: _masworld_kc_pg_diag
+      failed_when: false
+
+    - name: Display PostgreSQL deployment image and env
+      ansible.builtin.debug:
+        msg: >-
+          PostgreSQL deployment:
+          image={{ (_masworld_kc_pg_diag.resources[0].spec.template.spec.containers[0].image | default('NOT FOUND')) }}
+          replicas={{ _masworld_kc_pg_diag.resources[0].spec.replicas | default('?') }}
+          ready={{ _masworld_kc_pg_diag.resources[0].status.readyReplicas | default(0) }}
+          env_vars={{ _masworld_kc_pg_diag.resources[0].spec.template.spec.containers[0].env | default([]) | map(attribute='name') | list }}
+      failed_when: false
+      when: (_masworld_kc_pg_diag.resources | default([])) | length > 0
+
+    - name: Capture namespace events for scheduling diagnostics
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Event
+        namespace: "{{ masworld_keycloak_namespace }}"
+      register: _masworld_kc_diag_events
+      failed_when: false
+
+    - name: Display OpenLDAP pod events (scheduling/pull failures)
+      ansible.builtin.debug:
+        msg: >-
+          OpenLDAP-related events:
+          {% for evt in (_masworld_kc_diag_events.resources | default([])
+             | selectattr('involvedObject.name', 'match', 'openldap')
+             | list)[-20:] %}
+          [{{ evt.lastTimestamp | default(evt.metadata.creationTimestamp | default('unknown')) }}]
+          {{ evt.reason | default('?') }}: {{ evt.message | default('no message') }}
+          {% endfor %}
+      failed_when: false
+      when: _masworld_kc_diag_events is defined
+
+    - name: Display OpenLDAP deployment status
+      ansible.builtin.debug:
+        msg: >-
+          OpenLDAP deployment:
+          {% set ldap_deploy = (_masworld_kc_diag_pods.resources | default([])
+             | selectattr('metadata.name', 'match', 'openldap-')
+             | list) %}
+          {% if ldap_deploy | length > 0 %}
+          pod={{ ldap_deploy[0].metadata.name }}
+          phase={{ ldap_deploy[0].status.phase | default('Unknown') }}
+          {% if ldap_deploy[0].status.containerStatuses is defined %}
+          container_state={{ ldap_deploy[0].status.containerStatuses[0].state | default({}) | to_json }}
+          {% endif %}
+          {% if ldap_deploy[0].status.conditions is defined %}
+          conditions={{ ldap_deploy[0].status.conditions | map(attribute='type') | zip(
+            ldap_deploy[0].status.conditions | map(attribute='status'))
+            | map('join', '=') | list }}
+          {% endif %}
+          {% else %}
+          No OpenLDAP pods found
+          {% endif %}
+      failed_when: false
 
     - name: Report identity demo failure
       ansible.builtin.fail:

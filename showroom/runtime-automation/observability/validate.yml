@@ -1,6 +1,6 @@
 ---
 # Observability exercise – validate
-# Checks all observability exercise requirements and reports PASS/FAIL.
+# Checks that the student has completed all operator installations.
 - name: Validate observability exercise
   hosts: localhost
   connection: local
@@ -13,36 +13,70 @@
 
   tasks:
     # ------------------------------------------------------------------
-    # 1. Logging operator CSVs
+    # 1. Logging Operator CSV
     # ------------------------------------------------------------------
-    - name: Check logging operator CSVs
+    - name: Check Logging Operator CSV
       kubernetes.core.k8s_info:
         api_version: operators.coreos.com/v1alpha1
         kind: ClusterServiceVersion
         namespace: "{{ logging_ns }}"
-      register: csv_result
+      register: logging_csvs
       failed_when: false
 
-    - name: Evaluate CSV check
+    - name: Evaluate Logging Operator
       ansible.builtin.set_fact:
-        csv_pass: >-
-          {{ csv_result.resources | default([])
+        logging_pass: >-
+          {{ logging_csvs.resources | default([])
+             | selectattr('metadata.name', 'search', 'cluster-logging')
              | selectattr('status.phase', 'defined')
              | selectattr('status.phase', 'equalto', 'Succeeded')
              | list | length > 0 }}
 
     # ------------------------------------------------------------------
-    # 2. LokiStack readiness
+    # 2. Loki Operator CSV
+    # ------------------------------------------------------------------
+    - name: Evaluate Loki Operator
+      ansible.builtin.set_fact:
+        loki_op_pass: >-
+          {{ logging_csvs.resources | default([])
+             | selectattr('metadata.name', 'search', 'loki-operator')
+             | selectattr('status.phase', 'defined')
+             | selectattr('status.phase', 'equalto', 'Succeeded')
+             | list | length > 0 }}
+
+    # ------------------------------------------------------------------
+    # 3. Cluster Observability Operator CSV
+    # ------------------------------------------------------------------
+    - name: Check COO CSV in openshift-operators
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: ClusterServiceVersion
+        namespace: openshift-operators
+      register: coo_csvs
+      failed_when: false
+
+    - name: Evaluate COO
+      ansible.builtin.set_fact:
+        coo_pass: >-
+          {{ coo_csvs.resources | default([])
+             | selectattr('metadata.name', 'search', 'cluster-observability-operator')
+             | selectattr('status.phase', 'defined')
+             | selectattr('status.phase', 'equalto', 'Succeeded')
+             | list | length > 0 }}
+
+    # ------------------------------------------------------------------
+    # 4. LokiStack readiness
     # ------------------------------------------------------------------
     - name: Check LokiStack CR
       kubernetes.core.k8s_info:
         api_version: loki.grafana.com/v1
         kind: LokiStack
+        name: logging-loki
         namespace: "{{ logging_ns }}"
       register: lokistack_result
       failed_when: false
 
-    - name: Evaluate LokiStack check
+    - name: Evaluate LokiStack
       ansible.builtin.set_fact:
         lokistack_pass: >-
           {{ lokistack_result.resources | default([])
@@ -53,7 +87,23 @@
              | list | length > 0 }}
 
     # ------------------------------------------------------------------
-    # 3. ClusterLogForwarder readiness
+    # 5. S3 storage secret
+    # ------------------------------------------------------------------
+    - name: Check S3 secret in logging namespace
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: logging-loki-s3
+        namespace: "{{ logging_ns }}"
+      register: s3_secret
+      failed_when: false
+
+    - name: Evaluate S3 secret
+      ansible.builtin.set_fact:
+        s3_pass: "{{ s3_secret.resources | default([]) | length > 0 }}"
+
+    # ------------------------------------------------------------------
+    # 6. ClusterLogForwarder readiness
     # ------------------------------------------------------------------
     - name: Check ClusterLogForwarder CR
       kubernetes.core.k8s_info:
@@ -63,7 +113,7 @@
       register: clf_result
       failed_when: false
 
-    - name: Evaluate ClusterLogForwarder check
+    - name: Evaluate ClusterLogForwarder
       ansible.builtin.set_fact:
         clf_pass: >-
           {{ clf_result.resources | default([])
@@ -74,7 +124,43 @@
              | list | length > 0 }}
 
     # ------------------------------------------------------------------
-    # 4. Student namespace exists
+    # 7. UIPlugin
+    # ------------------------------------------------------------------
+    - name: Check UIPlugin
+      kubernetes.core.k8s_info:
+        api_version: observability.openshift.io/v1alpha1
+        kind: UIPlugin
+        name: logging
+      register: uiplugin_result
+      failed_when: false
+
+    - name: Evaluate UIPlugin
+      ansible.builtin.set_fact:
+        uiplugin_pass: "{{ uiplugin_result.resources | default([]) | length > 0 }}"
+
+    # ------------------------------------------------------------------
+    # 8. Collector pods running
+    # ------------------------------------------------------------------
+    - name: Check collector pods
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ logging_ns }}"
+        label_selectors:
+          - app.kubernetes.io/component=collector
+      register: collector_pods
+      failed_when: false
+
+    - name: Evaluate collector pods
+      ansible.builtin.set_fact:
+        collector_pass: >-
+          {{ collector_pods.resources | default([])
+             | selectattr('status.phase', 'defined')
+             | selectattr('status.phase', 'equalto', 'Running')
+             | list | length > 0 }}
+
+    # ------------------------------------------------------------------
+    # 9. Student namespace exists
     # ------------------------------------------------------------------
     - name: Check student namespace
       kubernetes.core.k8s_info:
@@ -84,28 +170,12 @@
       register: ns_result
       failed_when: false
 
-    - name: Evaluate namespace check
+    - name: Evaluate namespace
       ansible.builtin.set_fact:
         ns_pass: "{{ ns_result.resources | default([]) | length > 0 }}"
 
     # ------------------------------------------------------------------
-    # 5. Loki gateway service
-    # ------------------------------------------------------------------
-    - name: Check Loki gateway service
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Service
-        name: logging-loki-gateway-http
-        namespace: "{{ logging_ns }}"
-      register: loki_svc_result
-      failed_when: false
-
-    - name: Evaluate Loki gateway check
-      ansible.builtin.set_fact:
-        loki_svc_pass: "{{ loki_svc_result.resources | default([]) | length > 0 }}"
-
-    # ------------------------------------------------------------------
-    # 6. No leftover test pod (completed or absent)
+    # 10. Log-test pod (clean or completed)
     # ------------------------------------------------------------------
     - name: Check for leftover log-test pod
       kubernetes.core.k8s_info:
@@ -116,7 +186,7 @@
       register: test_pod_result
       failed_when: false
 
-    - name: Evaluate test pod check
+    - name: Evaluate test pod
       ansible.builtin.set_fact:
         test_pod_pass: >-
           {{ (test_pod_result.resources | default([]) | length == 0) or
@@ -126,7 +196,7 @@
               | list | length > 0) }}
 
     # ------------------------------------------------------------------
-    # 7. Summary table
+    # Summary
     # ------------------------------------------------------------------
     - name: Validation summary
       ansible.builtin.debug:
@@ -134,10 +204,14 @@
           ============================================================
           OBSERVABILITY EXERCISE – VALIDATION RESULTS (seat {{ seat_padded }})
           ============================================================
-          Logging operator CSVs (Succeeded) : {{ 'PASS' if csv_pass | bool else 'FAIL' }}
-          LokiStack CR (Ready)              : {{ 'PASS' if lokistack_pass | bool else 'FAIL' }}
-          ClusterLogForwarder CR (Ready)     : {{ 'PASS' if clf_pass | bool else 'FAIL' }}
-          Student namespace ({{ student_ns }})     : {{ 'PASS' if ns_pass | bool else 'FAIL' }}
-          Loki gateway service              : {{ 'PASS' if loki_svc_pass | bool else 'FAIL' }}
-          Log-test pod (clean/completed)    : {{ 'PASS' if test_pod_pass | bool else 'FAIL' }}
+          Logging Operator CSV (Succeeded)    : {{ 'PASS' if logging_pass | bool else 'FAIL' }}
+          Loki Operator CSV (Succeeded)       : {{ 'PASS' if loki_op_pass | bool else 'FAIL' }}
+          Cluster Observability Operator CSV  : {{ 'PASS' if coo_pass | bool else 'FAIL' }}
+          S3 storage secret                   : {{ 'PASS' if s3_pass | bool else 'FAIL' }}
+          LokiStack CR (Ready)                : {{ 'PASS' if lokistack_pass | bool else 'FAIL' }}
+          ClusterLogForwarder CR (Ready)       : {{ 'PASS' if clf_pass | bool else 'FAIL' }}
+          UIPlugin (logging)                  : {{ 'PASS' if uiplugin_pass | bool else 'FAIL' }}
+          Collector pods (Running)            : {{ 'PASS' if collector_pass | bool else 'FAIL' }}
+          Student namespace ({{ student_ns }})      : {{ 'PASS' if ns_pass | bool else 'FAIL' }}
+          Log-test pod (clean/completed)      : {{ 'PASS' if test_pod_pass | bool else 'FAIL' }}
           ============================================================

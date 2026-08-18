@@ -5,3 +5,7 @@
       {{ cluster_categories | build_cluster_list(cluster_prefix, cluster_credentials, infra_state | default({})) }}
   when: cluster_definitions is not defined
   no_log: true
+
+- name: Discover per-cluster ROSA tokens via bastion SSH
+  ansible.builtin.include_tasks: discover_rosa_tokens.yml
+  when: _rosa_managed_names is not defined

@@ -1,0 +1,111 @@
+---
+# Wait for machinepool worker nodes to register and become Ready.
+# Called per-cluster after workshop machinepool creation, before cluster_preflight.
+#
+# Expects loop_var 'cluster' with: id, api_url, admin_password from cluster-credentials.yml.
+#
+# Polls the Kubernetes Nodes API until the minimum worker count is met or timeout.
+
+- name: Set wait parameters for {{ cluster.id }}
+  ansible.builtin.set_fact:
+    _wait_api_url: "{{ cluster.api_url | default('') }}"
+    _wait_admin_password: "{{ cluster.admin_password | default('cluster-admin', true) }}"
+    _wait_min_workers: 3
+    _wait_max_retries: 40
+    _wait_delay: 30
+  no_log: true
+
+- name: "{{ cluster.id }} — Obtain API token for node polling"
+  when:
+    - _wait_admin_password | length > 0
+    - _wait_api_url | length > 0
+  block:
+    - name: "{{ cluster.id }} — Discover OAuth server URL"
+      ansible.builtin.uri:
+        url: "{{ _wait_api_url }}/.well-known/oauth-authorization-server"
+        method: GET
+        validate_certs: false
+        status_code: [200]
+      register: _wait_oauth_metadata
+      retries: 6
+      delay: 30
+      until: _wait_oauth_metadata is not failed
+
+    - name: "{{ cluster.id }} — Request OAuth token"
+      ansible.builtin.uri:
+        url: "{{ _wait_oauth_metadata.json.authorization_endpoint }}?response_type=token&client_id=openshift-challenging-client"
+        method: GET
+        user: "{{ masworld_admin_username | default('cluster-admin') }}"
+        password: "{{ _wait_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        follow_redirects: none
+        status_code: [302]
+      register: _wait_oauth_response
+      retries: 6
+      delay: 30
+      until: _wait_oauth_response is not failed
+      no_log: true
+
+    - name: "{{ cluster.id }} — Extract bearer token"
+      ansible.builtin.set_fact:
+        _wait_api_token: "{{ _wait_oauth_response.location | regex_search('access_token=([^&]+)', '\\1') | first }}"
+      no_log: true
+
+- name: "{{ cluster.id }} — Poll worker nodes until minimum count met"
+  ansible.builtin.uri:
+    url: "{{ _wait_api_url }}/api/v1/nodes?labelSelector=node-role.kubernetes.io%2Fworker"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ _wait_api_token }}"
+    validate_certs: false
+  register: _wait_node_poll
+  until: >-
+    (_wait_node_poll.status | default(0)) == 200
+    and
+    ((_wait_node_poll.json | default({})).get('items', [])
+     | json_query('[?status.conditions[?type==`Ready` && status==`True`]]')
+     | length) >= (_wait_min_workers | int)
+  retries: "{{ _wait_max_retries | int }}"
+  delay: "{{ _wait_delay | int }}"
+  when: _wait_api_token is defined
+  failed_when: false
+
+- name: "{{ cluster.id }} — Count Ready worker nodes"
+  vars:
+    _node_list: "{{ (_wait_node_poll.json | default({})).get('items', []) }}"
+  ansible.builtin.set_fact:
+    _wait_ready_count: >-
+      {{ _node_list | json_query('[?status.conditions[?type==`Ready` && status==`True`]]') | length }}
+    _wait_total_count: "{{ _node_list | length }}"
+  when:
+    - _wait_api_token is defined
+    - (_wait_node_poll.status | default(0)) == 200
+
+- name: "{{ cluster.id }} — Report node stabilization"
+  ansible.builtin.debug:
+    msg: >-
+      {{ cluster.id }}: {{ _wait_ready_count | default(0) }} Ready worker node(s)
+      ({{ _wait_total_count | default(0) }} total, minimum: {{ _wait_min_workers }})
+      {{ '— API returned HTTP ' ~ (_wait_node_poll.status | default('unknown'))
+         if (_wait_node_poll.status | default(0)) != 200 else '' }}
+  when: _wait_api_token is defined
+
+- name: "{{ cluster.id }} — Warn if nodes still below minimum"
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: {{ cluster.id }} has {{ _wait_ready_count | default(0) }} Ready workers
+      but needs {{ _wait_min_workers }}. Machinepool may still be scaling.
+      Continuing — cluster_preflight will report the exact shortfall.
+  when:
+    - _wait_api_token is defined
+    - (_wait_ready_count | default(0) | int) < (_wait_min_workers | int)
+
+- name: "{{ cluster.id }} — Cache bearer token for cluster preparation"
+  ansible.builtin.set_fact:
+    _cached_cluster_tokens: >-
+      {{ _cached_cluster_tokens | default({}, true) | combine({
+        cluster.id: _wait_api_token
+      }) }}
+  no_log: true
+  when: _wait_api_token is defined

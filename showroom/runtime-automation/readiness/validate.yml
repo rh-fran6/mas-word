@@ -1,5 +1,5 @@
 ---
-# Readiness validation — checks 14 infrastructure categories
+# Readiness validation — checks infrastructure categories
 # Run by Showroom zt-runner when the attendee clicks "Validate"
 - name: Validate workshop readiness
   hosts: localhost
@@ -9,7 +9,7 @@
   vars:
     seat: "{{ '%02d' | format(seat_number | int) }}"
     student_ns: "student-{{ seat }}"
-    student_user: "user{{ seat }}"
+    lab_username: "lab-seat-{{ seat }}"
     mas_core_ns: mas-inst1-core
     mas_manage_ns: mas-inst1-manage
     results: []
@@ -137,98 +137,17 @@
         results: "{{ results + [{'category': 'Database (Db2)', 'status': db2_running | bool | ternary('PASS', 'FAIL')}] }}"
 
     # ------------------------------------------------------------------
-    # 6. Logging Operator — CSV Succeeded
+    # 6-9. Logging stack — STUDENT_EXERCISE (not preinstalled)
     # ------------------------------------------------------------------
-    - name: "Check 6 — Logging Operator CSV"
-      kubernetes.core.k8s_info:
-        api_version: operators.coreos.com/v1alpha1
-        kind: ClusterServiceVersion
-        namespace: openshift-logging
-      register: logging_csvs
-      failed_when: false
-
-    - name: Evaluate Logging CSV
+    - name: "Check 6-9 — Logging stack (student exercise)"
       ansible.builtin.set_fact:
-        logging_csv_ok: >-
-          {{
-            (logging_csvs.resources | default([])
-              | selectattr('status.phase', 'defined')
-              | selectattr('status.phase', 'equalto', 'Succeeded')
-              | list | length) > 0
-          }}
-
-    - name: Record Logging Operator result
-      ansible.builtin.set_fact:
-        results: "{{ results + [{'category': 'Logging Operator', 'status': logging_csv_ok | bool | ternary('PASS', 'FAIL')}] }}"
-
-    # ------------------------------------------------------------------
-    # 7. LokiStack CR Ready
-    # ------------------------------------------------------------------
-    - name: "Check 7 — LokiStack CR"
-      kubernetes.core.k8s_info:
-        api_version: loki.grafana.com/v1
-        kind: LokiStack
-        namespace: openshift-logging
-      register: lokistack
-      failed_when: false
-
-    - name: Evaluate LokiStack readiness
-      ansible.builtin.set_fact:
-        lokistack_ready: >-
-          {{
-            (lokistack.resources | default([]) | length > 0) and
-            (lokistack.resources[0].status.conditions | default([])
-              | selectattr('type', 'equalto', 'Ready')
-              | selectattr('status', 'equalto', 'True')
-              | list | length > 0)
-          }}
-
-    - name: Record LokiStack result
-      ansible.builtin.set_fact:
-        results: "{{ results + [{'category': 'LokiStack', 'status': lokistack_ready | bool | ternary('PASS', 'FAIL')}] }}"
-
-    # ------------------------------------------------------------------
-    # 8. S3 Object Storage — labelled secret
-    # ------------------------------------------------------------------
-    - name: "Check 8 — S3 storage secret"
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Secret
-        namespace: openshift-logging
-        label_selectors:
-          - masworld.io/component=loki-s3
-      register: s3_secret
-      failed_when: false
-
-    - name: Record S3 result
-      ansible.builtin.set_fact:
-        results: "{{ results + [{'category': 'S3 Object Storage', 'status': ((s3_secret.resources | default([])) | length > 0) | ternary('PASS', 'FAIL')}] }}"
-
-    # ------------------------------------------------------------------
-    # 9. ClusterLogForwarder CR Ready
-    # ------------------------------------------------------------------
-    - name: "Check 9 — ClusterLogForwarder CR"
-      kubernetes.core.k8s_info:
-        api_version: observability.openshift.io/v1
-        kind: ClusterLogForwarder
-        namespace: openshift-logging
-      register: clf
-      failed_when: false
-
-    - name: Evaluate ClusterLogForwarder readiness
-      ansible.builtin.set_fact:
-        clf_ready: >-
-          {{
-            (clf.resources | default([]) | length > 0) and
-            (clf.resources[0].status.conditions | default([])
-              | selectattr('type', 'equalto', 'Ready')
-              | selectattr('status', 'equalto', 'True')
-              | list | length > 0)
-          }}
-
-    - name: Record ClusterLogForwarder result
-      ansible.builtin.set_fact:
-        results: "{{ results + [{'category': 'ClusterLogForwarder', 'status': clf_ready | bool | ternary('PASS', 'FAIL')}] }}"
+        results: >-
+          {{ results + [
+            {'category': 'Logging Operator', 'status': 'STUDENT_EXERCISE'},
+            {'category': 'LokiStack', 'status': 'STUDENT_EXERCISE'},
+            {'category': 'S3 Storage Secret', 'status': 'STUDENT_EXERCISE'},
+            {'category': 'ClusterLogForwarder', 'status': 'STUDENT_EXERCISE'}
+          ] }}
 
     # ------------------------------------------------------------------
     # 10. Identity Integration — Keycloak CR Ready
@@ -328,6 +247,37 @@
         results: "{{ results + [{'category': 'Student RBAC', 'status': student_rb_found | bool | ternary('PASS', 'FAIL')}] }}"
 
     # ------------------------------------------------------------------
+    # 15. Lab Account — Keycloak user ClusterRoleBinding
+    # ------------------------------------------------------------------
+    - name: "Check 15 — Lab account ClusterRoleBinding"
+      kubernetes.core.k8s_info:
+        api_version: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        name: "{{ lab_username }}-masworld-lab-operator"
+      register: lab_crb
+      failed_when: false
+
+    - name: Record Lab Account result
+      ansible.builtin.set_fact:
+        results: "{{ results + [{'category': 'Lab Account (Keycloak)', 'status': ((lab_crb.resources | default([])) | length > 0) | ternary('PASS', 'FAIL')}] }}"
+
+    # ------------------------------------------------------------------
+    # 16. S3 Credentials — ConfigMap in showroom namespace
+    # ------------------------------------------------------------------
+    - name: "Check 16 — S3 credentials ConfigMap"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        name: masworld-lab-s3-credentials
+        namespace: showroom
+      register: s3_cm
+      failed_when: false
+
+    - name: Record S3 Credentials result
+      ansible.builtin.set_fact:
+        results: "{{ results + [{'category': 'S3 Credentials (Showroom)', 'status': ((s3_cm.resources | default([])) | length > 0) | ternary('PASS', 'FAIL')}] }}"
+
+    # ------------------------------------------------------------------
     # Summary
     # ------------------------------------------------------------------
     - name: Count pass and fail
@@ -335,17 +285,20 @@
         pass_count: "{{ results | selectattr('status', 'equalto', 'PASS') | list | length }}"
         fail_count: "{{ results | selectattr('status', 'equalto', 'FAIL') | list | length }}"
         na_count: "{{ results | selectattr('status', 'equalto', 'NOT_APPLICABLE') | list | length }}"
+        exercise_count: "{{ results | selectattr('status', 'equalto', 'STUDENT_EXERCISE') | list | length }}"
 
     - name: Display readiness summary
       ansible.builtin.debug:
         msg: |
           ============================================================
            MAS World 2026 — Workshop Readiness Report
-           Seat: {{ seat }}  ({{ student_user }})
+           Seat: {{ seat }}  ({{ lab_username }})
           ============================================================
           {% for r in results %}
-           {{ '%-30s' | format(r.category) }}  {{ r.status }}
+           {{ '%-35s' | format(r.category) }}  {{ r.status }}
           {% endfor %}
           ------------------------------------------------------------
-           PASS: {{ pass_count }}   FAIL: {{ fail_count }}   N/A: {{ na_count }}
+           PASS: {{ pass_count }}   FAIL: {{ fail_count }}   N/A: {{ na_count }}   STUDENT_EXERCISE: {{ exercise_count }}
           ============================================================
+          Note: STUDENT_EXERCISE items are for the student to complete
+          during the workshop (Exercise 5: Observability and Logging).

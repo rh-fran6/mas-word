@@ -1,0 +1,51 @@
+---
+# Targeted fix: restart crashed maxinst pods and Manage operator on stuck clusters.
+# Applies DFT_TABLE_ORG=ROW, restarts operator, deletes crashed maxinst.
+#
+# Usage:
+#   ansible-playbook playbooks/fix-maxinst.yml
+#   ansible-playbook playbooks/fix-maxinst.yml -e seat_start=31 -e seat_end=47
+#   ansible-playbook playbooks/fix-maxinst.yml -e target_seats=20,25,27,31,32,37,45,47
+- name: Fix crashed maxinst and Manage operator on stuck clusters
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../secrets/cluster-credentials.yml
+
+  vars:
+    target_seats: "20,25,27,31,32,37,45,47"
+    mas_instance_id: inst1
+    mas_workspace_id: masworld
+
+  tasks:
+    - name: Build cluster list from target_seats
+      ansible.builtin.set_fact:
+        _target_ids: >-
+          {{ target_seats.split(',') | map('trim')
+             | map('regex_replace', '^(.*)$', 'lab-seat-\1')
+             | list }}
+      when: target_seats is defined
+
+    - name: Display target clusters
+      ansible.builtin.debug:
+        msg: "Targeting {{ _target_ids | length }} clusters: {{ _target_ids | join(', ') }}"
+
+    - name: Process each cluster
+      ansible.builtin.include_tasks: _fix-maxinst-cluster.yml
+      loop: "{{ _target_ids }}"
+      loop_control:
+        loop_var: cluster_id
+        label: "{{ cluster_id }}"
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: |
+          ══════════════════════════════════════════════════════════════
+            MAXINST FIX COMPLETE
+          ══════════════════════════════════════════════════════════════
+            Processed {{ _target_ids | length }} clusters.
+            Actions: DFT_TABLE_ORG=ROW → operator restart → maxinst restart
+            Next: rerun make deploy-cluster-ready for these seats
+          ══════════════════════════════════════════════════════════════

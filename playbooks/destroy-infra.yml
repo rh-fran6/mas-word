@@ -13,7 +13,7 @@
       ansible.builtin.pause:
         prompt: >-
           WARNING: This will destroy ALL VPCs, subnets, NAT gateways, and route tables
-          for {{ cluster_categories | dict2items | map(attribute='value.count') | sum }} accounts
+          for {{ cluster_credentials | length }} accounts
           with prefix '{{ cluster_prefix }}'.
           Type 'yes' to confirm
       register: destroy_infra_confirm

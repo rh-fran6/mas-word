@@ -17,6 +17,8 @@ CLUSTER ?=
 ENV ?= mas-world-2026
 SCENARIO ?=
 INSTANCE_TYPE ?=
+SEAT_START ?=
+SEAT_END ?=
 
 # ═══════════════════════════════════════════════════════════════════════
 # Help
@@ -60,8 +62,33 @@ help: ## Show this help
 .PHONY: setup
 setup: ## [setup] Install all dependencies (Python, Galaxy collections, pre-commit)
 	$(PIP) install -e ".[dev]" || $(PYTHON) -m pip install -e ".[dev]"
-	ansible-galaxy install -r requirements.yml --force
+	ansible-galaxy collection install -r requirements.yml -p collections/ --force
+	$(MAKE) patch-collection
 	@if git rev-parse --git-dir >/dev/null 2>&1; then pre-commit install; else echo "Skipping pre-commit install (not a git repository)"; fi
+
+# Post-install patches for IBM collection compatibility with ansible-core 2.21
+# and strategy:free parallel execution. Re-applied automatically on every make setup.
+# Patches:
+#   1. regex_search() returns string in until/assert — append 'is not none'
+#   2. pause module breaks strategy:free — replace with wait_for timeout
+IBM_COLLECTION := collections/ansible_collections/ibm/mas_devops
+.PHONY: patch-collection
+patch-collection: ## [setup] Apply ansible-core 2.21 + strategy:free patches to IBM collection
+	@if [ -d "$(IBM_COLLECTION)" ]; then \
+		echo "Patching IBM collection for ansible-core 2.21 + strategy:free compatibility..."; \
+		$(PYTHON) scripts/patch-collection.py "$(IBM_COLLECTION)"; \
+	else \
+		echo "WARNING: IBM collection not found at $(IBM_COLLECTION). Run 'make setup' to install."; \
+	fi
+
+.PHONY: fetch-charts
+fetch-charts: ## [setup] Download Showroom Helm chart for local deployment
+	@mkdir -p charts
+	helm pull showroom-single-pod \
+	  --repo https://rhpds.github.io/showroom-deployer \
+	  --version v2.1.8 \
+	  --destination charts/
+	@echo "Chart downloaded to charts/"
 
 # ═══════════════════════════════════════════════════════════════════════
 # Phase 1 — Infrastructure
@@ -125,8 +152,10 @@ destroy-infra-auto: ## [infra] Destroy AWS infrastructure without confirmation
 mas-prepare-cluster: ## [mas] Prepare a single cluster (CLUSTER=seat-01)
 	$(ANSIBLE_PLAYBOOK) $(PLAYBOOK_DIR)/prepare-cluster.yml $(VAULT_ARGS) -e cluster_id=$(CLUSTER)
 
-mas-prepare-fleet: ## [mas] Prepare entire fleet (all clusters)
-	$(ANSIBLE_PLAYBOOK) $(PLAYBOOK_DIR)/prepare-fleet.yml $(VAULT_ARGS)
+mas-prepare-fleet: ## [mas] Prepare entire fleet (all clusters, or SEAT_START/SEAT_END range)
+	$(ANSIBLE_PLAYBOOK) $(PLAYBOOK_DIR)/prepare-fleet.yml $(VAULT_ARGS) \
+		$(if $(SEAT_START),-e seat_start=$(SEAT_START)) \
+		$(if $(SEAT_END),-e seat_end=$(SEAT_END))
 
 mas-validate-cluster: ## [mas] Validate a single cluster (CLUSTER=seat-01)
 	$(ANSIBLE_PLAYBOOK) $(PLAYBOOK_DIR)/validate-cluster.yml $(VAULT_ARGS) -e cluster_id=$(CLUSTER)
@@ -187,7 +216,7 @@ deploy: ## [deploy] Deploy by scenario (SCENARIO=greenfield|aws-ready|cluster-re
 		echo "  Examples:"; \
 		echo "    make deploy SCENARIO=greenfield"; \
 		echo "    make deploy SCENARIO=aws-ready"; \
-		echo "    make deploy-cluster-ready INSTANCE_TYPE=m5.2xlarge"; \
+		echo "    make deploy-cluster-ready                          # defaults to m6a.4xlarge"; \
 		echo ""; \
 		exit 1; \
 	fi
@@ -201,15 +230,32 @@ deploy-greenfield: ## [deploy] Scenario 1: Fresh AWS accounts — full build
 deploy-aws-ready: ## [deploy] Scenario 2: AWS infra exists — ROSA + app
 	@$(MAKE) deploy SCENARIO=aws-ready
 
-deploy-cluster-ready: ## [deploy] Scenario 3: Clusters exist — autoscaler + app (INSTANCE_TYPE required)
-	@if [ -z "$(INSTANCE_TYPE)" ]; then \
+deploy-cluster-ready: ## [deploy] Scenario 3: Clusters exist — machinepool + app (INSTANCE_TYPE, SEAT_START, SEAT_END optional)
+	@_IT="$(INSTANCE_TYPE)"; \
+	if [ -z "$$_IT" ]; then \
 		echo ""; \
-		echo "  Error: INSTANCE_TYPE is required for cluster-ready scenario"; \
-		echo "  Usage: make deploy-cluster-ready INSTANCE_TYPE=m5.2xlarge"; \
+		echo "  Workshop machinepool instance type not specified."; \
 		echo ""; \
-		exit 1; \
-	fi
-	@$(MAKE) deploy SCENARIO=cluster-ready INSTANCE_TYPE=$(INSTANCE_TYPE)
+		echo "  Options:"; \
+		echo "    m6a.4xlarge   16 vCPU / 64 GB — recommended for MAS + Manage + Db2 (default)"; \
+		echo "    m5.2xlarge     8 vCPU / 32 GB — lighter workloads, demos, cost-sensitive"; \
+		echo "    <custom>      Any valid EC2 instance type (e.g. m6i.8xlarge, r6a.2xlarge)"; \
+		echo ""; \
+		echo "  Usage:"; \
+		echo "    make deploy-cluster-ready                                          # all clusters"; \
+		echo "    make deploy-cluster-ready INSTANCE_TYPE=m5.2xlarge"; \
+		echo "    make deploy-cluster-ready SEAT_START=29 SEAT_END=50               # seats 29-50 only"; \
+		echo "    make deploy-cluster-ready SEAT_START=29                            # seats 29+"; \
+		echo ""; \
+		echo "  Proceeding with default: m6a.4xlarge"; \
+		echo ""; \
+		_IT="m6a.4xlarge"; \
+	fi; \
+	$(ANSIBLE_PLAYBOOK) $(PLAYBOOK_DIR)/deploy-cluster-ready.yml $(VAULT_ARGS) \
+		-e workshop_machinepool_instance_type=$$_IT \
+		$(if $(SEAT_START),-e seat_start=$(SEAT_START)) \
+		$(if $(SEAT_END),-e seat_end=$(SEAT_END)) \
+		$(if $(FORCE_SHOWROOM),-e masworld_force_showroom_refresh=true)
 
 validate-greenfield: ## [deploy] Validate greenfield inputs only (no deployment)
 	$(ANSIBLE_PLAYBOOK) $(PLAYBOOK_DIR)/deploy.yml $(VAULT_ARGS) \
@@ -219,17 +265,12 @@ validate-aws-ready: ## [deploy] Validate aws-ready inputs only (no deployment)
 	$(ANSIBLE_PLAYBOOK) $(PLAYBOOK_DIR)/deploy.yml $(VAULT_ARGS) \
 		-e deployment_scenario=aws-ready --tags preflight
 
-validate-cluster-ready: ## [deploy] Validate cluster-ready inputs only (INSTANCE_TYPE required)
-	@if [ -z "$(INSTANCE_TYPE)" ]; then \
-		echo ""; \
-		echo "  Error: INSTANCE_TYPE is required for cluster-ready validation"; \
-		echo "  Usage: make validate-cluster-ready INSTANCE_TYPE=m5.2xlarge"; \
-		echo ""; \
-		exit 1; \
-	fi
+validate-cluster-ready: ## [deploy] Validate cluster-ready inputs only (INSTANCE_TYPE optional, default m6a.4xlarge)
+	@_IT="$(INSTANCE_TYPE)"; \
+	if [ -z "$$_IT" ]; then _IT="m6a.4xlarge"; fi; \
 	$(ANSIBLE_PLAYBOOK) $(PLAYBOOK_DIR)/deploy.yml $(VAULT_ARGS) \
 		-e deployment_scenario=cluster-ready \
-		-e workshop_machinepool_instance_type=$(INSTANCE_TYPE) --tags preflight
+		-e workshop_machinepool_instance_type=$$_IT --tags preflight
 
 # ═══════════════════════════════════════════════════════════════════════
 # End-to-End
@@ -267,12 +308,66 @@ teardown: ## [e2e] Full teardown: decommission -> destroy clusters -> destroy in
 	@echo "  Workshop teardown complete."
 
 # ═══════════════════════════════════════════════════════════════════════
+# Maintenance
+# ═══════════════════════════════════════════════════════════════════════
+
+.PHONY: cleanup-community-keycloak lab-reset lab-reset-fleet
+
+cleanup-community-keycloak: ## [maintenance] Remove all community Keycloak from fleet (one-time, run before RHBK deploy)
+	$(ANSIBLE_PLAYBOOK) $(PLAYBOOK_DIR)/cleanup-community-keycloak.yml $(VAULT_ARGS)
+
+lab-reset: ## [maintenance] Reset lab for a single seat (SEAT=20)
+	@if [ -z "$(SEAT)" ]; then \
+		echo ""; \
+		echo "  Usage: make lab-reset SEAT=<number>"; \
+		echo "  Example: make lab-reset SEAT=20"; \
+		echo ""; \
+		echo "  Removes all student-installed logging operators, LokiStack,"; \
+		echo "  synced groups, and test pods. NEVER touches MAS components."; \
+		echo ""; \
+		exit 1; \
+	fi
+	$(ANSIBLE_PLAYBOOK) $(PLAYBOOK_DIR)/reset-lab.yml $(VAULT_ARGS) -e seat=$(SEAT)
+
+lab-reset-fleet: ## [maintenance] Reset lab for all seats (SEAT_START, SEAT_END optional)
+	$(ANSIBLE_PLAYBOOK) $(PLAYBOOK_DIR)/reset-lab.yml $(VAULT_ARGS) \
+		$(if $(SEAT_START),-e seat_start=$(SEAT_START)) \
+		$(if $(SEAT_END),-e seat_end=$(SEAT_END))
+
+# ═══════════════════════════════════════════════════════════════════════
 # Quality
 # ═══════════════════════════════════════════════════════════════════════
 
-.PHONY: lint test test-cov lab-test lab-test-fleet lab-test-ansible encrypt-secrets decrypt-secrets clean
+.PHONY: lint test test-cov lab-test lab-test-fleet lab-test-ansible encrypt-secrets decrypt-secrets clean validate-roles
 
-lint: ## [quality] Run yamllint and ansible-lint
+validate-roles: ## [quality] Verify all include_role/import_role references resolve to installed roles
+	@echo "Validating role references..."
+	@errors=0; \
+	for ref in $$(grep -rh 'name:.*ibm\.mas_devops\.' roles/ playbooks/ --include='*.yml' --include='*.yaml' \
+		| grep -v '^\s*#' | grep -v 'msg:' | grep -v 'debug:' \
+		| sed -n 's/.*name:\s*\(ibm\.mas_devops\.[a-z_]*\).*/\1/p' | sort -u); do \
+		role_name=$$(echo "$$ref" | sed 's/ibm\.mas_devops\.//'); \
+		if [ ! -d "collections/ansible_collections/ibm/mas_devops/roles/$$role_name" ]; then \
+			echo "  MISSING: $$ref (no role at collections/.../roles/$$role_name)"; \
+			errors=$$((errors + 1)); \
+		fi; \
+	done; \
+	for ref in $$(grep -rh 'name:' roles/ playbooks/ --include='*.yml' --include='*.yaml' \
+		| grep -E '^\s+name:\s+[a-z_]+\s*$$' | grep -v 'ibm\.' | grep -v 'kubernetes\.' | grep -v 'ansible\.' \
+		| sed -n 's/.*name:\s*\([a-z_]*\)\s*$$/\1/p' | sort -u); do \
+		if [ ! -d "roles/$$ref" ]; then \
+			echo "  MISSING: $$ref (no role at roles/$$ref)"; \
+			errors=$$((errors + 1)); \
+		fi; \
+	done; \
+	if [ $$errors -gt 0 ]; then \
+		echo "FAILED: $$errors role reference(s) could not be resolved"; \
+		exit 1; \
+	else \
+		echo "OK: all role references resolve"; \
+	fi
+
+lint: validate-roles ## [quality] Run yamllint, ansible-lint, and role validation
 	yamllint -c .yamllint.yml .
 	ansible-lint playbooks/ roles/
 

@@ -10,21 +10,34 @@
     masworld_cluster_id: "{{ cluster.id }}"
     masworld_cluster_name: "{{ cluster.id }}"
     masworld_cluster_api_url: "{{ cluster.api_url | default('') }}"
-    masworld_admin_password: "{{ cluster.admin_password | default('') }}"
+    masworld_admin_password: "{{ cluster.admin_password | default('cluster-admin', true) }}"
     masworld_seat_number: "{{ cluster.seat_number | default('') }}"
     masworld_cluster_purpose: "{{ cluster.purpose | default('attendee') }}"
     masworld_event_id: "{{ masworld_env_config.event.id | default('mas-world-2026') }}"
     masworld_base_domain: "{{ cluster.api_url | default('') | regex_replace('^https?://api\\.', '') | regex_replace(':.*$', '') }}"
     masworld_preflight_min_workers: "{{ masworld_env_config.preflight.min_workers | default(3) }}"
-    masworld_preflight_min_cpu: "{{ masworld_env_config.preflight.min_cpu | default(32) }}"
-    masworld_preflight_min_memory_gi: "{{ masworld_env_config.preflight.min_memory_gi | default(128) }}"
+    masworld_preflight_min_cpu: "{{ masworld_env_config.preflight.min_cpu | default(16) }}"
+    masworld_preflight_min_memory_gi: "{{ masworld_env_config.preflight.min_memory_gi | default(64) }}"
   no_log: true
 
 - name: Resolve component profile for {{ cluster.id }}
   ansible.builtin.include_tasks: _resolve-cluster-profile.yml
 
+- name: Clear previous cluster API token
+  ansible.builtin.set_fact:
+    masworld_api_token: ""
+
+- name: "{{ cluster.id }} — Reuse cached bearer token"
+  ansible.builtin.set_fact:
+    masworld_api_token: "{{ _cached_cluster_tokens[cluster.id] }}"
+  when:
+    - _cached_cluster_tokens is defined
+    - _cached_cluster_tokens[cluster.id] | default('') | length > 0
+  no_log: true
+
 - name: Obtain API token for {{ cluster.id }}
   when:
+    - masworld_api_token | default('') | length == 0
     - masworld_admin_password | length > 0
     - masworld_cluster_api_url | length > 0
   block:
@@ -35,6 +48,9 @@
         validate_certs: false
         status_code: [200]
       register: _fleet_oauth_metadata
+      retries: 6
+      delay: 30
+      until: _fleet_oauth_metadata is not failed
 
     - name: "{{ cluster.id }} — Request OAuth token"
       ansible.builtin.uri:
@@ -47,6 +63,9 @@
         follow_redirects: none
         status_code: [302]
       register: _fleet_oauth_response
+      retries: 6
+      delay: 30
+      until: _fleet_oauth_response is not failed
       no_log: true
 
     - name: "{{ cluster.id }} — Extract bearer token"
@@ -54,99 +73,428 @@
         masworld_api_token: "{{ _fleet_oauth_response.location | regex_search('access_token=([^&]+)', '\\1') | first }}"
       no_log: true
 
-- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — efs_csi_driver"
-  ansible.builtin.include_role:
-    name: efs_csi_driver
-  when: masworld_efs_filesystem_id | default('') | length > 0
-
-- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — config_validation"
-  ansible.builtin.include_role:
-    name: config_validation
-  vars:
-    masworld_config_validation_strict: false
-
-- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — cluster_preflight"
-  ansible.builtin.include_role:
-    name: cluster_preflight
-
-- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — event_metadata"
-  ansible.builtin.include_role:
-    name: event_metadata
-
-- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — acm_hub"
-  ansible.builtin.include_role:
-    name: acm_hub
+- name: "{{ cluster.id }} — Set oc CLI context to current cluster"
+  ansible.builtin.command:
+    cmd: "oc login {{ masworld_cluster_api_url }} --token={{ masworld_api_token }} --insecure-skip-tls-verify"
+  environment:
+    KUBECONFIG: "/tmp/kubeconfig-{{ cluster.id }}"
+  retries: 6
+  delay: 30
+  until: _oc_login is not failed
+  register: _oc_login
+  changed_when: false
+  no_log: true
   when:
-    - masworld_cluster_purpose | default('attendee') == 'hub'
-    - masworld_acm_hub_enabled | default(true) | bool
+    - masworld_api_token | default('') | length > 0
+    - masworld_cluster_api_url | default('') | length > 0
 
-- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — acm_registration"
-  ansible.builtin.include_role:
-    name: acm_registration
-  when: masworld_acm_enabled | bool
+- name: "{{ cluster.id }} — Check if ManageWorkspace is already Ready (fast-path)"
+  kubernetes.core.k8s_info:
+    api_version: apps.mas.ibm.com/v1
+    kind: ManageWorkspace
+    name: "{{ masworld_mas_instance_id | default('inst1') }}-{{ masworld_mas_workspace_id | default('masworld') }}"
+    namespace: "mas-{{ masworld_mas_instance_id | default('inst1') }}-manage"
+    host: "{{ masworld_cluster_api_url }}"
+    api_key: "{{ masworld_api_token | default('') }}"
+    validate_certs: false
+  register: _fast_check_manage
+  failed_when: false
+  when: masworld_cluster_purpose | default('attendee') != 'hub'
 
-- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — mas_prerequisites"
-  ansible.builtin.include_role:
-    name: mas_prerequisites
-  when: masworld_mas_prerequisites_enabled | bool
+- name: "{{ cluster.id }} — Evaluate fast-path eligibility"
+  ansible.builtin.set_fact:
+    _cluster_already_ready: >-
+      {{ _fast_check_manage.resources | default([]) | length > 0
+         and (_fast_check_manage.resources[0].status.conditions | default([])
+              | selectattr('type', 'equalto', 'Ready')
+              | selectattr('status', 'equalto', 'True')
+              | list | length > 0) }}
+  when: masworld_cluster_purpose | default('attendee') != 'hub'
 
-- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — mas_core"
-  ansible.builtin.include_role:
-    name: mas_core
-  when: masworld_mas_core_enabled | bool
+- name: "{{ cluster.id }} — FAST-PATH: ManageWorkspace already Ready, skipping MAS deployment roles"
+  ansible.builtin.debug:
+    msg: >-
+      {{ cluster.id }}: ManageWorkspace is Ready. Skipping infrastructure and MAS
+      deployment roles.
+  when:
+    - masworld_cluster_purpose | default('attendee') != 'hub'
+    - _cluster_already_ready | default(false) | bool
 
-- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — maximo_manage"
-  ansible.builtin.include_role:
-    name: maximo_manage
-  when: masworld_manage_enabled | bool
+# ── Per-section readiness checks (skip roles whose resources are in place) ──
 
-- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — logging_operator"
-  ansible.builtin.include_role:
-    name: logging_operator
-  when: masworld_logging_enabled | bool
+- name: "{{ cluster.id }} — Check identity_demo readiness"
+  kubernetes.core.k8s_info:
+    api_version: k8s.keycloak.org/v2alpha1
+    kind: Keycloak
+    namespace: masworld-keycloak
+    host: "{{ masworld_cluster_api_url }}"
+    api_key: "{{ masworld_api_token | default('') }}"
+    validate_certs: false
+  register: _fast_check_keycloak
+  failed_when: false
+  when: masworld_cluster_purpose | default('attendee') != 'hub'
 
-- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — loki_stack"
-  ansible.builtin.include_role:
-    name: loki_stack
-  when: masworld_loki_enabled | bool
+- name: "{{ cluster.id }} — Check OAuth for Keycloak provider"
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: OAuth
+    name: cluster
+    host: "{{ masworld_cluster_api_url }}"
+    api_key: "{{ masworld_api_token | default('') }}"
+    validate_certs: false
+  register: _fast_check_oauth
+  failed_when: false
+  when: masworld_cluster_purpose | default('attendee') != 'hub'
 
-- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — log_forwarding"
-  ansible.builtin.include_role:
-    name: log_forwarding
-  when: masworld_log_forwarding_enabled | bool
+- name: "{{ cluster.id }} — Evaluate identity readiness"
+  ansible.builtin.set_fact:
+    _identity_already_ready: >-
+      {{ (_fast_check_keycloak.resources | default([]) | length > 0)
+         and (_fast_check_keycloak.resources[0].status.conditions | default([])
+              | selectattr('type', 'equalto', 'Ready')
+              | selectattr('status', 'equalto', 'True')
+              | list | length > 0)
+         and (_fast_check_oauth.resources | default([])
+              | map(attribute='spec.identityProviders', default=[]) | flatten
+              | selectattr('name', 'equalto', 'masworld-keycloak')
+              | list | length > 0) }}
+  when: masworld_cluster_purpose | default('attendee') != 'hub'
 
-- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — identity_demo"
-  ansible.builtin.include_role:
-    name: identity_demo
-  when: masworld_identity_enabled | bool
+- name: "{{ cluster.id }} — Check lab_accounts readiness"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: masworld-lab-credentials
+    namespace: "{{ masworld_showroom_namespace | default('showroom') }}"
+    host: "{{ masworld_cluster_api_url }}"
+    api_key: "{{ masworld_api_token | default('') }}"
+    validate_certs: false
+  register: _fast_check_lab_creds
+  failed_when: false
+  when: masworld_cluster_purpose | default('attendee') != 'hub'
 
-- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — mas_edge"
-  ansible.builtin.include_role:
-    name: mas_edge
-  when: masworld_mas_edge_enabled | bool
+- name: "{{ cluster.id }} — Check lab ClusterRoleBinding"
+  kubernetes.core.k8s_info:
+    api_version: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    name: "lab-seat-{{ '%02d' | format(cluster.seat_number | int) }}-masworld-lab-operator"
+    host: "{{ masworld_cluster_api_url }}"
+    api_key: "{{ masworld_api_token | default('') }}"
+    validate_certs: false
+  register: _fast_check_lab_crb
+  failed_when: false
+  when: masworld_cluster_purpose | default('attendee') != 'hub'
 
-- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — student_accounts"
-  ansible.builtin.include_role:
-    name: student_accounts
-  when: masworld_student_accounts_enabled | bool
+- name: "{{ cluster.id }} — Evaluate lab_accounts readiness"
+  ansible.builtin.set_fact:
+    _lab_accounts_already_ready: >-
+      {{ (_fast_check_lab_creds.resources | default([]) | length > 0)
+         and (_fast_check_lab_crb.resources | default([]) | length > 0) }}
+  when: masworld_cluster_purpose | default('attendee') != 'hub'
 
-- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — sample_workloads"
-  ansible.builtin.include_role:
-    name: sample_workloads
-  when: masworld_sample_workloads_enabled | bool
+- name: "{{ cluster.id }} — Check S3 credentials ConfigMap"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    name: masworld-lab-s3-credentials
+    namespace: "{{ masworld_showroom_namespace | default('showroom') }}"
+    host: "{{ masworld_cluster_api_url }}"
+    api_key: "{{ masworld_api_token | default('') }}"
+    validate_certs: false
+  register: _fast_check_s3_cm
+  failed_when: false
+  when: masworld_cluster_purpose | default('attendee') != 'hub'
 
-- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — showroom"
-  ansible.builtin.include_role:
-    name: showroom
-  when: masworld_showroom_enabled | bool
+- name: "{{ cluster.id }} — Evaluate S3 credentials readiness"
+  ansible.builtin.set_fact:
+    _s3_credentials_already_ready: "{{ _fast_check_s3_cm.resources | default([]) | length > 0 }}"
+  when: masworld_cluster_purpose | default('attendee') != 'hub'
 
-- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — event_readiness"
-  ansible.builtin.include_role:
-    name: event_readiness
+- name: "{{ cluster.id }} — Check student namespace"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Namespace
+    name: "student-{{ '%02d' | format(cluster.seat_number | int) }}"
+    host: "{{ masworld_cluster_api_url }}"
+    api_key: "{{ masworld_api_token | default('') }}"
+    validate_certs: false
+  register: _fast_check_student_ns
+  failed_when: false
+  when: masworld_cluster_purpose | default('attendee') != 'hub'
 
-- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — environment_report"
+- name: "{{ cluster.id }} — Evaluate student_accounts readiness"
+  ansible.builtin.set_fact:
+    _student_accounts_already_ready: "{{ _fast_check_student_ns.resources | default([]) | length > 0 }}"
+  when: masworld_cluster_purpose | default('attendee') != 'hub'
+
+- name: "{{ cluster.id }} — Check Showroom pod"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ masworld_showroom_namespace | default('showroom') }}"
+    label_selectors:
+      - app.kubernetes.io/name=showroom
+    host: "{{ masworld_cluster_api_url }}"
+    api_key: "{{ masworld_api_token | default('') }}"
+    validate_certs: false
+  register: _fast_check_showroom
+  failed_when: false
+  when: masworld_cluster_purpose | default('attendee') != 'hub'
+
+- name: "{{ cluster.id }} — Evaluate Showroom readiness"
+  ansible.builtin.set_fact:
+    _showroom_already_ready: >-
+      {{ (_fast_check_showroom.resources | default([])
+          | selectattr('status.phase', 'defined')
+          | selectattr('status.phase', 'equalto', 'Running')
+          | list | length > 0)
+         and not (masworld_force_showroom_refresh | default(false) | bool) }}
+  when: masworld_cluster_purpose | default('attendee') != 'hub'
+
+- name: "{{ cluster.id }} — Report section skip status"
+  ansible.builtin.debug:
+    msg: >-
+      {{ cluster.id }} readiness:
+      MAS={{ _cluster_already_ready | default(false) }},
+      Identity={{ _identity_already_ready | default(false) }},
+      LabAccounts={{ _lab_accounts_already_ready | default(false) }},
+      S3Creds={{ _s3_credentials_already_ready | default(false) }},
+      StudentAccounts={{ _student_accounts_already_ready | default(false) }},
+      Showroom={{ _showroom_already_ready | default(false) }}
+  when: masworld_cluster_purpose | default('attendee') != 'hub'
+
+- name: "{{ cluster.id }} ({{ _resolved_purpose }}) — aws_efs (idempotent)"
   ansible.builtin.include_role:
-    name: environment_report
+    name: aws_efs
+  vars:
+    masworld_aws_access_key_id: "{{ cluster.aws_access_key_id | default(masworld_aws_access_key_id | default('')) }}"
+    masworld_aws_secret_access_key: "{{ cluster.aws_secret_access_key | default(masworld_aws_secret_access_key | default('')) }}"
+    masworld_aws_region: "{{ cluster.aws_region | default(masworld_aws_region | default('us-east-2')) }}"
+  when:
+    - not (_cluster_already_ready | default(false) | bool)
+    - masworld_cluster_purpose | default('attendee') != 'hub'
+    - cluster.aws_access_key_id | default(masworld_aws_access_key_id | default('')) | length > 0
+
+- name: "{{ cluster.id }} — Set EFS filesystem ID from provisioning"
+  ansible.builtin.set_fact:
+    masworld_efs_filesystem_id: "{{ _cluster_efs_ids[masworld_cluster_id] | default(masworld_efs_filesystem_id | default('')) }}"
+  when:
+    - not (_cluster_already_ready | default(false) | bool)
+    - masworld_cluster_purpose | default('attendee') != 'hub'
+
+- name: "{{ cluster.id }} — Resolve IBM entitlement key"
+  ansible.builtin.set_fact:
+    masworld_ibm_entitlement_key: >-
+      {{ masworld_ibm_entitlement_key
+         | default(lookup('ansible.builtin.env', 'IBM_ENTITLEMENT_KEY'), true)
+         | default(lookup('ansible.builtin.file', playbook_dir + '/../secrets/entitlement.dat', errors='ignore'), true) }}
+  no_log: true
+  when: masworld_ibm_entitlement_key is not defined or masworld_ibm_entitlement_key | length == 0
+
+- name: "{{ cluster.id }} — Validate IBM entitlement key is present"
+  ansible.builtin.assert:
+    that:
+      - masworld_ibm_entitlement_key | default('') | length > 0
+    fail_msg: >-
+      IBM entitlement key not found for {{ cluster.id }}.
+      Ensure secrets/entitlement.dat exists or set IBM_ENTITLEMENT_KEY.
+    quiet: true
+  when:
+    - not (_cluster_already_ready | default(false) | bool)
+    - masworld_cluster_purpose | default('attendee') != 'hub'
+
+- name: "{{ cluster.id }} — Deploy roles with K8S authentication"
+  environment:
+    K8S_AUTH_HOST: "{{ masworld_cluster_api_url }}"
+    K8S_AUTH_API_KEY: "{{ masworld_api_token | default('') }}"
+    K8S_AUTH_VERIFY_SSL: "false"
+    KUBECONFIG: "/tmp/kubeconfig-{{ cluster.id }}"
+    IBM_ENTITLEMENT_KEY: "{{ masworld_ibm_entitlement_key | default('') }}"
+  block:
+    - name: "{{ cluster.id }} ({{ _resolved_purpose }}) — efs_csi_driver"
+      ansible.builtin.include_role:
+        name: efs_csi_driver
+      when:
+        - not (_cluster_already_ready | default(false) | bool)
+        - masworld_efs_filesystem_id | default('') | length > 0
+
+    - name: "{{ cluster.id }} ({{ _resolved_purpose }}) — config_validation"
+      ansible.builtin.include_role:
+        name: config_validation
+      vars:
+        masworld_config_validation_strict: false
+      when: not (_cluster_already_ready | default(false) | bool)
+
+    - name: "{{ cluster.id }} ({{ _resolved_purpose }}) — cluster_preflight"
+      ansible.builtin.include_role:
+        name: cluster_preflight
+      when: not (_cluster_already_ready | default(false) | bool)
+
+    - name: "{{ cluster.id }} ({{ _resolved_purpose }}) — event_metadata"
+      ansible.builtin.include_role:
+        name: event_metadata
+      when: not (_cluster_already_ready | default(false) | bool)
+
+    - name: "{{ cluster.id }} ({{ _resolved_purpose }}) — acm_hub"
+      ansible.builtin.include_role:
+        name: acm_hub
+      when:
+        - masworld_cluster_purpose | default('attendee') == 'hub'
+        - masworld_acm_hub_enabled | default(true) | bool
+
+    - name: "{{ cluster.id }} ({{ _resolved_purpose }}) — acm_registration"
+      ansible.builtin.include_role:
+        name: acm_registration
+      when:
+        - not (_cluster_already_ready | default(false) | bool)
+        - masworld_acm_enabled | bool
+        - masworld_cluster_purpose | default('attendee') != 'hub'
+
+    - name: "{{ cluster.id }} ({{ _resolved_purpose }}) — mas_prerequisites"
+      ansible.builtin.include_role:
+        name: mas_prerequisites
+      when:
+        - not (_cluster_already_ready | default(false) | bool)
+        - masworld_mas_prerequisites_enabled | bool
+
+    - name: "{{ cluster.id }} ({{ _resolved_purpose }}) — mas_core"
+      ansible.builtin.include_role:
+        name: mas_core
+      when:
+        - not (_cluster_already_ready | default(false) | bool)
+        - masworld_mas_core_enabled | bool
+
+    - name: "{{ cluster.id }} ({{ _resolved_purpose }}) — maximo_manage"
+      ansible.builtin.include_role:
+        name: maximo_manage
+      when:
+        - not (_cluster_already_ready | default(false) | bool)
+        - masworld_manage_enabled | bool
+
+    - name: "{{ cluster.id }} ({{ _resolved_purpose }}) — aws_s3_bucket"
+      ansible.builtin.include_role:
+        name: aws_s3_bucket
+      vars:
+        masworld_aws_access_key_id: "{{ cluster.aws_access_key_id | default(masworld_aws_access_key_id | default('')) }}"
+        masworld_aws_secret_access_key: "{{ cluster.aws_secret_access_key | default(masworld_aws_secret_access_key | default('')) }}"
+        masworld_aws_region: "{{ cluster.aws_region | default(masworld_aws_region | default('us-east-2')) }}"
+        masworld_cluster_id: "{{ cluster.id }}"
+        masworld_s3_bucket_name: "{{ cluster.id | s3_bucket_name }}"
+      when:
+        - not (_cluster_already_ready | default(false) | bool)
+        - masworld_cluster_purpose | default('attendee') != 'hub'
+        - cluster.aws_access_key_id | default(masworld_aws_access_key_id | default('')) | length > 0
+
+    - name: "{{ cluster.id }} — Store S3 credentials for Showroom"
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: masworld-lab-s3-credentials
+            namespace: "{{ masworld_showroom_namespace | default('showroom') }}"
+            labels:
+              masworld.redhat.com/component: lab-s3
+          data:
+            bucket_name: "{{ cluster.id | s3_bucket_name }}"
+            aws_access_key_id: "{{ cluster.aws_access_key_id | default('') }}"
+            aws_secret_access_key: "{{ cluster.aws_secret_access_key | default('') }}"
+            aws_region: "{{ cluster.aws_region | default('us-east-2') }}"
+      when:
+        - not (_s3_credentials_already_ready | default(false) | bool)
+        - masworld_cluster_purpose | default('attendee') != 'hub'
+        - cluster.aws_access_key_id | default('') | length > 0
+      no_log: true
+
+    - name: "{{ cluster.id }} ({{ _resolved_purpose }}) — logging_operator"
+      ansible.builtin.include_role:
+        name: logging_operator
+      when: masworld_logging_enabled | bool
+
+    - name: "{{ cluster.id }} ({{ _resolved_purpose }}) — loki_stack"
+      ansible.builtin.include_role:
+        name: loki_stack
+      when: masworld_loki_enabled | bool
+
+    - name: "{{ cluster.id }} ({{ _resolved_purpose }}) — log_forwarding"
+      ansible.builtin.include_role:
+        name: log_forwarding
+      when: masworld_log_forwarding_enabled | bool
+
+    - name: "{{ cluster.id }} — SKIP identity_demo (already ready)"
+      ansible.builtin.debug:
+        msg: "{{ cluster.id }}: Keycloak + OAuth already configured — skipping identity_demo"
+      when:
+        - masworld_identity_enabled | bool
+        - _identity_already_ready | default(false) | bool
+
+    - name: "{{ cluster.id }} ({{ _resolved_purpose }}) — identity_demo"
+      ansible.builtin.include_role:
+        name: identity_demo
+      when:
+        - masworld_identity_enabled | bool
+        - not (_identity_already_ready | default(false) | bool)
+
+    - name: "{{ cluster.id }} — SKIP lab_accounts (already ready)"
+      ansible.builtin.debug:
+        msg: "{{ cluster.id }}: Lab credentials + CRB exist — skipping lab_accounts"
+      when:
+        - masworld_lab_accounts_enabled | bool
+        - _lab_accounts_already_ready | default(false) | bool
+
+    - name: "{{ cluster.id }} ({{ _resolved_purpose }}) — lab_accounts"
+      ansible.builtin.include_role:
+        name: lab_accounts
+      when:
+        - masworld_lab_accounts_enabled | bool
+        - not (_lab_accounts_already_ready | default(false) | bool)
+
+    - name: "{{ cluster.id }} ({{ _resolved_purpose }}) — mas_edge"
+      ansible.builtin.include_role:
+        name: mas_edge
+      when: masworld_mas_edge_enabled | bool
+
+    - name: "{{ cluster.id }} — SKIP student_accounts (already ready)"
+      ansible.builtin.debug:
+        msg: "{{ cluster.id }}: Student namespace exists — skipping student_accounts"
+      when:
+        - masworld_student_accounts_enabled | bool
+        - _student_accounts_already_ready | default(false) | bool
+
+    - name: "{{ cluster.id }} ({{ _resolved_purpose }}) — student_accounts"
+      ansible.builtin.include_role:
+        name: student_accounts
+      when:
+        - masworld_student_accounts_enabled | bool
+        - not (_student_accounts_already_ready | default(false) | bool)
+
+    - name: "{{ cluster.id }} ({{ _resolved_purpose }}) — sample_workloads"
+      ansible.builtin.include_role:
+        name: sample_workloads
+      when: masworld_sample_workloads_enabled | bool
+
+    - name: "{{ cluster.id }} — SKIP showroom (already running)"
+      ansible.builtin.debug:
+        msg: "{{ cluster.id }}: Showroom pod Running — skipping showroom (use FORCE_SHOWROOM=true to override)"
+      when:
+        - masworld_showroom_enabled | bool
+        - _showroom_already_ready | default(false) | bool
+
+    - name: "{{ cluster.id }} ({{ _resolved_purpose }}) — showroom"
+      ansible.builtin.include_role:
+        name: showroom
+      when:
+        - masworld_showroom_enabled | bool
+        - not (_showroom_already_ready | default(false) | bool)
+
+    - name: "{{ cluster.id }} ({{ _resolved_purpose }}) — event_readiness"
+      ansible.builtin.include_role:
+        name: event_readiness
+
+    - name: "{{ cluster.id }} ({{ _resolved_purpose }}) — environment_report"
+      ansible.builtin.include_role:
+        name: environment_report
 
 - name: Record success for {{ cluster.id }}
   ansible.builtin.set_fact:

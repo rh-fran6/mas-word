@@ -1,8 +1,7 @@
 ---
 # Identity exercise – reset
-# Verifies identity components are in their expected state.
-# Since identity is infrastructure-level, this playbook verifies rather
-# than modifies, and reports which components need manual attention.
+# Cleans up student-created resources (groups) and verifies infrastructure.
+# NEVER touches Keycloak, OpenLDAP, OAuth, or MAS.
 - name: Reset identity exercise
   hosts: localhost
   connection: local
@@ -11,13 +10,53 @@
   vars:
     seat_padded: "{{ '%02d' | format(seat_number | int) }}"
     student_ns: "student-{{ seat_padded }}"
-    student_user: "user{{ seat_padded }}"
+    lab_username: "lab-seat-{{ seat_padded }}"
     keycloak_ns: masworld-keycloak
     issues: []
 
   tasks:
     # ------------------------------------------------------------------
-    # 1. Verify Keycloak CR exists and is Ready
+    # 1. Delete OpenShift Groups created by group sync
+    # ------------------------------------------------------------------
+    - name: Delete mas-admins group
+      kubernetes.core.k8s:
+        api_version: user.openshift.io/v1
+        kind: Group
+        name: mas-admins
+        state: absent
+      register: del_admins
+      failed_when: false
+
+    - name: Delete mas-users group
+      kubernetes.core.k8s:
+        api_version: user.openshift.io/v1
+        kind: Group
+        name: mas-users
+        state: absent
+      register: del_users
+      failed_when: false
+
+    - name: Report group cleanup
+      ansible.builtin.debug:
+        msg: |
+          Groups cleaned up:
+            mas-admins: {{ 'deleted' if del_admins.changed | default(false) else 'not found (already clean)' }}
+            mas-users: {{ 'deleted' if del_users.changed | default(false) else 'not found (already clean)' }}
+
+    # ------------------------------------------------------------------
+    # 2. Clean up temp files from group sync
+    # ------------------------------------------------------------------
+    - name: Remove temp files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/ldap-group-sync.yaml
+        - /tmp/ldap-bind-password
+      failed_when: false
+
+    # ------------------------------------------------------------------
+    # 3. Verify Keycloak CR exists and is Ready (infrastructure check)
     # ------------------------------------------------------------------
     - name: Check Keycloak CR
       kubernetes.core.k8s_info:
@@ -48,7 +87,7 @@
       when: not keycloak_ready | bool
 
     # ------------------------------------------------------------------
-    # 2. Verify OpenLDAP pod is Running
+    # 4. Verify OpenLDAP pod is Running
     # ------------------------------------------------------------------
     - name: Check OpenLDAP pod
       kubernetes.core.k8s_info:
@@ -79,7 +118,7 @@
       when: not ldap_running | bool
 
     # ------------------------------------------------------------------
-    # 3. Verify OAuth CR has masworld-keycloak provider
+    # 5. Verify OAuth CR has masworld-keycloak provider
     # ------------------------------------------------------------------
     - name: Check OAuth CR
       kubernetes.core.k8s_info:
@@ -109,7 +148,7 @@
       when: not oauth_has_keycloak | bool
 
     # ------------------------------------------------------------------
-    # 4. Verify OIDC client secret exists
+    # 6. Verify OIDC client secret exists
     # ------------------------------------------------------------------
     - name: Check OIDC client secret
       kubernetes.core.k8s_info:
@@ -136,49 +175,39 @@
       when: not oidc_secret_exists | bool
 
     # ------------------------------------------------------------------
-    # 5. Verify KeycloakRealmImport exists with LDAP federation
-    # ------------------------------------------------------------------
-    - name: Check KeycloakRealmImport
-      kubernetes.core.k8s_info:
-        api_version: k8s.keycloak.org/v2alpha1
-        kind: KeycloakRealmImport
-        name: masworld-realm
-        namespace: "{{ keycloak_ns }}"
-      register: realm_result
-      failed_when: false
-
-    - name: Evaluate realm import
-      ansible.builtin.set_fact:
-        realm_exists: "{{ realm_result.resources | default([]) | length > 0 }}"
-
-    - name: Report realm import
-      ansible.builtin.debug:
-        msg: >-
-          KeycloakRealmImport masworld-realm:
-          {{ 'EXISTS' if realm_exists | bool else 'NOT FOUND – needs manual attention' }}
-
-    - name: Track realm import issue
-      ansible.builtin.set_fact:
-        issues: "{{ issues + ['KeycloakRealmImport masworld-realm missing from ' + keycloak_ns] }}"
-      when: not realm_exists | bool
-
-    # ------------------------------------------------------------------
-    # 6. Final output
+    # 7. Final output
     # ------------------------------------------------------------------
     - name: Reset complete – all OK
       ansible.builtin.debug:
         msg: |
           ============================================================
-          Identity exercise reset complete. All components verified.
+          IDENTITY EXERCISE – RESET COMPLETE
           ============================================================
+          Removed:
+            - OpenShift groups (mas-admins, mas-users)
+            - Temp files (/tmp/ldap-group-sync.yaml, /tmp/ldap-bind-password)
+
+          NOT touched:
+            - Keycloak / OpenLDAP
+            - OAuth configuration
+            - OIDC client secret
+            - MAS namespaces
+          ============================================================
+          All infrastructure components verified OK.
+          The student can re-run Exercise 6 from the beginning.
       when: issues | length == 0
 
     - name: Reset complete – issues found
       ansible.builtin.debug:
         msg: |
           ============================================================
-          Identity exercise reset complete with issues.
-          The following components need manual attention:
+          IDENTITY EXERCISE – RESET COMPLETE (with issues)
+          ============================================================
+          Removed:
+            - OpenShift groups (mas-admins, mas-users)
+            - Temp files
+
+          Issues needing manual attention:
           {% for issue in issues %}
             - {{ issue }}
           {% endfor %}

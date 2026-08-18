@@ -17,8 +17,16 @@
   gather_facts: false
 
   vars_files:
-    - ../secrets/rosa-token.yml
     - ../secrets/cluster-credentials.yml
+
+  module_defaults:
+    group/kubernetes.core.k8s:
+      host: "{{ masworld_cluster_api_url | default(omit, true) }}"
+      api_key: "{{ masworld_api_token | default(omit, true) }}"
+      validate_certs: false
+    group/ibm.mas_devops.k8s:
+      host: "{{ masworld_cluster_api_url | default(omit, true) }}"
+      api_key: "{{ masworld_api_token | default(omit, true) }}"
 
   pre_tasks:
     - name: Validate deployment scenario is specified
@@ -38,6 +46,12 @@
           ║  MAS World 2026 — Scenario Deployment                      ║
           ║  Scenario: {{ deployment_scenario | upper | center(46) }}   ║
           ╚══════════════════════════════════════════════════════════════╝
+      tags: [always]
+
+    - name: Load global ROSA token for provisioning scenarios
+      ansible.builtin.include_vars:
+        file: "../secrets/rosa-token.yml"
+      when: deployment_scenario in ['greenfield', 'aws-ready']
       tags: [always]
 
     - name: Load component versions

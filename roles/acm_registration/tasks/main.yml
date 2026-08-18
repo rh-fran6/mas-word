@@ -50,6 +50,9 @@
         follow_redirects: none
         status_code: [302]
       register: _acm_oauth_response
+      retries: 6
+      delay: 30
+      until: _acm_oauth_response is not failed
       no_log: true
 
     - name: Extract API token from OAuth redirect

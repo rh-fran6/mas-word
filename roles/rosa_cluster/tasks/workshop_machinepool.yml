@@ -9,57 +9,103 @@
       - workshop_machinepool_instance_type | length > 0
     fail_msg: "workshop_machinepool_instance_type must be provided (e.g., m5.xlarge, m5.2xlarge, m6a.4xlarge)"
 
+- name: Identify ROSA-visible clusters
+  ansible.builtin.set_fact:
+    _wmp_rosa_clusters: >-
+      {{ cluster_definitions | selectattr('name', 'in', _rosa_managed_names | default([])) | list }}
+    _wmp_non_rosa_clusters: >-
+      {{ cluster_definitions | rejectattr('name', 'in', _rosa_managed_names | default([])) | list }}
+
+- name: Warn about clusters not visible to ROSA
+  ansible.builtin.debug:
+    msg: >-
+      {{ _wmp_non_rosa_clusters | length }} cluster(s) not managed by this ROSA account
+      ({{ _wmp_non_rosa_clusters | map(attribute='name') | join(', ') }}).
+      Workshop machinepool cannot be created via ROSA CLI for these clusters — skipping.
+      Ensure sufficient worker capacity exists or create machinepools manually.
+  when: _wmp_non_rosa_clusters | length > 0
+
+- name: Display workshop machinepool plan
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'Creating workshop machinepool on ' ~ _wmp_rosa_clusters | length ~ ' ROSA-managed cluster(s): '
+         if _wmp_rosa_clusters | length > 0
+         else 'No ROSA-managed clusters found — skipping machinepool creation.' }}
+      {{ 'name=' ~ workshop_machinepool_name ~ ', instance_type=' ~ workshop_machinepool_instance_type ~
+         ', autoscaling=' ~ workshop_machinepool_min_replicas ~ '-' ~ workshop_machinepool_max_replicas
+         if _wmp_rosa_clusters | length > 0 else '' }}
+
 - name: Check for existing workshop machinepools
   ansible.builtin.shell: |
     set -o pipefail
-    rosa list machinepools --cluster={{ item.name }} --output json 2>/dev/null \
+    rosa list machinepools --cluster={{ _rosa_managed_ids[item.name] | default(item.name) }} --output json 2>/dev/null \
       | python3 -c "import sys,json; pools=json.load(sys.stdin); print(' '.join(p['id'] for p in pools))"
   args:
     executable: /bin/bash
   environment:
+    OCM_CONFIG: "/tmp/rosa-cluster-ocm-configs/{{ item.name }}.json"
     AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
     AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
     AWS_DEFAULT_REGION: "{{ item.aws_region }}"
-  loop: "{{ cluster_definitions }}"
+  loop: "{{ _wmp_rosa_clusters }}"
   loop_control:
     label: "{{ item.name }}"
   register: _wmp_existing_pools
+  retries: 6
+  delay: 30
+  until: _wmp_existing_pools is not failed
   failed_when: false
   changed_when: false
   no_log: true
+  when:
+    - _wmp_rosa_clusters | length > 0
+    - _cached_machinepool_pools is not defined
 
-- name: Build list of clusters needing workshop machinepool  # noqa: jinja[invalid]
+- name: Build list of clusters needing workshop machinepool (live)  # noqa: jinja[invalid]
   ansible.builtin.set_fact:
     _wmp_clusters_needing_pool: >-
       {{ _wmp_clusters_needing_pool | default([]) +
          ( [item.0] if workshop_machinepool_name not in (item.1.stdout | default(''))
            else [] ) }}
-  loop: "{{ cluster_definitions | zip(_wmp_existing_pools.results) | list }}"
+  loop: "{{ _wmp_rosa_clusters | zip(_wmp_existing_pools.results | default([])) | list }}"
   loop_control:
     label: "{{ item.0.name }}"
   no_log: true
+  when:
+    - _wmp_rosa_clusters | length > 0
+    - _cached_machinepool_pools is not defined
+
+- name: Build list of clusters needing workshop machinepool (cached)  # noqa: jinja[invalid]
+  vars:
+    _pool_names: "{{ (_cached_machinepool_pools | default({}))[item.name] | default('') }}"
+  ansible.builtin.set_fact:
+    _wmp_clusters_needing_pool: >-
+      {{ _wmp_clusters_needing_pool | default([]) +
+         ( [item] if workshop_machinepool_name not in _pool_names
+           else [] ) }}
+  loop: "{{ _wmp_rosa_clusters }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+  when:
+    - _wmp_rosa_clusters | length > 0
+    - _cached_machinepool_pools is defined
 
 - name: Report existing workshop machinepools (will be skipped)
   ansible.builtin.debug:
-    msg: "{{ item.0.name }}: workshop machinepool '{{ workshop_machinepool_name }}' already exists, skipping"
-  loop: "{{ cluster_definitions | zip(_wmp_existing_pools.results) | list }}"
+    msg: "{{ item.name }}: workshop machinepool '{{ workshop_machinepool_name }}' already exists, skipping"
+  loop: "{{ _wmp_rosa_clusters }}"
   loop_control:
-    label: "{{ item.0.name }}"
-  when: workshop_machinepool_name in (item.1.stdout | default(''))
-
-- name: Display workshop machinepool plan
-  ansible.builtin.debug:
-    msg: >-
-      Creating workshop machinepool on {{ _wmp_clusters_needing_pool | default([]) | length }} cluster(s):
-      name={{ workshop_machinepool_name }},
-      instance_type={{ workshop_machinepool_instance_type }},
-      autoscaling={{ workshop_machinepool_min_replicas }}-{{ workshop_machinepool_max_replicas }}
+    label: "{{ item.name }}"
+  when:
+    - _wmp_rosa_clusters | length > 0
+    - item.name not in (_wmp_clusters_needing_pool | default([]) | map(attribute='name') | list)
 
 - name: Create workshop machinepool on each cluster
   ansible.builtin.shell: |
     set -o pipefail
     rosa create machinepool \
-      --cluster={{ item.name }} \
+      --cluster={{ _rosa_managed_ids[item.name] | default(item.name) }} \
       --name={{ workshop_machinepool_name }} \
       --instance-type={{ workshop_machinepool_instance_type }} \
       --enable-autoscaling \
@@ -69,6 +115,7 @@
   args:
     executable: /bin/bash
   environment:
+    OCM_CONFIG: "/tmp/rosa-cluster-ocm-configs/{{ item.name }}.json"
     AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
     AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
     AWS_DEFAULT_REGION: "{{ item.aws_region }}"
@@ -76,6 +123,9 @@
   loop_control:
     label: "{{ item.name }}"
   register: _wmp_create_results
+  retries: 6
+  delay: 30
+  until: _wmp_create_results.rc == 0
   failed_when: false
   no_log: true
 

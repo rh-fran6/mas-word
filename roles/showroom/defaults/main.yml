@@ -6,7 +6,7 @@ masworld_showroom_enabled: true
 masworld_showroom_chart_version: "v2.1.8"
 
 # Showroom content repository
-masworld_showroom_content_repo: "https://github.com/rh-fran6/mas-word.git"
+masworld_showroom_content_repo: "https://github.com/rh-fran6/mas-world.git"
 
 # Content branch or tag
 masworld_showroom_content_ref: "main"
@@ -17,9 +17,9 @@ masworld_showroom_antora_playbook: "site.yml"
 # Deployment namespace
 masworld_showroom_namespace: "showroom"
 
-# Helm chart repository
-masworld_showroom_chart_repo: "https://rhpds.github.io/showroom-deployer"
+# Helm chart (local)
 masworld_showroom_chart_name: "showroom-single-pod"
+masworld_showroom_chart_local_dir: "{{ playbook_dir }}/../charts"
 
 # Seat number and username — set by playbook
 masworld_seat_number: "{{ seat_number | default(1) }}"

@@ -3,6 +3,23 @@
 # Idempotent: checks for existing MultiClusterHub before acting.
 # Should only run against the hub cluster (purpose == 'hub').
 
+- name: ACM Hub — Resolve operator channel from components config
+  ansible.builtin.set_fact:
+    _acm_channel: >-
+      {{ 'release-' ~ masworld_components.components.acm.version
+         if (masworld_components is defined and
+             masworld_components.components is defined and
+             masworld_components.components.acm is defined and
+             masworld_components.components.acm.version is defined)
+         else masworld_acm_operator_channel }}
+
+- name: ACM Hub — Display subscription parameters
+  ansible.builtin.debug:
+    msg: >-
+      ACM operator: channel={{ _acm_channel }},
+      source={{ masworld_acm_operator_source }},
+      namespace={{ masworld_acm_namespace }}
+
 - name: ACM Hub — Install and configure
   block:
     - name: Check if MultiClusterHub already exists
@@ -48,25 +65,67 @@
                 name: advanced-cluster-management
                 namespace: "{{ masworld_acm_namespace }}"
               spec:
-                channel: "{{ masworld_acm_operator_channel }}"
+                channel: "{{ _acm_channel }}"
                 installPlanApproval: Automatic
                 name: advanced-cluster-management
                 source: "{{ masworld_acm_operator_source }}"
                 sourceNamespace: "{{ masworld_acm_operator_source_namespace }}"
 
-        - name: Wait for ACM operator deployment
+        - name: Check Subscription health before waiting for operator
           kubernetes.core.k8s_info:
-            api_version: apps/v1
-            kind: Deployment
+            api_version: operators.coreos.com/v1alpha1
+            kind: Subscription
+            name: advanced-cluster-management
             namespace: "{{ masworld_acm_namespace }}"
-            label_selectors:
-              - "app=multiclusterhub-operator"
-          register: _acm_operator_deploy
-          until:
-            - _acm_operator_deploy.resources | length > 0
-            - _acm_operator_deploy.resources[0].status.availableReplicas | default(0) | int > 0
-          retries: 60
+          register: _acm_sub_check
+          retries: 10
           delay: 15
+          until:
+            - _acm_sub_check.resources | length > 0
+            - _acm_sub_check.resources[0].status is defined
+            - _acm_sub_check.resources[0].status.installedCSV is defined
+              or (_acm_sub_check.resources[0].status.conditions | default([])
+                  | selectattr('type', 'equalto', 'CatalogSourcesUnhealthy')
+                  | selectattr('status', 'equalto', 'True') | list | length > 0)
+
+        - name: Fail early if CatalogSource is unhealthy
+          ansible.builtin.fail:
+            msg: >-
+              ACM Subscription failed — CatalogSource '{{ masworld_acm_operator_source }}'
+              in '{{ masworld_acm_operator_source_namespace }}' may not contain the
+              'advanced-cluster-management' package or channel '{{ _acm_channel }}'.
+              Subscription status: {{ _acm_sub_check.resources[0].status | default({}) | to_nice_yaml }}
+          when:
+            - _acm_sub_check.resources | length > 0
+            - _acm_sub_check.resources[0].status.installedCSV is not defined
+            - (_acm_sub_check.resources[0].status.conditions | default([])
+               | selectattr('type', 'equalto', 'CatalogSourcesUnhealthy')
+               | selectattr('status', 'equalto', 'True') | list | length > 0)
+
+        - name: Capture installed CSV name
+          ansible.builtin.set_fact:
+            _acm_installed_csv: "{{ _acm_sub_check.resources[0].status.installedCSV }}"
+          when:
+            - _acm_sub_check.resources | length > 0
+            - _acm_sub_check.resources[0].status.installedCSV is defined
+
+        - name: Display installed CSV
+          ansible.builtin.debug:
+            msg: "ACM Subscription resolved: {{ _acm_installed_csv | default('pending') }}"
+
+        - name: Wait for ACM ClusterServiceVersion to succeed
+          kubernetes.core.k8s_info:
+            api_version: operators.coreos.com/v1alpha1
+            kind: ClusterServiceVersion
+            name: "{{ _acm_installed_csv }}"
+            namespace: "{{ masworld_acm_namespace }}"
+          register: _acm_csv_status
+          until:
+            - _acm_csv_status.resources | length > 0
+            - _acm_csv_status.resources[0].status.phase | default('') == 'Succeeded'
+          retries: 40
+          delay: 15
+          when: _acm_installed_csv is defined
 
     - name: Create MultiClusterHub
       kubernetes.core.k8s:
@@ -102,10 +161,54 @@
         msg: "ACM MultiClusterHub is Running in {{ masworld_acm_namespace }}"
 
   rescue:
+    - name: Diagnose ACM Subscription state
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: Subscription
+        name: advanced-cluster-management
+        namespace: "{{ masworld_acm_namespace }}"
+      register: _acm_sub_diag
+      ignore_errors: true
+
+    - name: Diagnose InstallPlan state
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: InstallPlan
+        namespace: "{{ masworld_acm_namespace }}"
+      register: _acm_ip_diag
+      ignore_errors: true
+
+    - name: Display diagnostic information
+      ansible.builtin.debug:
+        msg: |
+          ACM Hub installation failed. Diagnostics:
+
+          Subscription status:
+          {{ (_acm_sub_diag.resources[0].status | default({}) | to_nice_yaml) if (_acm_sub_diag.resources | default([]) | length > 0) else 'No subscription found' }}
+
+          InstallPlan count: {{ _acm_ip_diag.resources | default([]) | length }}
+          {% for ip in _acm_ip_diag.resources | default([]) %}
+          InstallPlan {{ ip.metadata.name }}: phase={{ ip.status.phase | default('unknown') }}
+          {% endfor %}
+
+          Configuration used:
+            channel: {{ _acm_channel }}
+            source: {{ masworld_acm_operator_source }}
+            sourceNamespace: {{ masworld_acm_operator_source_namespace }}
+
+          Common causes:
+            - CatalogSource does not contain the package (must be 'redhat-operators')
+            - Channel does not exist for target OCP version
+            - InstallPlan approval stuck or failed
+            - Cluster pull-secret missing Red Hat registry credentials
+
     - name: Set ACM hub failure fact
       ansible.builtin.set_fact:
         acm_hub_ready: false
 
-    - name: Report ACM hub failure
-      ansible.builtin.debug:
-        msg: "ACM Hub installation failed: {{ ansible_failed_result.msg | default('unknown error') }}"
+    - name: Re-raise failure (strict mode)
+      ansible.builtin.fail:
+        msg: >-
+          ACM hub installation failed: {{ ansible_failed_result.msg | default('unknown error') }}.
+          Check MultiClusterHub status in namespace {{ masworld_acm_namespace }}.
+      when: masworld_acm_hub_strict | default(true) | bool

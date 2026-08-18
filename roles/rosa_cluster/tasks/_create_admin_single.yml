@@ -9,12 +9,13 @@
   ansible.builtin.shell: |
     set -o pipefail
     rosa create admin \
-      --cluster={{ admin_check.item.name }} \
+      --cluster={{ _rosa_managed_ids[admin_check.item.name] | default(admin_check.item.name) }} \
       --password={{ _admin_pw }} \
       --yes 2>&1
   args:
     executable: /bin/bash
   environment:
+    OCM_CONFIG: "/tmp/rosa-cluster-ocm-configs/{{ admin_check.item.name }}.json"
     AWS_ACCESS_KEY_ID: "{{ admin_check.item.aws_access_key_id }}"
     AWS_SECRET_ACCESS_KEY: "{{ admin_check.item.aws_secret_access_key }}"
     AWS_DEFAULT_REGION: "{{ admin_check.item.aws_region }}"

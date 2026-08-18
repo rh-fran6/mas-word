@@ -1,6 +1,6 @@
 ---
 # Identity exercise – solve
-# Executes all identity verification commands and displays results.
+# Executes all identity verification commands and performs group sync.
 - name: Solve identity exercise
   hosts: localhost
   connection: local
@@ -9,12 +9,12 @@
   vars:
     seat_padded: "{{ '%02d' | format(seat_number | int) }}"
     student_ns: "student-{{ seat_padded }}"
-    student_user: "user{{ seat_padded }}"
+    lab_username: "lab-seat-{{ seat_padded }}"
     keycloak_ns: masworld-keycloak
 
   tasks:
     # ------------------------------------------------------------------
-    # 1. Show OAuth identity providers (names and types)
+    # 1. Show OAuth identity providers
     # ------------------------------------------------------------------
     - name: Get OAuth CR
       kubernetes.core.k8s_info:
@@ -139,91 +139,116 @@
           {% endif %}
 
     # ------------------------------------------------------------------
-    # 7. Show OIDC provider configuration (issuer URL)
+    # 7. Perform OpenShift group sync from LDAP
     # ------------------------------------------------------------------
-    - name: Show OIDC provider issuer URL
-      ansible.builtin.debug:
-        msg: |
-          === OIDC Provider Configuration ===
-          {% set idps = oauth_result.resources[0].spec.identityProviders | default([]) %}
-          {% for idp in idps %}
-          {% if idp.type == 'OpenID' %}
-          Name: {{ idp.name }}
-          Issuer: {{ idp.openID.issuer | default('not configured') }}
-          Client ID: {{ idp.openID.clientID | default('not configured') }}
-          Claims mapping:
-            preferredUsername: {{ idp.openID.claims.preferredUsername | default([]) | join(', ') }}
-            name: {{ idp.openID.claims.name | default([]) | join(', ') }}
-            email: {{ idp.openID.claims.email | default([]) | join(', ') }}
-          {% endif %}
-          {% endfor %}
-      when: oauth_result.resources | default([]) | length > 0
-
-    # ------------------------------------------------------------------
-    # 8. Show OIDC client secret existence (NOT the value)
-    # ------------------------------------------------------------------
-    - name: Check OIDC client secret
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Secret
-        name: keycloak-oidc-client-secret
-        namespace: openshift-config
-      register: oidc_secret_result
-      failed_when: false
-
-    - name: Show OIDC client secret existence
-      ansible.builtin.debug:
-        msg: |
-          === OIDC Client Secret ===
-          Secret keycloak-oidc-client-secret in openshift-config:
-          {{ 'EXISTS' if oidc_secret_result.resources | default([]) | length > 0 else 'NOT FOUND' }}
-          {% if oidc_secret_result.resources | default([]) | length > 0 %}
-          Keys present: {{ oidc_secret_result.resources[0].data.keys() | list | join(', ') }}
-          (Values are not displayed for security)
-          {% endif %}
-
-    # ------------------------------------------------------------------
-    # 9. Show current users and identities (first 10)
-    # ------------------------------------------------------------------
-    - name: Get users
+    - name: Get LDAP bind password
       ansible.builtin.command:
-        cmd: oc get users --no-headers -o custom-columns=NAME:.metadata.name,IDENTITIES:.identities
-      register: users_result
+        cmd: oc get secret openldap-admin-secret -n {{ keycloak_ns }} -o jsonpath='{.data.password}'
+      register: ldap_bind_pass_b64
       failed_when: false
 
-    - name: Show first 10 users and identities
+    - name: Write LDAP bind password to temp file
+      ansible.builtin.copy:
+        content: "{{ ldap_bind_pass_b64.stdout | b64decode }}"
+        dest: /tmp/ldap-bind-password
+        mode: "0600"
+      no_log: true
+      when: ldap_bind_pass_b64.stdout | default('') | length > 0
+
+    - name: Write LDAP group sync config
+      ansible.builtin.copy:
+        content: |
+          kind: LDAPSyncConfig
+          apiVersion: v1
+          url: ldap://openldap.{{ keycloak_ns }}.svc:3389
+          insecure: true
+          bindDN: "cn=Directory Manager"
+          bindPassword:  # pragma: allowlist secret
+            file: /tmp/ldap-bind-password
+          groupUIDNameMapping:
+            "cn=mas-admins,ou=groups,dc=masworld,dc=example,dc=com": mas-admins
+            "cn=mas-users,ou=groups,dc=masworld,dc=example,dc=com": mas-users
+          rfc2307:
+            groupsQuery:
+              baseDN: "ou=groups,dc=masworld,dc=example,dc=com"
+              scope: sub
+              derefAliases: never
+              filter: (objectClass=groupOfNames)
+            groupUIDAttribute: dn
+            groupNameAttributes:
+              - cn
+            groupMembershipAttributes:
+              - member
+            usersQuery:
+              baseDN: "ou=users,dc=masworld,dc=example,dc=com"
+              scope: sub
+              derefAliases: never
+            userUIDAttribute: dn
+            userNameAttributes:
+              - uid
+        dest: /tmp/ldap-group-sync.yaml
+        mode: "0644"
+
+    - name: Run oc adm groups sync
+      ansible.builtin.command:
+        cmd: oc adm groups sync --sync-config=/tmp/ldap-group-sync.yaml --confirm
+      register: group_sync_result
+      failed_when: false
+
+    - name: Show group sync result
       ansible.builtin.debug:
         msg: |
-          === Users and Identities (first 10) ===
-          {{ users_result.stdout_lines[:10] | default(['No users found']) | join('\n') }}
-          {% if users_result.stdout_lines | default([]) | length > 10 %}
-          ... and {{ users_result.stdout_lines | length - 10 }} more
-          {% endif %}
+          === OpenShift Group Sync ===
+          {{ group_sync_result.stdout | default('No output') }}
+          {{ group_sync_result.stderr | default('') }}
+
+    - name: Clean up temp files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/ldap-group-sync.yaml
+        - /tmp/ldap-bind-password
 
     # ------------------------------------------------------------------
-    # 10. Show student RBAC checks
+    # 8. Show groups
     # ------------------------------------------------------------------
-    - name: Check if student can create pods in namespace
+    - name: Get OpenShift groups
+      ansible.builtin.command:
+        cmd: oc get groups --no-headers
+      register: groups_result
+      failed_when: false
+
+    - name: Show groups
+      ansible.builtin.debug:
+        msg: |
+          === OpenShift Groups ===
+          {{ groups_result.stdout | default('No groups found') }}
+
+    # ------------------------------------------------------------------
+    # 9. Show RBAC checks for lab user
+    # ------------------------------------------------------------------
+    - name: Check if lab user can create pods in namespace
       ansible.builtin.command:
         cmd: >-
           oc auth can-i create pods
           --namespace {{ student_ns }}
-          --as {{ student_user }}
+          --as {{ lab_username }}
       register: can_create_pods
       failed_when: false
 
-    - name: Check if student can create clusterroles
+    - name: Check if lab user can create clusterroles
       ansible.builtin.command:
         cmd: >-
           oc auth can-i create clusterroles
-          --as {{ student_user }}
+          --as {{ lab_username }}
       register: can_create_clusterroles
       failed_when: false
 
-    - name: Show student RBAC results
+    - name: Show RBAC results
       ansible.builtin.debug:
         msg: |
-          === Student RBAC ({{ student_user }}) ===
+          === Lab User RBAC ({{ lab_username }}) ===
           Can create pods in {{ student_ns }}    : {{ can_create_pods.stdout | default('unknown') }}
           Can create clusterroles (cluster-wide) : {{ can_create_clusterroles.stdout | default('unknown') }}
 
@@ -239,6 +264,7 @@
           IDENTITY EXERCISE – SOLVE COMPLETE (seat {{ seat_padded }})
           ============================================================
           All identity verification commands have been executed.
+          OpenShift group sync has been performed.
           Review the output above to understand the identity
           infrastructure configuration.
           ============================================================

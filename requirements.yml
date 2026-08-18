@@ -1,12 +1,14 @@
 ---
 collections:
+  - name: ibm.mas_devops
+    version: ">=37.12.0,<38.0.0"
   - name: kubernetes.core
-    version: ">=3.0.0,<4.0.0"
-  - name: redhat.openshift
-    version: ">=2.3.0,<3.0.0"
+    version: ">=5.1.0,<7.0.0"
   - name: amazon.aws
-    version: ">=7.0.0,<8.0.0"
-  - name: community.crypto
-    version: ">=2.18.0,<3.0.0"
+    version: ">=11.1.0,<12.0.0"
   - name: community.general
-    version: ">=8.0.0,<14.0.0"
+    version: ">=10.3.0,<14.0.0"
+  - name: ansible.utils
+    version: ">=5.1.2,<7.0.0"
+  - name: community.crypto
+    version: ">=2.18.0,<4.0.0"

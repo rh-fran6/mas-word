@@ -39,17 +39,122 @@
         _masworld_cluster_domain: >-
           {{ _masworld_ingress_cr.resources[0].spec.domain | default('') }}
 
-    # ── Deploy Showroom via Helm ────────────────────────────────────────
-    - name: Deploy Showroom via Helm chart
+    # ── Gather Lab Credentials ─────────────────────────────────────────
+    - name: Read S3 credentials ConfigMap
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        name: masworld-lab-s3-credentials
+        namespace: "{{ masworld_showroom_namespace }}"
+      register: _masworld_s3_creds_cm
+      failed_when: false
+
+    - name: Set S3 credential facts for Showroom
+      ansible.builtin.set_fact:
+        _masworld_s3_bucket_name: "{{ _masworld_s3_creds_cm.resources[0].data.bucket_name | default('') }}"
+        _masworld_s3_access_key: "{{ _masworld_s3_creds_cm.resources[0].data.aws_access_key_id | default('') }}"
+        _masworld_s3_secret_key: "{{ _masworld_s3_creds_cm.resources[0].data.aws_secret_access_key | default('') }}"
+        _masworld_s3_region: "{{ _masworld_s3_creds_cm.resources[0].data.aws_region | default('') }}"
+      when: _masworld_s3_creds_cm.resources | default([]) | length > 0
+      no_log: true
+
+    - name: Set empty S3 facts when ConfigMap not found
+      ansible.builtin.set_fact:
+        _masworld_s3_bucket_name: ""
+        _masworld_s3_access_key: ""
+        _masworld_s3_secret_key: ""
+        _masworld_s3_region: ""
+      when: _masworld_s3_creds_cm.resources | default([]) | length == 0
+
+    - name: Read lab-credentials Secret
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: masworld-lab-credentials
+        namespace: "{{ masworld_showroom_namespace }}"
+      register: _masworld_lab_creds_secret
+      failed_when: false
+
+    - name: Set lab password fact for Showroom
+      ansible.builtin.set_fact:
+        _masworld_lab_password: >-
+          {{ (_masworld_lab_creds_secret.resources[0].data.password | default(''))
+             | b64decode }}
+      when: _masworld_lab_creds_secret.resources | default([]) | length > 0
+      no_log: true
+
+    - name: Set empty lab password when Secret not found
+      ansible.builtin.set_fact:
+        _masworld_lab_password: ""
+      when: _masworld_lab_creds_secret.resources | default([]) | length == 0
+
+    # ── Deploy Showroom via local Helm chart ──────────────────────────────
+    - name: Create chart copies directory
+      ansible.builtin.file:
+        path: "{{ masworld_showroom_chart_local_dir }}/.copies"
+        state: directory
+        mode: "0755"
+
+    - name: Copy Helm chart for this cluster
+      ansible.builtin.copy:
+        src: "{{ masworld_showroom_chart_local_dir }}/{{ masworld_showroom_chart_name }}-{{ masworld_showroom_chart_version | regex_replace('^v', '') }}.tgz"
+        dest: "{{ masworld_showroom_chart_local_dir }}/.copies/{{ masworld_showroom_chart_name }}-{{ masworld_cluster_id | default(inventory_hostname) }}.tgz"
+        remote_src: true
+        mode: "0644"
+
+    - name: Check existing Showroom Helm release status
+      ansible.builtin.command:
+        cmd: >-
+          helm status showroom
+          --namespace {{ masworld_showroom_namespace }}
+          --output json
+      register: _masworld_showroom_status_check
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Set release status fact
+      ansible.builtin.set_fact:
+        _masworld_showroom_release_status: >-
+          {{ (_masworld_showroom_status_check.stdout | default('{}') | from_json).info.status | default('') }}
+      when: _masworld_showroom_status_check.rc == 0
+
+    - name: Uninstall stale failed Showroom release
       kubernetes.core.helm:
         name: showroom
-        chart_ref: "{{ masworld_showroom_chart_name }}"
-        chart_repo_url: "{{ masworld_showroom_chart_repo }}"
-        chart_version: "{{ masworld_showroom_chart_version }}"
+        release_namespace: "{{ masworld_showroom_namespace }}"
+        state: absent
+        wait: true
+        wait_timeout: "120s"
+      when: _masworld_showroom_release_status | default('') == 'failed'
+      failed_when: false
+
+    - name: Delete orphaned terminal PVC from previous failed release
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: PersistentVolumeClaim
+        name: showroom-terminal-lab-user-home
+        namespace: "{{ masworld_showroom_namespace }}"
+        wait: true
+        wait_timeout: 60
+      when: _masworld_showroom_release_status | default('') == 'failed'
+      failed_when: false
+
+    - name: Stagger Helm deploy to avoid rate limiting
+      ansible.builtin.wait_for:
+        timeout: "{{ (masworld_seat_number | default(0) | int) * 5 }}"
+      changed_when: false
+
+    - name: Deploy Showroom via Helm chart
+      no_log: true
+      kubernetes.core.helm:
+        name: showroom
+        chart_ref: "{{ masworld_showroom_chart_local_dir }}/.copies/{{ masworld_showroom_chart_name }}-{{ masworld_cluster_id | default(inventory_hostname) }}.tgz"
         release_namespace: "{{ masworld_showroom_namespace }}"
         create_namespace: false
         wait: true
-        wait_timeout: "300s"
+        wait_timeout: "600s"
         values:
           deployer:
             domain: "{{ _masworld_cluster_domain }}"
@@ -68,10 +173,33 @@
               user: {{ masworld_student_username }}
               student_username: {{ masworld_student_username }}
               mas_instance_id: {{ masworld_mas_instance_id }}
+              s3_bucket_name: {{ _masworld_s3_bucket_name | default('') }}
+              s3_aws_access_key_id: {{ _masworld_s3_access_key | default('') }}
+              s3_aws_secret_access_key: {{ _masworld_s3_secret_key | default('') }}
+              s3_aws_region: {{ _masworld_s3_region | default('') }}
+              lab_username: {{ masworld_lab_username_prefix | default('lab-seat-') }}{{ masworld_seat_number }}
+              lab_password: {{ _masworld_lab_password | default('') }}
+              s3_region: {{ _masworld_s3_region | default('') }}
+              s3_access_key_id: {{ _masworld_s3_access_key | default('') }}
+              s3_secret_access_key: {{ _masworld_s3_secret_key | default('') }}
           terminal:
             setup: "false"
+            storage:
+              setup: "false"
           wetty:
             setup: "false"
+      environment:
+        HELM_BURST_LIMIT: "300"
+        HELM_QPS: "200"
+      register: _masworld_showroom_helm
+      retries: 5
+      delay: 30
+      until: _masworld_showroom_helm is not failed
+
+    - name: Remove per-cluster chart copy
+      ansible.builtin.file:
+        path: "{{ masworld_showroom_chart_local_dir }}/.copies/{{ masworld_showroom_chart_name }}-{{ masworld_cluster_id | default(inventory_hostname) }}.tgz"
+        state: absent
 
     # ── Wait for Showroom Pod Ready ─────────────────────────────────────
     - name: Wait for Showroom pod to be ready
@@ -121,6 +249,12 @@
         msg: "Showroom deployed successfully. URL: {{ showroom_url }}"
 
   rescue:
+    - name: Remove per-cluster chart copy on failure
+      ansible.builtin.file:
+        path: "{{ masworld_showroom_chart_local_dir }}/.copies/{{ masworld_showroom_chart_name }}-{{ masworld_cluster_id | default(inventory_hostname) }}.tgz"
+        state: absent
+      ignore_errors: true
+
     - name: Set Showroom failed facts
       ansible.builtin.set_fact:
         showroom_ready: false

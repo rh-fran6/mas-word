@@ -45,10 +45,31 @@
       no_log: true
       when: (_masworld_raw_secrets['ibm/license'] | default('')) is match('^file://')
 
-    - name: Build enabled cluster list
+    - name: Build full cluster list
       ansible.builtin.set_fact:
-        masworld_enabled_clusters: "{{ cluster_credentials | to_cluster_list }}"
+        _masworld_all_clusters: "{{ cluster_credentials | to_cluster_list }}"
       no_log: true
+
+    - name: Extract hub cluster details for ACM (before seat range filter)
+      ansible.builtin.set_fact:
+        _hub_cluster: >-
+          {{ _masworld_all_clusters
+             | selectattr('purpose', 'equalto', 'hub')
+             | first | default({}) }}
+
+    - name: Build deploy cluster list (with seat range filter)
+      ansible.builtin.set_fact:
+        masworld_enabled_clusters: >-
+          {{ _masworld_all_clusters
+             | seat_range(seat_start | default(none), seat_end | default(none)) }}
+      no_log: true
+
+    - name: Display seat range info
+      ansible.builtin.debug:
+        msg: >-
+          Seat range active: seats {{ seat_start | default('1') }}-{{ seat_end | default('all') }}.
+          Deploying {{ masworld_enabled_clusters | length }} of {{ _masworld_all_clusters | length }} clusters.
+      when: seat_start is defined or seat_end is defined
 
     - name: Display fleet preparation plan
       ansible.builtin.debug:
@@ -341,12 +362,6 @@
           {% endfor %}
           ─────────────────────────────────────────────────
 
-    # ── Resolve Hub Cluster Details ──────────────────────────────────────
-    # Extract hub cluster API URL and admin password for ACM registration.
-    - name: Extract hub cluster details for ACM
-      ansible.builtin.set_fact:
-        _hub_cluster: "{{ masworld_enabled_clusters | selectattr('purpose', 'equalto', 'hub') | first | default({}) }}"
-
     - name: Create temporary vars directory
       ansible.builtin.file:
         path: "{{ _fleet_vars_dir }}"
@@ -361,7 +376,7 @@
       vars:
         _cluster_vars:
           masworld_cluster_api_url: "{{ item.api_url | default('') }}"
-          masworld_admin_password: "{{ item.admin_password | default('') }}"
+          masworld_admin_password: "{{ item.admin_password | default('cluster-admin', true) }}"
           masworld_seat_number: "{{ item.seat_number | default('') }}"
           masworld_cluster_purpose: "{{ item.purpose | default('attendee') }}"
           masworld_cluster_name: "{{ item.id }}"
@@ -374,8 +389,8 @@
           masworld_ibm_entitlement_key: "{{ _resolved_entitlement_key | default('') }}"
           masworld_mas_license_file: "{{ playbook_dir }}/../secrets/license.dat"
           masworld_preflight_min_workers: "{{ masworld_env_config.preflight.min_workers | default(3) }}"
-          masworld_preflight_min_cpu: "{{ masworld_env_config.preflight.min_cpu | default(32) }}"
-          masworld_preflight_min_memory_gi: "{{ masworld_env_config.preflight.min_memory_gi | default(128) }}"
+          masworld_preflight_min_cpu: "{{ masworld_env_config.preflight.min_cpu | default(16) }}"
+          masworld_preflight_min_memory_gi: "{{ masworld_env_config.preflight.min_memory_gi | default(64) }}"
           masworld_aws_access_key_id: "{{ item.aws_access_key_id }}"
           masworld_aws_secret_access_key: "{{ item.aws_secret_access_key }}"
           masworld_aws_region: "{{ item.aws_region | default('us-east-2') }}"

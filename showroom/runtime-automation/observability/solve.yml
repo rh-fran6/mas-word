@@ -1,6 +1,6 @@
 ---
 # Observability exercise – solve
-# Executes the full observability exercise for the student.
+# Installs the full logging stack for the student (what Exercise 5 walks through).
 - name: Solve observability exercise
   hosts: localhost
   connection: local
@@ -14,7 +14,256 @@
 
   tasks:
     # ------------------------------------------------------------------
-    # 1. Cleanup any existing test pod
+    # 1. Read S3 credentials from ConfigMap
+    # ------------------------------------------------------------------
+    - name: Read S3 credentials ConfigMap
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        name: masworld-lab-s3-credentials
+        namespace: showroom
+      register: s3_cm
+
+    - name: Set S3 credential facts
+      ansible.builtin.set_fact:
+        s3_bucket: "{{ s3_cm.resources[0].data.bucket_name }}"
+        s3_key: "{{ s3_cm.resources[0].data.aws_access_key_id }}"
+        s3_secret: "{{ s3_cm.resources[0].data.aws_secret_access_key }}"
+        s3_region: "{{ s3_cm.resources[0].data.aws_region }}"
+      no_log: true
+
+    # ------------------------------------------------------------------
+    # 2. Create openshift-logging namespace + OperatorGroup
+    # ------------------------------------------------------------------
+    - name: Create openshift-logging namespace
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ logging_ns }}"
+            labels:
+              openshift.io/cluster-monitoring: "true"
+
+    - name: Create OperatorGroup
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1
+          kind: OperatorGroup
+          metadata:
+            name: openshift-logging
+            namespace: "{{ logging_ns }}"
+          spec:
+            targetNamespaces:
+              - "{{ logging_ns }}"
+
+    # ------------------------------------------------------------------
+    # 3. Install Logging Operator
+    # ------------------------------------------------------------------
+    - name: Create Logging Operator Subscription
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: Subscription
+          metadata:
+            name: cluster-logging
+            namespace: "{{ logging_ns }}"
+          spec:
+            channel: stable-6.6
+            name: cluster-logging
+            source: redhat-operators
+            sourceNamespace: openshift-marketplace
+            installPlanApproval: Automatic
+
+    # ------------------------------------------------------------------
+    # 4. Install Loki Operator
+    # ------------------------------------------------------------------
+    - name: Create Loki Operator Subscription
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: Subscription
+          metadata:
+            name: loki-operator
+            namespace: "{{ logging_ns }}"
+          spec:
+            channel: stable-6.6
+            name: loki-operator
+            source: redhat-operators
+            sourceNamespace: openshift-marketplace
+            installPlanApproval: Automatic
+
+    # ------------------------------------------------------------------
+    # 5. Install Cluster Observability Operator
+    # ------------------------------------------------------------------
+    - name: Create COO Subscription
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: operators.coreos.com/v1alpha1
+          kind: Subscription
+          metadata:
+            name: cluster-observability-operator
+            namespace: openshift-operators
+          spec:
+            channel: stable
+            name: cluster-observability-operator
+            source: redhat-operators
+            sourceNamespace: openshift-marketplace
+            installPlanApproval: Automatic
+
+    - name: Wait for operator CSVs to install
+      ansible.builtin.pause:
+        seconds: 90
+
+    # ------------------------------------------------------------------
+    # 6. Create S3 storage secret
+    # ------------------------------------------------------------------
+    - name: Create S3 storage secret for LokiStack
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: logging-loki-s3
+            namespace: "{{ logging_ns }}"
+          type: Opaque
+          stringData:
+            bucketnames: "{{ s3_bucket }}"
+            region: "{{ s3_region }}"
+            access_key_id: "{{ s3_key }}"
+            access_key_secret: "{{ s3_secret }}"
+            endpoint: "https://s3.{{ s3_region }}.amazonaws.com"
+      no_log: true
+
+    # ------------------------------------------------------------------
+    # 7. Deploy LokiStack
+    # ------------------------------------------------------------------
+    - name: Create LokiStack CR
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: loki.grafana.com/v1
+          kind: LokiStack
+          metadata:
+            name: logging-loki
+            namespace: "{{ logging_ns }}"
+          spec:
+            size: 1x.extra-small
+            storage:
+              schemas:
+                - version: v13
+                  effectiveDate: "2024-10-01"
+              secret:
+                name: logging-loki-s3
+                type: s3
+            storageClassName: gp3-csi
+            tenants:
+              mode: openshift-logging
+            limits:
+              global:
+                retention:
+                  days: 3
+
+    - name: Wait for LokiStack to become ready
+      kubernetes.core.k8s_info:
+        api_version: loki.grafana.com/v1
+        kind: LokiStack
+        name: logging-loki
+        namespace: "{{ logging_ns }}"
+      register: lokistack_status
+      until: >-
+        lokistack_status.resources | default([]) | length > 0 and
+        (lokistack_status.resources[0].status.conditions | default([])
+          | selectattr('type', 'equalto', 'Ready')
+          | selectattr('status', 'equalto', 'True')
+          | list | length > 0)
+      retries: 30
+      delay: 10
+
+    # ------------------------------------------------------------------
+    # 8. Create collector ServiceAccount and grant permissions
+    # ------------------------------------------------------------------
+    - name: Create collector ServiceAccount
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: collector
+            namespace: "{{ logging_ns }}"
+
+    - name: Grant collector ClusterRoles
+      ansible.builtin.command:
+        cmd: "oc adm policy add-cluster-role-to-user {{ item }} -z collector -n {{ logging_ns }}"
+      loop:
+        - collect-application-logs
+        - collect-infrastructure-logs
+        - collect-audit-logs
+      changed_when: true
+
+    # ------------------------------------------------------------------
+    # 9. Deploy ClusterLogForwarder
+    # ------------------------------------------------------------------
+    - name: Create ClusterLogForwarder
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: observability.openshift.io/v1
+          kind: ClusterLogForwarder
+          metadata:
+            name: collector
+            namespace: "{{ logging_ns }}"
+          spec:
+            serviceAccount:
+              name: collector
+            outputs:
+              - name: default-lokistack
+                type: lokiStack
+                lokiStack:
+                  target:
+                    name: logging-loki
+                    namespace: "{{ logging_ns }}"
+                  authentication:
+                    token:
+                      from: serviceAccount
+            pipelines:
+              - name: application-logs
+                inputRefs: [application]
+                outputRefs: [default-lokistack]
+              - name: infrastructure-logs
+                inputRefs: [infrastructure]
+                outputRefs: [default-lokistack]
+              - name: audit-logs
+                inputRefs: [audit]
+                outputRefs: [default-lokistack]
+
+    # ------------------------------------------------------------------
+    # 10. Create UIPlugin
+    # ------------------------------------------------------------------
+    - name: Create UIPlugin for console log viewing
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: observability.openshift.io/v1alpha1
+          kind: UIPlugin
+          metadata:
+            name: logging
+          spec:
+            type: Logging
+            logging:
+              lokiStack:
+                name: logging-loki
+              logsLimit: 50
+
+    # ------------------------------------------------------------------
+    # 11. Create and run test pod
     # ------------------------------------------------------------------
     - name: Delete existing log-test pod if present
       kubernetes.core.k8s:
@@ -25,7 +274,7 @@
         state: absent
       failed_when: false
 
-    - name: Wait for old pod to be fully removed
+    - name: Wait for old pod removal
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Pod
@@ -37,10 +286,7 @@
       delay: 5
       failed_when: false
 
-    # ------------------------------------------------------------------
-    # 2. Create the log-test pod
-    # ------------------------------------------------------------------
-    - name: Create log-test pod with structured JSON log entries
+    - name: Create log-test pod
       kubernetes.core.k8s:
         state: present
         definition:
@@ -64,18 +310,9 @@
                     for i in $(seq 1 10); do
                       TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
                       echo "{\"timestamp\":\"${TS}\",\"level\":\"info\",\"message\":\"MAS World log test\",\"seat\":\"{{ seat_padded }}\",\"iteration\":${i}}"
-                      sleep 1
+                      sleep 2
                     done
-                    TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-                    echo "{\"timestamp\":\"${TS}\",\"level\":\"info\",\"message\":\"Log generation complete\",\"seat\":\"{{ seat_padded }}\",\"total_entries\":10}"
 
-    - name: Report pod creation
-      ansible.builtin.debug:
-        msg: "Log-test pod {{ pod_name }} created in namespace {{ student_ns }}. Generating 10 structured log entries..."
-
-    # ------------------------------------------------------------------
-    # 3. Wait for pod to complete
-    # ------------------------------------------------------------------
     - name: Wait for log-test pod to complete
       kubernetes.core.k8s_info:
         api_version: v1
@@ -86,50 +323,9 @@
       until: >-
         pod_status.resources | default([]) | length > 0 and
         pod_status.resources[0].status.phase | default('') in ['Succeeded', 'Failed']
-      retries: 12
+      retries: 15
       delay: 5
 
-    - name: Report pod completion
-      ansible.builtin.debug:
-        msg: >-
-          Pod {{ pod_name }} finished with status:
-          {{ pod_status.resources[0].status.phase | default('Unknown') }}
-
-    # ------------------------------------------------------------------
-    # 4. Display pod logs
-    # ------------------------------------------------------------------
-    - name: Retrieve pod logs
-      ansible.builtin.command:
-        cmd: oc logs {{ pod_name }} -n {{ student_ns }}
-      register: pod_logs
-      failed_when: false
-
-    - name: Display pod logs
-      ansible.builtin.debug:
-        msg: "{{ pod_logs.stdout_lines | default(['(no logs available)']) }}"
-
-    # ------------------------------------------------------------------
-    # 5. Show LogQL queries for Grafana
-    # ------------------------------------------------------------------
-    - name: Show LogQL queries for Grafana
-      ansible.builtin.debug:
-        msg: |
-          ============================================================
-          LogQL QUERIES FOR GRAFANA
-          ============================================================
-          Use these queries in the Grafana Explore view to find your logs:
-
-          1. Filter by namespace and message:
-             {kubernetes_namespace_name="{{ student_ns }}"} |= "MAS World log test"
-
-          2. Filter by namespace with JSON parsing and seat filter:
-             {kubernetes_namespace_name="{{ student_ns }}"} | json | seat="{{ seat_padded }}"
-
-          ============================================================
-
-    # ------------------------------------------------------------------
-    # 6. Delete the test pod (cleanup)
-    # ------------------------------------------------------------------
     - name: Delete log-test pod after exercise
       kubernetes.core.k8s:
         api_version: v1
@@ -140,12 +336,18 @@
       failed_when: false
 
     # ------------------------------------------------------------------
-    # 7. Final output
+    # 12. Show LogQL queries
     # ------------------------------------------------------------------
-    - name: Exercise complete
+    - name: Show LogQL queries
       ansible.builtin.debug:
         msg: |
           ============================================================
-          Exercise complete. Check Grafana to verify historical logs
-          persist after pod deletion.
+          OBSERVABILITY EXERCISE – SOLVE COMPLETE (seat {{ seat_padded }})
+          ============================================================
+          All operators installed, LokiStack deployed, CLF configured,
+          UIPlugin created, and test logs generated.
+
+          LogQL queries for the Console (Observe > Logs):
+            {kubernetes_namespace_name="{{ student_ns }}"} |= "MAS World log test"
+            {kubernetes_namespace_name="{{ student_ns }}"} | json | seat="{{ seat_padded }}"
           ============================================================

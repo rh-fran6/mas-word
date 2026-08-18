@@ -212,8 +212,8 @@ rosa-hcp-multi-build/
 
 | Component | Version / Tag | Source | Pin Method | Notes |
 |-----------|---------------|--------|------------|-------|
-| Keycloak Operator | Community operator | `fast` channel (OLM) | OLM subscription pin | Deploys Keycloak 26.x for identity exercises |
-| OpenLDAP | 2.6 | `bitnami/openldap` container image | Image digest pin | Backend directory for group-sync exercises |
+| RHBK Operator | stable-v26.0 | `redhat-operators` catalog (OLM) | OLM subscription pin | Deploys RHBK (Keycloak 26.x) for identity exercises |
+| 389 Directory Server | c9s | `quay.io/389ds/dirsrv` container image | Image tag pin | Backend directory for group-sync exercises |
 | Showroom Helm chart | `showroom-single-pod` v2.1.8 | RHDP Helm repository | Chart version pin | Single-pod deployment per attendee |
 | Showroom UI theme | `rhdp_showroom_theme` v2.0.3 | quay.io/rhpds | Image tag pin | Standard RHDP branding |
 | Showroom content container | `quay.io/rhpds/showroom-content:v1.4.2` | Quay.io | Image tag pin | Antora-rendered content served via nginx |

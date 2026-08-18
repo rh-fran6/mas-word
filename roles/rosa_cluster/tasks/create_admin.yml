@@ -10,10 +10,11 @@
 - name: Check for existing cluster-admin user
   ansible.builtin.shell: |
     set -o pipefail
-    rosa describe admin --cluster={{ item.name }} 2>&1
+    rosa describe admin --cluster={{ _rosa_managed_ids[item.name] | default(item.name) }} 2>&1
   args:
     executable: /bin/bash
   environment:
+    OCM_CONFIG: "/tmp/rosa-cluster-ocm-configs/{{ item.name }}.json"
     AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
     AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
     AWS_DEFAULT_REGION: "{{ item.aws_region }}"

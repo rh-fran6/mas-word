@@ -12,19 +12,26 @@ masworld_keycloak_admin_secret_ref: "secret://mas-world/keycloak/admin"
 masworld_identity_demo_realm: "masworld"
 masworld_identity_demo_client_id: "masworld-demo"
 
-# Keycloak operator channel
-masworld_keycloak_operator_channel: "fast"
+# Red Hat Build of Keycloak operator (RHBK — supported on ROSA HCP)
+masworld_keycloak_operator_name: "rhbk-operator"
+masworld_keycloak_operator_channel: "stable-v26.0"
+masworld_keycloak_operator_source: "redhat-operators"
+
+# PostgreSQL database for Keycloak
+masworld_keycloak_db_image: "registry.redhat.io/rhel9/postgresql-16:latest"
+masworld_keycloak_db_name: "keycloak"
 
 # Keycloak readiness polling
-masworld_keycloak_ready_retries: 30
-masworld_keycloak_ready_delay: 20
+masworld_keycloak_ready_retries: 45
+masworld_keycloak_ready_delay: 30
 
-# OpenLDAP configuration for LDAP sync demo
+# 389 Directory Server for LDAP sync demo (upstream of Red Hat Directory Server)
 masworld_ldap_enabled: true
 masworld_ldap_namespace: "masworld-keycloak"
-masworld_ldap_image: "registry.access.redhat.com/ubi9/openldap:latest"
+masworld_ldap_image: "quay.io/389ds/dirsrv:c9s"
+masworld_ldap_port: 3389
 masworld_ldap_base_dn: "dc=masworld,dc=example,dc=com"
-masworld_ldap_admin_dn: "cn=admin,dc=masworld,dc=example,dc=com"
+masworld_ldap_admin_dn: "cn=Directory Manager"
 masworld_ldap_users_ou: "ou=users,dc=masworld,dc=example,dc=com"
 masworld_ldap_groups_ou: "ou=groups,dc=masworld,dc=example,dc=com"
 

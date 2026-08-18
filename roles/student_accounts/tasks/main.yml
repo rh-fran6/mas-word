@@ -87,44 +87,147 @@
             htpasswd: "{{ _masworld_updated_htpasswd }}"
       no_log: true
 
-    # ── Patch OAuth CR ──────────────────────────────────────────────────
-    - name: Read current OAuth CR
+    # ── Detect ROSA Hosted Control Plane ──────────────────────────────
+    - name: Check cluster control plane topology
       kubernetes.core.k8s_info:
         api_version: config.openshift.io/v1
-        kind: OAuth
-        name: "{{ masworld_oauth_cr_name }}"
-      register: _masworld_oauth_cr
+        kind: Infrastructure
+        name: cluster
+      register: _masworld_sa_infra_cr
 
-    - name: Check if htpasswd IdP already configured
+    - name: Set HCP detection flag for student accounts
       ansible.builtin.set_fact:
-        _masworld_htpasswd_idp_exists: >-
-          {{ _masworld_oauth_cr.resources[0].spec.identityProviders | default([])
-             | selectattr('name', 'equalto', masworld_htpasswd_idp_name)
-             | list | length > 0 }}
+        _masworld_sa_is_hcp: >-
+          {{ (_masworld_sa_infra_cr.resources | default([{}]) | first)
+             .status.controlPlaneTopology | default('') == 'External' }}
 
-    - name: Patch OAuth CR to add htpasswd identity provider
-      kubernetes.core.k8s:
-        state: present
-        merge_type: merge
-        definition:
-          apiVersion: config.openshift.io/v1
-          kind: OAuth
-          metadata:
+    # ── ROSA HCP path: add htpasswd IDP via rosa CLI ──────────────────
+    - name: Add htpasswd IDP via ROSA CLI (HCP clusters)
+      when: _masworld_sa_is_hcp | bool
+      block:
+        - name: Extract ROSA cluster name from API URL
+          ansible.builtin.set_fact:
+            _masworld_sa_rosa_cluster_name: >-
+              {{ masworld_cluster_api_url | regex_search('api\.([^.]+)\.', '\1') | first }}
+
+        - name: Get ROSA token from bastion host
+          ansible.builtin.command:
+            cmd: >-
+              sshpass -p '{{ cluster.bastion_password }}'
+              ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 -o BatchMode=no
+              {{ cluster.bastion_username }}@{{ cluster.bastion_host }}
+              'rosa token'
+          register: _masworld_sa_rosa_token
+          retries: 3
+          delay: 10
+          until: _masworld_sa_rosa_token.rc == 0 and (_masworld_sa_rosa_token.stdout | default('') | trim | length > 0)
+          changed_when: false
+          no_log: true
+
+        - name: Login to ROSA for student accounts
+          ansible.builtin.command:
+            cmd: "rosa login --token={{ _masworld_sa_rosa_token.stdout | trim }}"
+          environment:
+            OCM_CONFIG: "/tmp/rosa-ocm-sa-{{ masworld_cluster_id | default(cluster.id) }}.json"
+          register: _masworld_sa_rosa_login
+          retries: 3
+          delay: 10
+          until: _masworld_sa_rosa_login is not failed
+          changed_when: false
+          no_log: true
+
+        - name: List existing ROSA identity providers
+          ansible.builtin.command:
+            cmd: "rosa list idp --cluster={{ _masworld_sa_rosa_cluster_name }} --output=json"
+          environment:
+            OCM_CONFIG: "/tmp/rosa-ocm-sa-{{ masworld_cluster_id | default(cluster.id) }}.json"
+            AWS_ACCESS_KEY_ID: "{{ cluster.aws_access_key_id }}"
+            AWS_SECRET_ACCESS_KEY: "{{ cluster.aws_secret_access_key }}"
+            AWS_DEFAULT_REGION: "{{ cluster.aws_region | default('us-east-2') }}"
+          register: _masworld_sa_rosa_idps
+          retries: 3
+          delay: 10
+          until: _masworld_sa_rosa_idps is not failed
+          changed_when: false
+          no_log: true
+
+        - name: Check if htpasswd IDP already exists in ROSA
+          ansible.builtin.set_fact:
+            _masworld_sa_rosa_htpasswd_exists: >-
+              {{ (_masworld_sa_rosa_idps.stdout | default('[]') | from_json)
+                 | selectattr('name', 'equalto', masworld_htpasswd_idp_name)
+                 | list | length > 0 }}
+
+        - name: Create htpasswd identity provider via ROSA
+          ansible.builtin.command:
+            cmd: >-
+              rosa create idp
+              --cluster={{ _masworld_sa_rosa_cluster_name }}
+              --type=htpasswd
+              --name={{ masworld_htpasswd_idp_name }}
+              --username={{ _masworld_student_username }}
+              --password={{ _masworld_student_password }}
+              --yes
+          environment:
+            OCM_CONFIG: "/tmp/rosa-ocm-sa-{{ masworld_cluster_id | default(cluster.id) }}.json"
+            AWS_ACCESS_KEY_ID: "{{ cluster.aws_access_key_id }}"
+            AWS_SECRET_ACCESS_KEY: "{{ cluster.aws_secret_access_key }}"
+            AWS_DEFAULT_REGION: "{{ cluster.aws_region | default('us-east-2') }}"
+          register: _masworld_sa_rosa_htpasswd_create
+          retries: 3
+          delay: 15
+          until: _masworld_sa_rosa_htpasswd_create is not failed
+          when: not (_masworld_sa_rosa_htpasswd_exists | bool)
+          no_log: true
+
+        - name: Display ROSA htpasswd IDP result
+          ansible.builtin.debug:
+            msg: >-
+              {{ 'htpasswd IDP already exists — skipped'
+                 if (_masworld_sa_rosa_htpasswd_exists | bool)
+                 else 'Created htpasswd IDP with user ' ~ _masworld_student_username ~ ' via ROSA CLI' }}
+
+    # ── Non-HCP path: patch OAuth CR directly ──────────────────────────
+    - name: Add htpasswd IDP via OAuth CR (non-HCP clusters)
+      when: not (_masworld_sa_is_hcp | bool)
+      block:
+        - name: Read current OAuth CR
+          kubernetes.core.k8s_info:
+            api_version: config.openshift.io/v1
+            kind: OAuth
             name: "{{ masworld_oauth_cr_name }}"
-          spec:
-            identityProviders: >-
-              {{ (_masworld_oauth_cr.resources[0].spec.identityProviders | default([])) + [{
-                   'name': masworld_htpasswd_idp_name,
-                   'mappingMethod': 'claim',
-                   'type': 'HTPasswd',
-                   'htpasswd': {
-                     'fileData': {
-                       'name': masworld_htpasswd_secret_name
-                     }
-                   }
-                 }]
-              }}
-      when: not (_masworld_htpasswd_idp_exists | bool)
+          register: _masworld_oauth_cr
+
+        - name: Check if htpasswd IdP already configured
+          ansible.builtin.set_fact:
+            _masworld_htpasswd_idp_exists: >-
+              {{ _masworld_oauth_cr.resources[0].spec.identityProviders | default([])
+                 | selectattr('name', 'equalto', masworld_htpasswd_idp_name)
+                 | list | length > 0 }}
+
+        - name: Patch OAuth CR to add htpasswd identity provider
+          kubernetes.core.k8s:
+            state: present
+            merge_type: merge
+            definition:
+              apiVersion: config.openshift.io/v1
+              kind: OAuth
+              metadata:
+                name: "{{ masworld_oauth_cr_name }}"
+              spec:
+                identityProviders: >-
+                  {{ (_masworld_oauth_cr.resources[0].spec.identityProviders | default([])) + [{
+                       'name': masworld_htpasswd_idp_name,
+                       'mappingMethod': 'claim',
+                       'type': 'HTPasswd',
+                       'htpasswd': {
+                         'fileData': {
+                           'name': masworld_htpasswd_secret_name
+                         }
+                       }
+                     }]
+                  }}
+          when: not (_masworld_htpasswd_idp_exists | bool)
 
     # ── Create Student Namespace ────────────────────────────────────────
     - name: Create student namespace

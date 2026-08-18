@@ -18,6 +18,9 @@
         kind: ClusterVersion
         name: version
       register: _cluster_version_info
+      retries: 6
+      delay: 30
+      until: _cluster_version_info is not failed
 
     - name: Record cluster version
       ansible.builtin.set_fact:
@@ -34,7 +37,23 @@
         _preflight_errors: "{{ _preflight_errors + ['Cluster API is not reachable'] }}"
 
 # --- Gather Node Information ---
+- name: Skip worker node check — already verified in node wait step
+  ansible.builtin.set_fact:
+    _preflight_checks: >-
+      {{ _preflight_checks | combine({
+        'worker_count': 'verified',
+        'total_cpu': 'verified',
+        'total_memory_gi': 'verified',
+        'node_check': true
+      }) }}
+  when:
+    - _preflight_checks.api_reachable | default(false)
+    - _machinepool_nodes_verified | default(false) | bool
+
 - name: Gather worker node information
+  when:
+    - _preflight_checks.api_reachable | default(false)
+    - not (_machinepool_nodes_verified | default(false) | bool)
   block:
     - name: Get all nodes
       kubernetes.core.k8s_info:
@@ -43,6 +62,9 @@
         label_selectors:
           - "node-role.kubernetes.io/worker"
       register: _worker_nodes
+      retries: 6
+      delay: 30
+      until: _worker_nodes is not failed
 
     - name: Extract raw CPU values
       ansible.builtin.set_fact:
@@ -104,6 +126,7 @@
 
 # --- Check StorageClass ---
 - name: Check required StorageClass exists
+  when: _preflight_checks.api_reachable | default(false)
   block:
     - name: Query StorageClass
       kubernetes.core.k8s_info:
@@ -111,6 +134,9 @@
         kind: StorageClass
         name: "{{ masworld_preflight_required_storage_class }}"
       register: _storage_class_info
+      retries: 6
+      delay: 30
+      until: _storage_class_info is not failed
 
     - name: Validate StorageClass found
       ansible.builtin.set_fact:
@@ -127,6 +153,7 @@
 
 # --- Check OperatorHub Access ---
 - name: Check OperatorHub / CatalogSources
+  when: _preflight_checks.api_reachable | default(false)
   block:
     - name: Query CatalogSources in openshift-marketplace
       kubernetes.core.k8s_info:
@@ -134,6 +161,9 @@
         kind: CatalogSource
         namespace: openshift-marketplace
       register: _catalog_sources
+      retries: 6
+      delay: 30
+      until: _catalog_sources is not failed
 
     - name: Record OperatorHub status
       ansible.builtin.set_fact:
@@ -151,12 +181,16 @@
 
 # --- Check for Degraded ClusterOperators ---
 - name: Check ClusterOperator health
+  when: _preflight_checks.api_reachable | default(false)
   block:
     - name: Query all ClusterOperators
       kubernetes.core.k8s_info:
         api_version: config.openshift.io/v1
         kind: ClusterOperator
       register: _cluster_operators
+      retries: 6
+      delay: 30
+      until: _cluster_operators is not failed
 
     - name: Build list of degraded operators
       ansible.builtin.set_fact:
@@ -192,6 +226,9 @@
         status_code: [200, 401]
         validate_certs: true
       register: _ibm_registry_check
+      retries: 6
+      delay: 30
+      until: _ibm_registry_check is not failed
 
     - name: Record IBM registry accessible
       ansible.builtin.set_fact:
@@ -214,6 +251,7 @@
 # --- Check Bastion SSH Connectivity (pre-provisioned clusters) ---
 - name: Check bastion SSH connectivity
   when:
+    - not (_machinepool_nodes_verified | default(false) | bool)
     - masworld_bastion_host is defined
     - masworld_bastion_host | length > 0
   block:
@@ -244,6 +282,7 @@
 
 # --- Check for Existing MAS Resources ---
 - name: Check for existing MAS resources on cluster
+  when: _preflight_checks.api_reachable | default(false)
   block:
     - name: Look for existing MAS namespace
       kubernetes.core.k8s_info:
@@ -252,6 +291,9 @@
         label_selectors:
           - "app.kubernetes.io/part-of=ibm-mas"
       register: _existing_mas_ns
+      retries: 6
+      delay: 30
+      until: _existing_mas_ns is not failed
 
     - name: Record existing MAS state
       ansible.builtin.set_fact:

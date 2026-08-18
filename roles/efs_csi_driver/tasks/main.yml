@@ -92,6 +92,26 @@
           retries: "{{ masworld_efs_csi_driver_ready_retries }}"
           delay: "{{ masworld_efs_csi_driver_ready_delay }}"
 
+    - name: Check efs StorageClass parameters for UID/GID
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ masworld_efs_storageclass_name }}"
+      register: _efs_sc_current
+
+    - name: Replace efs StorageClass if parameters are stale
+      when:
+        - _efs_sc_current.resources | length > 0
+        - >-
+          _efs_sc_current.resources[0].parameters.uid | default('') != masworld_efs_uid
+          or _efs_sc_current.resources[0].parameters.gid | default('') != masworld_efs_gid
+          or _efs_sc_current.resources[0].parameters.fileSystemId | default('') != masworld_efs_filesystem_id
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ masworld_efs_storageclass_name }}"
+
     - name: Create efs StorageClass
       kubernetes.core.k8s:
         state: present
@@ -105,6 +125,8 @@
             provisioningMode: efs-ap
             fileSystemId: "{{ masworld_efs_filesystem_id }}"
             directoryPerms: "{{ masworld_efs_directory_perms }}"
+            uid: "{{ masworld_efs_uid }}"
+            gid: "{{ masworld_efs_gid }}"
           reclaimPolicy: Delete
           volumeBindingMode: Immediate
 

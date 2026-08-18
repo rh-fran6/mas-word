@@ -1,6 +1,7 @@
 ---
 # Scenario 3: Cluster Ready — ROSA clusters running, add autoscaler + app
-# Required inputs: cluster credentials with api_url, ROSA token, workshop_machinepool_instance_type
+# Required inputs: cluster credentials with api_url + bastion fields, workshop_machinepool_instance_type
+# ROSA tokens are extracted per-cluster from bastion hosts (not from a global rosa-token.yml)
 
 - name: "CLUSTER-READY PREFLIGHT — Phase 1: CLI Tools"
   ansible.builtin.debug:
@@ -11,6 +12,12 @@
   register: _cr_rosa_version
   changed_when: false
   failed_when: _cr_rosa_version.rc != 0
+
+- name: Verify sshpass is installed
+  ansible.builtin.command: sshpass -V
+  register: _cr_sshpass_version
+  changed_when: false
+  failed_when: _cr_sshpass_version.rc != 0
 
 - name: Check for oc CLI
   ansible.builtin.command: oc version --client
@@ -34,6 +41,7 @@
   ansible.builtin.debug:
     msg: >-
       CLI tools OK — rosa {{ _cr_rosa_version.stdout_lines[0] | default('?') }},
+      sshpass {{ _cr_sshpass_version.stdout_lines[0] | default('?') }},
       {{ 'oc ' + _cr_oc_version.stdout_lines[0] | default('?') if _cr_oc_version.rc == 0
          else 'kubectl ' + (_cr_kubectl_version.stdout_lines[0] | default('?')) }}
 
@@ -47,15 +55,16 @@
       - cluster_prefix is defined and cluster_prefix | length > 0
       - cluster_categories is defined
       - cluster_credentials is defined
-      - rosa_token is defined
-    fail_msg: "Required variables missing: cluster_prefix, cluster_categories, cluster_credentials, rosa_token"
+    fail_msg: "Required variables missing: cluster_prefix, cluster_categories, cluster_credentials"
 
-- name: Validate facilitator count is exactly 1
+- name: Validate exactly one facilitator in credentials
   ansible.builtin.assert:
     that:
       - cluster_categories.facilitator is defined
-      - cluster_categories.facilitator.count == 1
-    fail_msg: "Facilitator category must exist with count=1"
+      - cluster_credentials | dict2items
+        | selectattr('key', 'match', '^' ~ cluster_prefix ~ '-facilitator-')
+        | list | length == 1
+    fail_msg: "Exactly one facilitator cluster must exist in cluster-credentials.yml"
 
 - name: Validate cluster credentials have api_url populated
   ansible.builtin.assert:
@@ -71,19 +80,9 @@
     label: "{{ item.key }}"
   no_log: true
 
-- name: Validate cluster credentials have admin_password populated
-  ansible.builtin.assert:
-    that:
-      - item.value.admin_password is defined
-      - item.value.admin_password | length > 0
-    fail_msg: >
-      Cluster '{{ item.key }}' is missing 'admin_password'. For cluster-ready scenario,
-      all clusters must have admin_password populated (set by 'make provision' or manually).
-    quiet: true
-  loop: "{{ cluster_credentials | dict2items }}"
-  loop_control:
-    label: "{{ item.key }}"
-  no_log: true
+- name: Default admin_password to cluster-admin for all clusters
+  ansible.builtin.debug:
+    msg: "admin_password: using per-cluster value or default 'cluster-admin'"  # pragma: allowlist secret
 
 - name: Validate workshop machinepool instance type is specified
   ansible.builtin.assert:
@@ -101,107 +100,241 @@
       instance_type={{ workshop_machinepool_instance_type }},
       autoscaling={{ workshop_machinepool_min_replicas }}-{{ workshop_machinepool_max_replicas }} replicas
 
-- name: Build cluster definitions for preflight
+- name: Clear stale runtime state from any previous run
+  ansible.builtin.set_fact:
+    cluster_definitions: null
+    _rosa_managed_names: null
+    _rosa_managed_ids: null
+    _rosa_name_map: null
+    _cluster_rosa_tokens: null
+    _cached_machinepool_pools: null
+    _cached_cluster_tokens: null
+    _machinepool_nodes_verified: false
+
+- name: Build cluster definitions from credentials (source of truth)
   ansible.builtin.set_fact:
     cluster_definitions: >-
       {{ cluster_categories | build_cluster_list(cluster_prefix, cluster_credentials, infra_state | default({})) }}
   no_log: true
 
-- name: "CLUSTER-READY PREFLIGHT — Phase 3: ROSA Authentication"
-  ansible.builtin.debug:
-    msg: "Validating ROSA login..."
+- name: Apply seat range filter to preflight scope
+  ansible.builtin.set_fact:
+    cluster_definitions: >-
+      {{ cluster_definitions | seat_range(
+           seat_start | default(none), seat_end | default(none)) }}
+  when: seat_start is defined or seat_end is defined
 
-- name: Log in to ROSA
-  ansible.builtin.command: rosa login --token={{ rosa_token }}
+- name: Display preflight scope
+  ansible.builtin.debug:
+    msg: >-
+      Seat range active: seats {{ seat_start | default('1') }}-{{ seat_end | default('all') }}.
+      Preflight scoped to {{ cluster_definitions | length }} clusters.
+  when: seat_start is defined or seat_end is defined
+
+- name: "CLUSTER-READY PREFLIGHT — Phase 3: Bastion SSH + Per-Cluster ROSA Tokens"
+  ansible.builtin.debug:
+    msg: "Validating bastion SSH connectivity and extracting per-cluster ROSA tokens..."
+
+- name: Validate bastion fields present in credentials
+  ansible.builtin.assert:
+    that:
+      - item.value.bastion_host is defined
+      - item.value.bastion_host | length > 0
+      - item.value.bastion_username is defined
+      - item.value.bastion_password is defined
+    fail_msg: >
+      Cluster '{{ item.key }}' is missing bastion fields (bastion_host, bastion_username,
+      bastion_password). For cluster-ready scenario, all clusters must have bastion
+      connectivity configured in cluster-credentials.yml.
+    quiet: true
+  loop: "{{ cluster_credentials | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  no_log: true
+
+- name: Test SSH connectivity to each bastion host
+  ansible.builtin.command:
+    cmd: >-
+      sshpass -p '{{ item.bastion_password }}'
+      ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 -o BatchMode=no
+      {{ item.bastion_username }}@{{ item.bastion_host }}
+      'echo reachable'
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _cr_bastion_check
+  retries: 6
+  delay: 30
+  until: _cr_bastion_check.rc == 0
+  failed_when: false
   changed_when: false
   no_log: true
+
+- name: Display bastion SSH connectivity
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.name }}: bastion SSH
+      {{ 'reachable' if (item.rc | default(1)) == 0 else 'UNREACHABLE' }}
+      ({{ item.item.bastion_host | default('no host') }})
+  loop: "{{ _cr_bastion_check.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Fail if any bastion hosts are unreachable
+  ansible.builtin.fail:
+    msg: >
+      Bastion hosts unreachable for:
+      {{ _cr_bastion_check.results | selectattr('rc', 'defined')
+         | rejectattr('rc', 'equalto', 0)
+         | map(attribute='item.name') | list | join(', ') }}.
+      Check VPN connectivity and bastion DNS resolution.
+  when: >-
+    _cr_bastion_check.results
+    | selectattr('rc', 'defined')
+    | rejectattr('rc', 'equalto', 0)
+    | list | length > 0
+
+- name: Extract ROSA token from each bastion host
+  ansible.builtin.command:
+    cmd: >-
+      sshpass -p '{{ item.bastion_password }}'
+      ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 -o BatchMode=no
+      {{ item.bastion_username }}@{{ item.bastion_host }}
+      'rosa token'
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _cr_token_results
+  retries: 6
+  delay: 30
+  until: _cr_token_results.rc == 0 and (_cr_token_results.stdout | default('') | trim | length > 0)
+  failed_when: false
+  changed_when: false
+  no_log: true
+
+- name: Validate ROSA tokens retrieved
+  ansible.builtin.assert:
+    that:
+      - item.rc == 0
+      - item.stdout | default('') | trim | length > 0
+    fail_msg: >
+      Failed to extract ROSA token from bastion for cluster '{{ item.item.name }}'.
+      Ensure 'rosa' CLI is installed and logged in on the bastion host
+      ({{ item.item.bastion_host | default('unknown') }}).
+    quiet: true
+  loop: "{{ _cr_token_results.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  no_log: true
+
+- name: Remove stale OCM configs from previous runs
+  ansible.builtin.file:
+    path: "/tmp/rosa-cluster-ocm-configs"
+    state: absent
+
+- name: Create per-cluster OCM config directory
+  ansible.builtin.file:
+    path: "/tmp/rosa-cluster-ocm-configs"
+    state: directory
+    mode: "0700"
+
+- name: Login to ROSA with per-cluster token
+  ansible.builtin.command:
+    cmd: "rosa login --token={{ item.stdout | trim }}"
   environment:
-    OCM_TOKEN: "{{ rosa_token }}"
+    OCM_CONFIG: "/tmp/rosa-cluster-ocm-configs/{{ item.item.name }}.json"
+  loop: "{{ _cr_token_results.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  register: _cr_rosa_login
+  retries: 6
+  delay: 30
+  until: _cr_rosa_login is not failed
+  failed_when: false
+  changed_when: false
+  no_log: true
 
-- name: Confirm ROSA login
-  ansible.builtin.debug:
-    msg: "ROSA login verified successfully."
-
-- name: "CLUSTER-READY PREFLIGHT — Phase 4: Cluster Existence & Health"
-  ansible.builtin.debug:
-    msg: "Validating {{ cluster_definitions | length }} clusters are running..."
-
-- name: Check cluster state via ROSA
+- name: Verify ROSA can see each cluster
   ansible.builtin.shell: |
     set -o pipefail
-    rosa describe cluster --cluster={{ item.name }} --output json 2>/dev/null \
-      | python3 -c "
-    import sys, json
-    c = json.load(sys.stdin)
-    state = c.get('status', {}).get('state', 'unknown')
-    api = c.get('api', {}).get('url', '')
-    version = c.get('openshift_version', '?')
-    print(f'{state}|{api}|{version}')
-    "
+    rosa list clusters --output json 2>/dev/null || echo '[]'
   args:
     executable: /bin/bash
   environment:
+    OCM_CONFIG: "/tmp/rosa-cluster-ocm-configs/{{ item.name }}.json"
     AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
     AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
     AWS_DEFAULT_REGION: "{{ item.aws_region }}"
   loop: "{{ cluster_definitions }}"
   loop_control:
     label: "{{ item.name }}"
-  register: _cr_cluster_state
+  register: _cr_rosa_visibility
+  retries: 6
+  delay: 30
+  until: _cr_rosa_visibility is not failed
   failed_when: false
   changed_when: false
   no_log: true
 
-- name: Display cluster status
+- name: Display ROSA cluster visibility
   ansible.builtin.debug:
     msg: >-
-      {{ item.item.name }}:
-      state={{ (item.stdout | default('unknown||')).split('|')[0] }},
-      version={{ (item.stdout | default('||?')).split('|')[2] }}
-      {{ '— OK' if (item.stdout | default('')).split('|')[0] == 'ready' else '— NOT READY' }}
-  loop: "{{ _cr_cluster_state.results }}"
+      {{ item.item.name }}: ROSA sees
+      {{ (item.stdout | default('[]', true) | from_json) | map(attribute='name') | list | length }}
+      cluster(s) in this OCM account
+  loop: "{{ _cr_rosa_visibility.results }}"
   loop_control:
     label: "{{ item.item.name }}"
 
-- name: Collect clusters not in ready state
+- name: Build per-cluster ROSA token map for downstream steps
   ansible.builtin.set_fact:
-    _cr_not_ready: >-
-      {{ _cr_cluster_state.results
-         | rejectattr('rc', 'equalto', 0)
-         | map(attribute='item.name')
-         | list
-         + _cr_cluster_state.results
-         | selectattr('rc', 'equalto', 0)
-         | rejectattr('stdout', 'search', '^ready\|')
-         | map(attribute='item.name')
-         | list }}
-
-- name: Fail if any clusters are not ready
-  ansible.builtin.fail:
-    msg: >
-      Clusters not in ready state: {{ _cr_not_ready | join(', ') }}.
-      All clusters must be running for the cluster-ready scenario.
-      Use 'make status' to check cluster states.
-  when: _cr_not_ready | length > 0
-
-- name: "CLUSTER-READY PREFLIGHT — Phase 5: Cluster API Reachability"
-  ansible.builtin.debug:
-    msg: "Checking cluster API endpoints..."
-
-- name: Extract API URLs from cluster state
-  ansible.builtin.set_fact:
-    _cr_api_urls: >-
-      {{ _cr_api_urls | default({}) | combine({
-        item.item.name: (item.stdout | default('|')).split('|')[1]
+    _cluster_rosa_tokens: >-
+      {{ _cluster_rosa_tokens | default({}, true) | combine({
+        item.item.name: item.stdout | default('') | trim
       }) }}
-  loop: "{{ _cr_cluster_state.results }}"
+  loop: "{{ _cr_token_results.results | default([]) }}"
   loop_control:
     label: "{{ item.item.name }}"
+  when: item is not skipped
   no_log: true
+
+- name: Build ROSA cluster maps for downstream steps
+  vars:
+    _rosa_clusters: "{{ item.stdout | default('[]', true) | from_json }}"
+    _cred_key: "{{ item.item.name }}"
+    _rosa_name_from_api: "{{ item.item.api_url | default('') | regex_search('api\\.([^.]+)\\.', '\\1') | first | default('') }}"
+    _matched_cluster: "{{ _rosa_clusters | selectattr('name', 'equalto', _rosa_name_from_api) | list | first | default({}) }}"
+  ansible.builtin.set_fact:
+    _rosa_managed_names: >-
+      {{ (_rosa_managed_names | default([], true)) + [_cred_key] }}
+    _rosa_managed_ids: >-
+      {{ (_rosa_managed_ids | default({}, true)) | combine({
+        _cred_key: _matched_cluster.id | default('')
+      }) }}
+    _rosa_name_map: >-
+      {{ (_rosa_name_map | default({}, true)) | combine({
+        _cred_key: _matched_cluster.name | default('')
+      }) }}
+  loop: "{{ _cr_rosa_visibility.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name | default('n/a') }}"
+  when:
+    - item is not skipped
+    - (_rosa_clusters | selectattr('name', 'equalto', _rosa_name_from_api) | list | length) > 0
+
+- name: Confirm ROSA authentication via bastion tokens
+  ansible.builtin.debug:
+    msg: >-
+      Per-cluster ROSA tokens extracted and validated for {{ cluster_definitions | length }} clusters.
+      ROSA maps exported for downstream steps ({{ _rosa_managed_names | default([]) | length }} matched).
+
+- name: "CLUSTER-READY PREFLIGHT — Phase 4: Cluster API Reachability"
+  ansible.builtin.debug:
+    msg: "Validating {{ cluster_definitions | length }} cluster APIs are reachable..."
 
 - name: Test cluster API reachability
   ansible.builtin.uri:
-    url: "{{ _cr_api_urls[item.name] }}/.well-known/oauth-authorization-server"
+    url: "{{ item.api_url }}/.well-known/oauth-authorization-server"
     method: GET
     validate_certs: false
     timeout: 15
@@ -210,18 +343,93 @@
   loop_control:
     label: "{{ item.name }}"
   register: _cr_api_check
+  retries: 6
+  delay: 30
+  until: _cr_api_check is not failed
   failed_when: false
-  when: _cr_api_urls[item.name] | default('') | length > 0
 
 - name: Display API reachability
   ansible.builtin.debug:
     msg: >-
       {{ item.item.name }}: API
-      {{ 'reachable' if item.status | default(0) in [200, 401, 403] else 'UNREACHABLE' }}
-  loop: "{{ _cr_api_check.results | default([]) }}"
+      {{ 'reachable' if item.status | default(0) in [200, 401, 403] else 'UNREACHABLE (status=' ~ (item.status | default('timeout')) ~ ')' }}
+  loop: "{{ _cr_api_check.results }}"
   loop_control:
-    label: "{{ item.item.name | default('n/a') }}"
-  when: item is not skipped
+    label: "{{ item.item.name }}"
+
+- name: Collect unreachable clusters
+  ansible.builtin.set_fact:
+    _cr_not_ready: >-
+      {{ _cr_api_check.results
+         | rejectattr('status', 'defined')
+         | map(attribute='item.name')
+         | list
+         + _cr_api_check.results
+         | selectattr('status', 'defined')
+         | rejectattr('status', 'in', [200, 401, 403])
+         | map(attribute='item.name')
+         | list }}
+
+- name: Warn and exclude unreachable clusters
+  when: _cr_not_ready | length > 0
+  block:
+    - name: Report unreachable clusters
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: {{ _cr_not_ready | length }} cluster(s) unreachable and excluded
+          from deployment: {{ _cr_not_ready | join(', ') }}.
+          These clusters will be skipped. Re-run after resolving connectivity.
+
+    - name: Remove unreachable clusters from deployment list
+      ansible.builtin.set_fact:
+        cluster_definitions: >-
+          {{ cluster_definitions
+             | rejectattr('name', 'in', _cr_not_ready)
+             | list }}
+
+- name: "CLUSTER-READY PREFLIGHT — Phase 5: ROSA Cluster Info (advisory)"
+  ansible.builtin.debug:
+    msg: "Querying ROSA for cluster details..."
+
+- name: Check cluster state via ROSA
+  ansible.builtin.shell: |
+    set -o pipefail
+    rosa describe cluster --cluster={{ item.api_url | regex_search('api\.([^.]+)\.', '\1') | first | default(item.name) }} --output json 2>/dev/null \
+      | python3 -c "
+    import sys, json
+    c = json.load(sys.stdin)
+    state = c.get('status', {}).get('state', 'unknown')
+    version = c.get('openshift_version', '?')
+    print(f'{state}|{version}')
+    " || echo "unavailable|?"
+  args:
+    executable: /bin/bash
+  environment:
+    OCM_CONFIG: "/tmp/rosa-cluster-ocm-configs/{{ item.name }}.json"
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ cluster_definitions }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _cr_cluster_state
+  retries: 6
+  delay: 30
+  until: _cr_cluster_state is not failed
+  failed_when: false
+  changed_when: false
+  no_log: true
+
+- name: Display ROSA cluster info
+  vars:
+    _raw: "{{ item.stdout | default('unavailable|?', true) }}"
+    _state: "{{ _raw.split('|') | first }}"
+    _version: "{{ _raw.split('|') | last }}"
+  ansible.builtin.debug:
+    msg: "{{ item.item.name }}: rosa_state={{ _state }}, version={{ _version }}"
+  loop: "{{ _cr_cluster_state.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
 
 - name: "CLUSTER-READY PREFLIGHT — Phase 6: Existing Machinepool Check"
   ansible.builtin.debug:
@@ -230,11 +438,12 @@
 - name: List machinepools per cluster
   ansible.builtin.shell: |
     set -o pipefail
-    rosa list machinepools --cluster={{ item.name }} --output json 2>/dev/null \
+    rosa list machinepools --cluster={{ item.api_url | regex_search('api\.([^.]+)\.', '\1') | first | default(item.name) }} --output json 2>/dev/null \
       | python3 -c "import sys,json; pools=json.load(sys.stdin); print(' '.join(p['id'] for p in pools))"
   args:
     executable: /bin/bash
   environment:
+    OCM_CONFIG: "/tmp/rosa-cluster-ocm-configs/{{ item.name }}.json"
     AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
     AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
     AWS_DEFAULT_REGION: "{{ item.aws_region }}"
@@ -242,6 +451,9 @@
   loop_control:
     label: "{{ item.name }}"
   register: _cr_pool_check
+  retries: 6
+  delay: 30
+  until: _cr_pool_check is not failed
   failed_when: false
   changed_when: false
   no_log: true
@@ -257,7 +469,61 @@
   loop_control:
     label: "{{ item.item.name }}"
 
-- name: "CLUSTER-READY PREFLIGHT — Phase 7: Phase 2 Field Validation"
+- name: Cache machinepool listings for downstream steps
+  ansible.builtin.set_fact:
+    _cached_machinepool_pools: >-
+      {{ _cached_machinepool_pools | default({}, true) | combine({
+        item.item.name: item.stdout | default('') | trim
+      }) }}
+  loop: "{{ _cr_pool_check.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: "CLUSTER-READY PREFLIGHT — Phase 7: EFS Filesystem Check"
+  ansible.builtin.debug:
+    msg: "Checking AWS EFS filesystem existence for non-hub clusters..."
+
+- name: Check for existing EFS filesystem per cluster
+  ansible.builtin.shell: |
+    set -o pipefail
+    aws efs describe-file-systems \
+      --query "FileSystems[?Tags[?Key=='Cluster' && Value=='{{ item.name }}']].FileSystemId | [0]" \
+      --output text
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
+    AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
+    AWS_DEFAULT_REGION: "{{ item.aws_region }}"
+  loop: "{{ cluster_definitions | rejectattr('category', 'equalto', 'hub') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _cr_efs_check
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Build EFS preflight results
+  ansible.builtin.set_fact:
+    _preflight_efs_ids: >-
+      {{ _preflight_efs_ids | default({}) | combine({
+        item.item.name: (item.stdout | trim) if (item.stdout | default('None') | trim) not in ['None', ''] else ''
+      }) }}
+  loop: "{{ _cr_efs_check.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  no_log: true
+
+- name: Display EFS filesystem status
+  ansible.builtin.debug:
+    msg: |
+      ── EFS Filesystem Check ────────────────────────────
+      {% for cluster in cluster_definitions | rejectattr('category', 'equalto', 'hub') | list %}
+        {{ '%-25s' | format(cluster.name) }} {{ 'FOUND — ' + _preflight_efs_ids[cluster.name] if _preflight_efs_ids[cluster.name] | default('') | length > 0 else 'NOT FOUND — will be created' }}
+      {% endfor %}
+      ───────────────────────────────────────────────────
+
+- name: "CLUSTER-READY PREFLIGHT — Phase 8: Phase 2 Field Validation"
   ansible.builtin.debug:
     msg: "Validating Phase 2 required fields (purpose, seat_number)..."
 
@@ -274,7 +540,11 @@
         Workshop Pool: {{ workshop_machinepool_name }}
           Instance Type: {{ workshop_machinepool_instance_type }}
           Autoscaling: {{ workshop_machinepool_min_replicas }}-{{ workshop_machinepool_max_replicas }}
+        EFS: {{ _preflight_efs_ids | default({}) | dict2items
+              | selectattr('value', 'ne', '') | list | length
+              }}/{{ cluster_definitions | rejectattr('category', 'equalto', 'hub')
+              | list | length }} found (missing will be provisioned)
 
-        Pipeline: Verify Clusters → Workshop Machinepool
-                  → Demo Application
+        Pipeline: Workshop Machinepool → Wait for Nodes
+                  → Prepare Cluster (fast-path if Ready)
       ══════════════════════════════════════════════════════════════

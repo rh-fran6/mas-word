@@ -5,11 +5,12 @@
 - name: Wait for clusters to reach ready state
   ansible.builtin.shell: |
     set -o pipefail
-    rosa describe cluster --cluster={{ item.name }} --output json 2>/dev/null \
+    rosa describe cluster --cluster={{ _rosa_managed_ids[item.name] | default(item.name) }} --output json 2>/dev/null \
       | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status',{}).get('state','unknown'))"
   args:
     executable: /bin/bash
   environment:
+    OCM_CONFIG: "/tmp/rosa-cluster-ocm-configs/{{ item.name }}.json"
     AWS_ACCESS_KEY_ID: "{{ item.aws_access_key_id }}"
     AWS_SECRET_ACCESS_KEY: "{{ item.aws_secret_access_key }}"
     AWS_DEFAULT_REGION: "{{ item.aws_region }}"

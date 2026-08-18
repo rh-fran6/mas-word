@@ -1,0 +1,13 @@
+---
+masworld_lab_accounts_enabled: true
+
+masworld_lab_username_prefix: "lab-seat-"
+masworld_lab_password_length: 16
+
+masworld_keycloak_namespace: "masworld-keycloak"
+masworld_keycloak_realm: "masworld"
+
+masworld_lab_credentials_secret_name: "masworld-lab-credentials"  # pragma: allowlist secret
+masworld_lab_credentials_namespace: "showroom"
+
+masworld_lab_clusterrole_name: "masworld-lab-operator"

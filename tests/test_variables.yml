@@ -5,15 +5,12 @@
   gather_facts: false
 
   vars_files:
-    - ../secrets/rosa-token.yml
     - ../secrets/cluster-credentials.yml
 
   tasks:
     - name: Validate cluster_categories structure
       ansible.builtin.assert:
         that:
-          - item.value.count is defined
-          - item.value.count | int >= 1
           - item.value.instance_type is defined
           - item.value.initial_replicas is defined
           - item.value.initial_replicas | int >= 2
@@ -22,11 +19,13 @@
       loop_control:
         label: "{{ item.key }}"
 
-    - name: Validate facilitator count is exactly 1
+    - name: Validate exactly one facilitator in credentials
       ansible.builtin.assert:
         that:
-          - cluster_categories.facilitator.count == 1
-        fail_msg: "Facilitator count must be exactly 1"
+          - cluster_credentials | dict2items
+            | selectattr('key', 'match', '^' ~ cluster_prefix ~ '-facilitator-')
+            | list | length == 1
+        fail_msg: "Exactly one facilitator cluster must exist in cluster-credentials.yml"
 
     - name: Build cluster definitions and validate credential mapping
       ansible.builtin.set_fact:

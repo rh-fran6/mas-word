@@ -10,6 +10,24 @@
     state: directory
     mode: "0755"
 
+# --- Clean Up Old Reports ---
+- name: Clean up old report files (>7 days)
+  ansible.builtin.find:
+    paths: "{{ masworld_report_output_dir }}"
+    age: 7d
+    recurse: false
+  register: _old_reports
+  failed_when: false
+
+- name: Remove old reports
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ _old_reports.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  when: _old_reports.files | default([]) | length > 0
+
 # --- Build Report Timestamp ---
 - name: Generate report timestamp
   ansible.builtin.set_fact:
@@ -19,7 +37,7 @@
 - name: Build report filename base
   ansible.builtin.set_fact:
     _report_file_base: >-
-      {{ masworld_report_filename_prefix }}{{ '-' + _report_timestamp if masworld_report_timestamp_filenames | bool else '' }}
+      {{ masworld_report_filename_prefix }}-{{ masworld_cluster_id | default('unknown') }}{{ '-' + _report_timestamp if masworld_report_timestamp_filenames | bool else '' }}
 
 # --- Gather All Facts from Previous Roles ---
 - name: Build environment report data
