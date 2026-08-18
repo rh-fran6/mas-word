@@ -39,6 +39,18 @@
         _masworld_cluster_domain: >-
           {{ _masworld_ingress_cr.resources[0].spec.domain | default('') }}
 
+    - name: Get cluster API URL
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: Infrastructure
+        name: cluster
+      register: _masworld_infra_cr
+
+    - name: Set API URL fact
+      ansible.builtin.set_fact:
+        _masworld_api_url: >-
+          {{ _masworld_infra_cr.resources[0].status.apiServerURL | default('') }}
+
     # ── Resolve MAS and Manage URLs ───────────────────────────────────
     - name: Get MAS home route
       kubernetes.core.k8s_info:
@@ -198,7 +210,7 @@
             user_data: |
               openshift_console_url: {{ _masworld_console_url }}
               openshift_cluster_ingress_domain: {{ _masworld_cluster_domain }}
-              openshift_api_url: {{ masworld_cluster_api_url | default('') }}
+              openshift_api_url: {{ _masworld_api_url | default(masworld_cluster_api_url | default('')) }}
               mas_url: {{ _masworld_mas_url }}
               manage_url: {{ _masworld_manage_url }}
               seat_number: {{ masworld_seat_number }}

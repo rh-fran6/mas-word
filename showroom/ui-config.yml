@@ -14,9 +14,6 @@ antora:
     - name: 02-navigation-search
       label: "Navigation and Search"
       solveButton: false
-    - name: 03-acm-fleet-management
-      label: "Advanced Cluster Management"
-      solveButton: false
     - name: 04-updates
       label: "Updates"
       solveButton: false

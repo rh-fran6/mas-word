@@ -9,8 +9,8 @@ Welcome to *MAS World 2026*, a hands-on workshop exploring IBM Maximo Applicatio
 
 [cols="1,2"]
 |===
-| Username | `{lab_username}`
-| Password | `{lab_password}`
+| Username | `{lab_username}` pass:[<button onclick="navigator.clipboard.writeText(this.closest('td').querySelector('code').textContent).then(function(){var b=this;b.textContent='✓';setTimeout(function(){b.textContent='⧉'},1500)}.bind(this))" style="cursor:pointer;border:none;background:none;font-size:14px;vertical-align:middle;padding:0 0 0 4px;color:#0066cc" title="Copy to clipboard">⧉</button>]
+| Password | `{lab_password}` pass:[<button onclick="navigator.clipboard.writeText(this.closest('td').querySelector('code').textContent).then(function(){var b=this;b.textContent='✓';setTimeout(function(){b.textContent='⧉'},1500)}.bind(this))" style="cursor:pointer;border:none;background:none;font-size:14px;vertical-align:middle;padding:0 0 0 4px;color:#0066cc" title="Copy to clipboard">⧉</button>]
 | Login method | Select *Keycloak* on the OpenShift login screen
 |===
 
@@ -23,10 +23,10 @@ Log in to the OpenShift Console using these credentials. Your lab user has permi
 
 [cols="1,2"]
 |===
-| Bucket Name | `{s3_bucket_name}`
-| Access Key ID | `{s3_access_key_id}`
-| Secret Access Key | `{s3_secret_access_key}`
-| Region | `{s3_region}`
+| Bucket Name | `{s3_bucket_name}` pass:[<button onclick="navigator.clipboard.writeText(this.closest('td').querySelector('code').textContent).then(function(){var b=this;b.textContent='✓';setTimeout(function(){b.textContent='⧉'},1500)}.bind(this))" style="cursor:pointer;border:none;background:none;font-size:14px;vertical-align:middle;padding:0 0 0 4px;color:#0066cc" title="Copy to clipboard">⧉</button>]
+| Access Key ID | `{s3_access_key_id}` pass:[<button onclick="navigator.clipboard.writeText(this.closest('td').querySelector('code').textContent).then(function(){var b=this;b.textContent='✓';setTimeout(function(){b.textContent='⧉'},1500)}.bind(this))" style="cursor:pointer;border:none;background:none;font-size:14px;vertical-align:middle;padding:0 0 0 4px;color:#0066cc" title="Copy to clipboard">⧉</button>]
+| Secret Access Key | `{s3_secret_access_key}` pass:[<button onclick="navigator.clipboard.writeText(this.closest('td').querySelector('code').textContent).then(function(){var b=this;b.textContent='✓';setTimeout(function(){b.textContent='⧉'},1500)}.bind(this))" style="cursor:pointer;border:none;background:none;font-size:14px;vertical-align:middle;padding:0 0 0 4px;color:#0066cc" title="Copy to clipboard">⧉</button>]
+| Region | `{s3_region}` pass:[<button onclick="navigator.clipboard.writeText(this.closest('td').querySelector('code').textContent).then(function(){var b=this;b.textContent='✓';setTimeout(function(){b.textContent='⧉'},1500)}.bind(this))" style="cursor:pointer;border:none;background:none;font-size:14px;vertical-align:middle;padding:0 0 0 4px;color:#0066cc" title="Copy to clipboard">⧉</button>]
 |===
 
 You will need these when deploying the LokiStack in Exercise 5.
