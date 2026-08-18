@@ -33,15 +33,9 @@ antora:
       label: Conclusion
       solveButton: false
 tabs:
-  - title: OpenShift Console
+  - name: OpenShift Console
     url: https://console-openshift-console.${DOMAIN}
-    position: right
-    type: console
-  - title: Maximo
+    external: true
+  - name: Maximo
     url: https://admin.inst1.${DOMAIN}
-    position: right
-    type: iframe
-  - title: Grafana
-    url: https://grafana-openshift-logging.${DOMAIN}
-    position: right
-    type: iframe
+    external: true
