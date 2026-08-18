@@ -6,7 +6,7 @@ Verify that your environment is ready for the workshop.
 
 == Log In to OpenShift
 
-. Open the *OpenShift Console* tab on the right (or navigate to {openshift_console_url}[the console^]).
+. Open {openshift_console_url}[the OpenShift Console^] in your browser.
 . On the login screen, select *Keycloak* as the identity provider.
 . Enter your lab credentials:
 +
@@ -14,93 +14,30 @@ Verify that your environment is ready for the workshop.
 * *Password*: `{lab_password}`
 +
 These are shown on the Welcome page of this lab guide.
-. Confirm the OpenShift dashboard loads.
-
-== Verify Terminal Access
-
-. Open the *Terminal* tab on the right.
-. Log in to the cluster using the `oc` CLI:
-+
-[source,role="execute",subs="+attributes"]
-----
-oc login {openshift_api_url} -u {lab_username} -p {lab_password} --insecure-skip-tls-verify
-----
-+
-. Confirm you are logged in:
-+
-[source,role="execute"]
-----
-oc whoami
-----
-+
-.Expected output
-[source,text,subs="+attributes"]
-----
-{lab_username}
-----
+. Confirm the OpenShift web console dashboard loads and you can see the cluster overview.
 
 == Verify Your Namespace
 
-Confirm your dedicated student namespace exists:
-
-[source,role="execute",subs="+attributes"]
-----
-oc get project student-{seat_number}
-----
-
-.Expected output
-[source,text,subs="+attributes"]
-----
-NAME                DISPLAY NAME   STATUS
-student-{seat_number}                      Active
-----
+. In the OpenShift Console, click *Home* in the left navigation menu, then select *Projects*.
+. In the filter bar at the top of the Projects list, type `student-{seat_number}`.
+. Confirm that the project *student-{seat_number}* appears in the list and its status shows *Active*.
+. Click on the *student-{seat_number}* project name to open it.
+. Confirm the project overview page loads, showing resource details for your namespace.
 
 == Verify Your Permissions
 
-Your lab account can install operators and configure logging, but cannot modify MAS components.
+Your lab account can install operators and configure logging, but cannot modify MAS components. Confirm this by checking what you can see and do in the console.
 
-. Verify you can create resources in your student namespace:
-+
-[source,role="execute",subs="+attributes"]
-----
-oc auth can-i create pod -n student-{seat_number}
-----
-+
-.Expected output
-[source,text]
-----
-yes
-----
-+
-. Verify you can create resources in the logging namespace:
-+
-[source,role="execute"]
-----
-oc auth can-i create subscription.operators.coreos.com -n openshift-logging
-----
-+
-.Expected output
-[source,text]
-----
-yes
-----
-+
-. Verify you *cannot* modify MAS components:
-+
-[source,role="execute"]
-----
-oc auth can-i delete suite -n mas-inst1-core
-----
-+
-.Expected output
-[source,text]
-----
-no
-----
+. Make sure you are viewing the *student-{seat_number}* project (use the project selector at the top of the console if needed).
+. Click *Workloads* in the left navigation menu, then select *Pods*.
+. Confirm that the Pods page loads without an access error. You should see a list of pods (or "No Pods found" if none are running yet). This confirms you have view and create permissions in your student namespace.
+. Now switch the project selector at the top of the console to *mas-inst1-core*.
+. Click *Workloads* > *Pods* and confirm you can *view* the pods running in this namespace.
+. Note that you have *read-only* access here -- you should not see options to delete or modify MAS resources. If you attempt to delete a pod, the console will display a permission denied error.
 
 == Verify Maximo Access
 
-. Open the *Maximo* tab on the right (or navigate to {mas_url}[Maximo^]).
+. Open {mas_url}[Maximo^] in a new browser tab.
 . Log in with your MAS credentials.
 . Confirm the Maximo Navigator loads and you can see application tiles.
 
@@ -108,19 +45,12 @@ NOTE: Your lab account is for OpenShift access. Maximo uses its own authenticati
 
 == Verify Cluster Health
 
-[source,role="execute"]
-----
-oc get nodes --no-headers
-----
-
-Confirm all nodes show `Ready` status.
-
-[source,role="execute"]
-----
-oc get clusterversion
-----
-
-Confirm the cluster version is displayed and the status is stable.
+. In the OpenShift Console, click *Home* in the left navigation menu, then select *Overview*.
+. Review the *Cluster* section at the top. Confirm that the overall cluster status shows healthy (green indicators, no critical alerts).
+. Check the *Status* card. All items (Cluster, Control Plane, Operators) should show a green checkmark or "OK" status.
+. Now click *Compute* in the left navigation menu, then select *Nodes*.
+. Review the list of nodes. Confirm that every node shows a *Ready* status in the Status column.
+. If any node shows a status other than *Ready*, notify your facilitator.
 
 === Verify
 
@@ -128,13 +58,13 @@ Confirm the cluster version is displayed and the status is stable.
 ====
 Your environment is ready when:
 
-* You can log in to the OpenShift Console using Keycloak with `{lab_username}`
-* `oc whoami` returns `{lab_username}`
-* Your student namespace `student-{seat_number}` exists and is Active
-* You can create pods in your student namespace and in `openshift-logging`
-* You *cannot* delete MAS resources
-* Maximo Navigator loads
-* All nodes are `Ready`
+* You can log in to the OpenShift Console using *Keycloak* with `{lab_username}`
+* Your student project *student-{seat_number}* exists and shows *Active* status under *Home > Projects*
+* You can view the *Pods* page under *Workloads* in your student namespace without access errors
+* You *cannot* delete resources in the *mas-inst1-core* namespace
+* Maximo Navigator loads and displays application tiles
+* The cluster overview under *Home > Overview* shows healthy status
+* All nodes under *Compute > Nodes* show *Ready*
 ====
 
 Click *Next* to begin the Navigation and Search exercise.

@@ -5,8 +5,8 @@ start_page: index.adoc
 asciidoc:
   attributes:
     ocp_version: "4.21"
-    mas_version: "9.1"
-    manage_version: "9.1"
+    mas_version: "9.2"
+    manage_version: "9.2"
     openshift_console_url: "https://console-openshift-console.apps.example.com"
     openshift_cluster_ingress_domain: "apps.example.com"
     openshift_api_url: "https://api.example.com:443"

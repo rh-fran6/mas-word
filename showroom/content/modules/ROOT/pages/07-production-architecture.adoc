@@ -39,9 +39,6 @@ This workshop demonstrates concepts at conference scale. A production deployment
 | Pinned for stability
 | Scheduled maintenance windows with rollback
 
-| ACM
-| Fleet demonstration
-| Production governance and compliance
 |===
 
 == Production Sizing Guidelines
@@ -65,7 +62,6 @@ The following are reference guidelines. Actual sizing depends on your workload.
 == Key Takeaways
 
 . MAS on OpenShift provides a consistent platform for enterprise asset management
-. RHACM enables fleet-wide governance and visibility
 . OpenShift Logging with Loki provides scalable observability
 . Identity integration connects MAS to enterprise directories
 . Automation (Ansible, operators, GitOps) ensures consistent, repeatable deployments
@@ -74,5 +70,4 @@ The following are reference guidelines. Actual sizing depends on your workload.
 
 * https://www.ibm.com/docs/en/mas-cd/maximo-manage/continuous-delivery[IBM Maximo Manage Documentation^]
 * https://docs.openshift.com/container-platform/{ocp_version}/welcome/index.html[OpenShift {ocp_version} Documentation^]
-* https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.16[RHACM 2.16 Documentation^]
 * https://docs.openshift.com/container-platform/{ocp_version}/observability/logging/logging-6.6/log6x-about.html[OpenShift Logging 6.6 Documentation^]

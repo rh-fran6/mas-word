@@ -6,7 +6,7 @@ Install and configure the OpenShift Logging stack with Loki to observe your Maxi
 
 == Introduction
 
-In this exercise you will install and configure a complete cluster logging stack from scratch. By the end, you will have:
+In this exercise you will install and configure a complete cluster logging stack from scratch using the OpenShift web console. By the end, you will have:
 
 * Installed three operators (Logging, Loki, Cluster Observability)
 * Created an S3-backed LokiStack for log storage
@@ -43,166 +43,135 @@ You will build the following stack:
 
 == Step 1: Install the OpenShift Logging Operator
 
-The Logging Operator requires its own namespace and OperatorGroup.
+. In the OpenShift web console, navigate to *Operators > OperatorHub*.
+. In the search field, type `Red Hat OpenShift Logging`.
+. Click the *Red Hat OpenShift Logging* tile.
+. Click *Install*.
+. On the Install Operator page, configure the following:
++
+[cols="1,2"]
+|===
+| Setting | Value
 
-. Create the `openshift-logging` namespace:
+| Update channel
+| `stable-6.6`
+
+| Installation mode
+| A specific namespace on the cluster
+
+| Installed Namespace
+| `openshift-logging` (select *Create Namespace* if it does not exist)
+
+| Update approval
+| Automatic
+|===
 +
-[source,role="execute"]
-----
-cat <<EOF | oc apply -f -
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: openshift-logging
-  labels:
-    openshift.io/cluster-monitoring: "true"
-EOF
-----
-+
-. Create the OperatorGroup:
-+
-[source,role="execute"]
-----
-cat <<EOF | oc apply -f -
-apiVersion: operators.coreos.com/v1
-kind: OperatorGroup
-metadata:
-  name: openshift-logging
-  namespace: openshift-logging
-spec:
-  targetNamespaces:
-    - openshift-logging
-EOF
-----
-+
-. Install the Logging Operator via Subscription:
-+
-[source,role="execute"]
-----
-cat <<EOF | oc apply -f -
-apiVersion: operators.coreos.com/v1alpha1
-kind: Subscription
-metadata:
-  name: cluster-logging
-  namespace: openshift-logging
-spec:
-  channel: stable-6.6
-  name: cluster-logging
-  source: redhat-operators
-  sourceNamespace: openshift-marketplace
-  installPlanApproval: Automatic
-EOF
-----
-+
-. Wait for the operator to install (this may take 1-2 minutes):
-+
-[source,role="execute"]
-----
-oc get csv -n openshift-logging -w
-----
-+
-Wait until the `PHASE` column shows `Succeeded`, then press `Ctrl+C` to stop watching.
+. Click *Install*.
+. Wait for the status to show *Succeeded* on the Installed Operators page. This may take 1-2 minutes.
 
 == Step 2: Install the Loki Operator
 
-The Loki Operator installs into the same `openshift-logging` namespace. It does not need a separate OperatorGroup.
+. Navigate to *Operators > OperatorHub*.
+. In the search field, type `Loki Operator`.
+. Click the *Loki Operator* tile (the one provided by Red Hat).
+. Click *Install*.
+. On the Install Operator page, configure the following:
++
+[cols="1,2"]
+|===
+| Setting | Value
 
-. Install the Loki Operator:
+| Update channel
+| `stable-6.6`
+
+| Installation mode
+| A specific namespace on the cluster
+
+| Installed Namespace
+| `openshift-logging`
+
+| Update approval
+| Automatic
+|===
 +
-[source,role="execute"]
-----
-cat <<EOF | oc apply -f -
-apiVersion: operators.coreos.com/v1alpha1
-kind: Subscription
-metadata:
-  name: loki-operator
-  namespace: openshift-logging
-spec:
-  channel: stable-6.6
-  name: loki-operator
-  source: redhat-operators
-  sourceNamespace: openshift-marketplace
-  installPlanApproval: Automatic
-EOF
-----
-+
-. Verify both operators are installed:
-+
-[source,role="execute"]
-----
-oc get csv -n openshift-logging --no-headers
-----
-+
-.Expected output (versions may vary)
-[source,text]
-----
-cluster-logging.v6.6.x   Red Hat OpenShift Logging   Succeeded
-loki-operator.v6.6.x     Loki Operator               Succeeded
-----
+. Click *Install*.
+. Wait for the status to show *Succeeded*.
+. Navigate to *Operators > Installed Operators* and select the *openshift-logging* project from the namespace dropdown. Confirm that both *Red Hat OpenShift Logging* and *Loki Operator* show a status of *Succeeded*.
 
 == Step 3: Install the Cluster Observability Operator
 
 The Cluster Observability Operator (COO) enables integrated log viewing directly in the OpenShift Console.
 
-. Install COO:
+. Navigate to *Operators > OperatorHub*.
+. In the search field, type `Cluster Observability Operator`.
+. Click the *Cluster Observability Operator* tile.
+. Click *Install*.
+. On the Install Operator page, configure the following:
 +
-[source,role="execute"]
-----
-cat <<EOF | oc apply -f -
-apiVersion: operators.coreos.com/v1alpha1
-kind: Subscription
-metadata:
-  name: cluster-observability-operator
-  namespace: openshift-operators
-spec:
-  channel: stable
-  name: cluster-observability-operator
-  source: redhat-operators
-  sourceNamespace: openshift-marketplace
-  installPlanApproval: Automatic
-EOF
-----
+[cols="1,2"]
+|===
+| Setting | Value
+
+| Update channel
+| `stable`
+
+| Installation mode
+| All namespaces on the cluster
+
+| Installed Namespace
+| `openshift-operators`
+
+| Update approval
+| Automatic
+|===
 +
-. Wait for COO to install:
-+
-[source,role="execute"]
-----
-oc get csv -n openshift-operators --no-headers | grep observability
-----
-+
-Wait until the phase shows `Succeeded`.
+. Click *Install*.
+. Wait for the status to show *Succeeded*.
 
 == Step 4: Create the S3 Storage Secret
 
 LokiStack needs S3 credentials to store log data. Your S3 bucket has been pre-created. Use the credentials from the information panel on this page.
 
-. Create the storage secret:
+. In the OpenShift web console, select the *openshift-logging* project from the namespace dropdown at the top.
+. Navigate to *Workloads > Secrets*.
+. Click *Create* and select *Key/value secret*.
+. Set the *Secret name* to `logging-loki-s3`.
+. Add the following key/value pairs (click *Add key/value* to add each additional entry):
 +
-[source,role="execute"]
-----
-oc create secret generic logging-loki-s3 \
-  -n openshift-logging \
-  --from-literal=bucketnames={s3_bucket_name} \
-  --from-literal=region={s3_region} \
-  --from-literal=access_key_id={s3_access_key_id} \
-  --from-literal=access_key_secret={s3_secret_access_key} \
-  --from-literal=endpoint=https://s3.{s3_region}.amazonaws.com
-----
+[cols="1,2",subs="+attributes"]
+|===
+| Key | Value
+
+| `bucketnames`
+| `{s3_bucket_name}`
+
+| `region`
+| `{s3_region}`
+
+| `access_key_id`
+| `{s3_access_key_id}`
+
+| `access_key_secret`
+| `{s3_secret_access_key}`
+
+| `endpoint`
+| `\https://s3.{s3_region}.amazonaws.com`
+|===
 +
-. Verify the secret was created:
-+
-[source,role="execute"]
-----
-oc get secret logging-loki-s3 -n openshift-logging
-----
+. Click *Create*.
+. Verify the secret appears in the Secrets list with the name `logging-loki-s3`.
 
 == Step 5: Deploy LokiStack
 
-. Create the LokiStack custom resource:
+. Navigate to *Operators > Installed Operators*.
+. Select the *openshift-logging* project from the namespace dropdown.
+. Click on *Loki Operator*.
+. Click the *LokiStack* tab.
+. Click *Create LokiStack*.
+. Switch to the *YAML view* and replace the contents with the following:
 +
-[source,role="execute"]
+[source,yaml]
 ----
-cat <<EOF | oc apply -f -
 apiVersion: loki.grafana.com/v1
 kind: LokiStack
 metadata:
@@ -224,31 +193,19 @@ spec:
     global:
       retention:
         days: 3
-EOF
 ----
 +
-. Wait for LokiStack to become ready (this may take 3-5 minutes):
-+
-[source,role="execute"]
-----
-oc get lokistack logging-loki -n openshift-logging -w
-----
-+
-Wait for `READY` to show `True`, then press `Ctrl+C`.
-+
-. Verify all LokiStack pods are running:
-+
-[source,role="execute"]
-----
-oc get pods -n openshift-logging -l app.kubernetes.io/instance=logging-loki --no-headers
-----
+. Click *Create*.
+. Wait for the LokiStack status to show *Ready*. This may take 3-5 minutes. You can monitor the status on the LokiStack details page or by navigating to *Workloads > Pods* in the *openshift-logging* namespace to watch the Loki pods start up.
 
 == Step 6: Configure Log Collection
 
-The ClusterLogForwarder tells the Logging Operator what logs to collect and where to send them.
+The ClusterLogForwarder tells the Logging Operator what logs to collect and where to send them. Before creating the forwarder, you need to create a service account with the required permissions.
 
-. Create the collector ServiceAccount and grant required permissions:
-+
+[NOTE]
+====
+Open the *Terminal* tab and run these commands to create the required service account and grant log collection permissions:
+
 [source,role="execute"]
 ----
 oc create serviceaccount collector -n openshift-logging
@@ -256,12 +213,19 @@ oc adm policy add-cluster-role-to-user collect-application-logs -z collector -n 
 oc adm policy add-cluster-role-to-user collect-infrastructure-logs -z collector -n openshift-logging
 oc adm policy add-cluster-role-to-user collect-audit-logs -z collector -n openshift-logging
 ----
+====
+
+Now create the ClusterLogForwarder using the console:
+
+. Navigate to *Operators > Installed Operators*.
+. Select the *openshift-logging* project from the namespace dropdown.
+. Click on *Red Hat OpenShift Logging*.
+. Click the *ClusterLogForwarder* tab.
+. Click *Create ClusterLogForwarder*.
+. Switch to the *YAML view* and replace the contents with the following:
 +
-. Create the ClusterLogForwarder:
-+
-[source,role="execute"]
+[source,yaml]
 ----
-cat <<EOF | oc apply -f -
 apiVersion: observability.openshift.io/v1
 kind: ClusterLogForwarder
 metadata:
@@ -296,27 +260,24 @@ spec:
         - audit
       outputRefs:
         - default-lokistack
-EOF
 ----
 +
-. Verify the collector pods are running:
-+
-[source,role="execute"]
-----
-oc get pods -n openshift-logging -l app.kubernetes.io/component=collector --no-headers
-----
-+
-You should see collector pods running on each node.
+. Click *Create*.
+. Navigate to *Workloads > Pods* in the *openshift-logging* namespace. You should see collector pods running on each node. Wait for all collector pods to show a status of *Running*.
 
 == Step 7: Enable Console Log Viewing
 
 The Cluster Observability Operator provides a UIPlugin that adds a *Logs* tab to the OpenShift Console.
 
-. Create the UIPlugin:
+. Navigate to *Operators > Installed Operators*.
+. Select the *openshift-operators* project from the namespace dropdown.
+. Click on *Cluster Observability Operator*.
+. Click the *UIPlugin* tab.
+. Click *Create UIPlugin*.
+. Switch to the *YAML view* and replace the contents with the following:
 +
-[source,role="execute"]
+[source,yaml]
 ----
-cat <<EOF | oc apply -f -
 apiVersion: observability.openshift.io/v1alpha1
 kind: UIPlugin
 metadata:
@@ -327,20 +288,17 @@ spec:
     lokiStack:
       name: logging-loki
     logsLimit: 50
-EOF
 ----
 +
-. Verify the plugin is available:
-+
-[source,role="execute"]
-----
-oc get uiplugin logging
-----
+. Click *Create*.
+. Verify the UIPlugin appears with the name `logging`. You may need to refresh the console page for the *Observe > Logs* menu item to appear.
 
-== Step 8: Generate and Query Logs
+== Step 8: Generate Test Logs
 
-. Create a log-generating workload in your namespace:
-+
+[NOTE]
+====
+Open the *Terminal* tab and run the following commands to generate test logs in your namespace:
+
 [source,role="execute",subs="+attributes"]
 ----
 oc run log-test-{seat_number} \
@@ -349,57 +307,62 @@ oc run log-test-{seat_number} \
   --restart=Never \
   -- /bin/bash -c 'for i in $(seq 1 10); do echo "{\"msg\":\"MAS World log test\",\"seat\":\"{seat_number}\",\"iteration\":$i,\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"; sleep 2; done'
 ----
-+
-. Wait for the pod to complete:
-+
-[source,role="execute",subs="+attributes"]
-----
-oc wait pod/log-test-{seat_number} -n student-{seat_number} --for=condition=Ready --timeout=30s 2>/dev/null; sleep 25
-----
-+
-. Verify the logs were generated:
-+
+
+Wait about 25 seconds for the pod to finish generating logs, then verify the output:
+
 [source,role="execute",subs="+attributes"]
 ----
 oc logs log-test-{seat_number} -n student-{seat_number}
 ----
 
-== Step 9: Query Logs with LogQL
+You should see 10 JSON log entries with your seat number.
+====
 
-You can query logs through the OpenShift Console (if the UIPlugin loaded) or directly via the Loki API.
+== Step 9: Query Logs in the Console
 
-. Query your test logs from the terminal:
+Now use the integrated log viewer to find your test logs.
+
+. In the OpenShift web console, navigate to *Observe > Logs*.
 +
-[source,role="execute"]
-----
-oc logs -n openshift-logging -l app.kubernetes.io/component=distributor --tail=5
-----
+[TIP]
+====
+If you do not see the *Logs* menu item under *Observe*, try refreshing the browser page. The UIPlugin may take a moment to register.
+====
 +
-. Open the *OpenShift Console* tab on the right and navigate to *Observe > Logs* (if the COO UIPlugin is active).
-. Enter this LogQL query:
+. In the log query field, enter the following LogQL query to find your test logs:
 +
 [source,text,subs="+attributes"]
 ----
 \{kubernetes_namespace_name="student-{seat_number}"} |= "MAS World log test"
 ----
 +
-. Try filtering by seat number:
+. Click *Run Query* (or press Enter). You should see your 10 test log entries.
+. Try a more specific query that filters by your seat number using JSON parsing:
 +
 [source,text,subs="+attributes"]
 ----
 \{kubernetes_namespace_name="student-{seat_number}"} | json | seat="{seat_number}"
 ----
++
+. Experiment with other queries:
++
+* View all infrastructure logs: `\{log_type="infrastructure"}`
+* View audit logs: `\{log_type="audit"}`
+* Search across namespaces: `\{kubernetes_namespace_name=~"student-.*"} |= "MAS World"`
 
 == Step 10: Clean Up
 
-. Delete your test pod:
-+
+[NOTE]
+====
+Open the *Terminal* tab and run the following command to delete your test pod:
+
 [source,role="execute",subs="+attributes"]
 ----
 oc delete pod log-test-{seat_number} -n student-{seat_number}
 ----
-+
-. Verify the logs *persist* in Loki after the pod is deleted (query again — the historical logs remain).
+====
+
+After deleting the pod, navigate back to *Observe > Logs* and run your LogQL query again. Notice that the historical logs persist in Loki even after the pod is deleted -- this is a key benefit of centralized log storage.
 
 == Production Considerations
 
@@ -438,11 +401,11 @@ oc delete pod log-test-{seat_number} -n student-{seat_number}
 ====
 You have completed this section when:
 
-* All three operators are installed (Logging, Loki, COO) with `Succeeded` phase
-* LokiStack `logging-loki` reports Ready
-* ClusterLogForwarder `collector` is configured with collector pods running
-* UIPlugin `logging` is created
-* You generated test logs and found them via LogQL
+* All three operators are installed (Logging, Loki, COO) with *Succeeded* status in *Operators > Installed Operators*
+* LokiStack `logging-loki` reports *Ready* in the Loki Operator LokiStack tab
+* ClusterLogForwarder `collector` is configured with collector pods running in *Workloads > Pods*
+* UIPlugin `logging` is created and *Observe > Logs* appears in the console menu
+* You generated test logs and found them via LogQL in *Observe > Logs*
 * You understand that logs persist after pod deletion
 * You cleaned up your test pod
 ====

@@ -67,4 +67,4 @@ You have completed this section when:
 * You understand that MAS runs as operators on OpenShift
 ====
 
-Click *Next* to explore Advanced Cluster Management.
+Click *Next* to explore the update lifecycle.

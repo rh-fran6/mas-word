@@ -9,7 +9,6 @@ In this workshop, you:
 
 * [x] Verified access to your dedicated OpenShift cluster with MAS
 * [x] Navigated Maximo Application Suite and explored its OpenShift foundation
-* [x] Observed fleet management with Red Hat Advanced Cluster Management
 * [x] Explored OpenShift and MAS update mechanisms
 * [x] *Installed* the OpenShift Logging stack from scratch (Logging Operator, Loki Operator, Cluster Observability Operator)
 * [x] Deployed a LokiStack with S3 backend and configured log forwarding
@@ -20,7 +19,6 @@ In this workshop, you:
 == Key Takeaways
 
 . *MAS on OpenShift* provides a consistent, scalable platform for enterprise asset management
-. *RHACM* enables centralized governance and visibility across your MAS fleet
 . *OpenShift Logging + Loki* delivers scalable, queryable observability with S3 backend -- and you can install it yourself
 . *Identity integration* connects MAS to your enterprise directory through the LDAP -> Keycloak -> OpenShift -> MAS chain
 . *Automation* (Ansible, operators, GitOps) ensures repeatable, auditable deployments
@@ -38,7 +36,6 @@ In this workshop, you:
 
 * IBM Maximo Application Suite documentation
 * Red Hat OpenShift documentation
-* Red Hat Advanced Cluster Management documentation
 * OpenShift Logging documentation
 
 == Feedback

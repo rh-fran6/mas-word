@@ -37,7 +37,6 @@ You will need these when deploying the LokiStack in Exercise 5.
 In this workshop, you will:
 
 * Navigate Maximo Application Suite and understand its OpenShift foundation
-* Use Red Hat Advanced Cluster Management to observe and govern a fleet of Maximo environments
 * Apply updates to your Maximo environment
 * *Install and configure* the OpenShift Logging stack (Logging Operator, Loki Operator, Cluster Observability Operator)
 * Integrate an external identity provider and sync LDAP users to Maximo
@@ -81,10 +80,6 @@ You have a dedicated OpenShift {ocp_version} cluster with:
 
 | 02
 | Navigation and Search -- explore the Maximo UI
-| 20 min
-
-| 03
-| ACM Fleet Management -- observe the fleet from the hub
 | 20 min
 
 | 04
