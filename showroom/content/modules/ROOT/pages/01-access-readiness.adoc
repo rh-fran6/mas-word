@@ -6,7 +6,7 @@ Verify that your environment is ready for the workshop.
 
 == Log In to OpenShift
 
-. Open the *OpenShift Console* tab on the right (or navigate to `{openshift_console_url}`).
+. Open the *OpenShift Console* tab on the right (or navigate to {openshift_console_url}[the console^]).
 . On the login screen, select *Keycloak* as the identity provider.
 . Enter your lab credentials:
 +
@@ -21,9 +21,9 @@ These are shown on the Welcome page of this lab guide.
 . Open the *Terminal* tab on the right.
 . Log in to the cluster using the `oc` CLI:
 +
-[source,role="execute"]
+[source,role="execute",subs="+attributes"]
 ----
-oc login {openshift_cluster_ingress_domain} -u {lab_username} -p {lab_password} --insecure-skip-tls-verify
+oc login {openshift_api_url} -u {lab_username} -p {lab_password} --insecure-skip-tls-verify
 ----
 +
 . Confirm you are logged in:
@@ -34,7 +34,7 @@ oc whoami
 ----
 +
 .Expected output
-[source,text]
+[source,text,subs="+attributes"]
 ----
 {lab_username}
 ----
@@ -43,13 +43,13 @@ oc whoami
 
 Confirm your dedicated student namespace exists:
 
-[source,role="execute"]
+[source,role="execute",subs="+attributes"]
 ----
 oc get project student-{seat_number}
 ----
 
 .Expected output
-[source,text]
+[source,text,subs="+attributes"]
 ----
 NAME                DISPLAY NAME   STATUS
 student-{seat_number}                      Active
@@ -61,7 +61,7 @@ Your lab account can install operators and configure logging, but cannot modify 
 
 . Verify you can create resources in your student namespace:
 +
-[source,role="execute"]
+[source,role="execute",subs="+attributes"]
 ----
 oc auth can-i create pod -n student-{seat_number}
 ----
@@ -100,7 +100,7 @@ no
 
 == Verify Maximo Access
 
-. Open the *Maximo* tab on the right (or navigate to `{mas_url}`).
+. Open the *Maximo* tab on the right (or navigate to {mas_url}[Maximo^]).
 . Log in with your MAS credentials.
 . Confirm the Maximo Navigator loads and you can see application tiles.
 

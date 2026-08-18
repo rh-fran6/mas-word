@@ -399,6 +399,20 @@
         - masworld_cluster_purpose | default('attendee') != 'hub'
         - cluster.aws_access_key_id | default(masworld_aws_access_key_id | default('')) | length > 0
 
+    - name: "{{ cluster.id }} — Ensure showroom namespace exists for S3 credentials"
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ masworld_showroom_namespace | default('showroom') }}"
+            labels:
+              masworld.redhat.com/component: showroom
+      when:
+        - not (_s3_credentials_already_ready | default(false) | bool)
+        - masworld_cluster_purpose | default('attendee') != 'hub'
+
     - name: "{{ cluster.id }} — Store S3 credentials for Showroom"
       kubernetes.core.k8s:
         state: present

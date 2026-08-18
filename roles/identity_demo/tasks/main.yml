@@ -773,6 +773,8 @@
               secret: "{{ _masworld_oidc_client_secret }}"
               redirectUris:
                 - "https://oauth-openshift.apps.*/oauth2callback/{{ masworld_keycloak_oidc_provider_name }}"
+                - "https://oauth.rosa-*.openshiftapps.com/oauth2callback/{{ masworld_keycloak_oidc_provider_name }}"
+                - "https://oauth.rosa-*.openshiftapps.com:443/oauth2callback/{{ masworld_keycloak_oidc_provider_name }}"
               webOrigins:
                 - "*"
           users: >-

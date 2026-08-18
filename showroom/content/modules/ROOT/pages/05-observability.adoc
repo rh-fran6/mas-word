@@ -341,7 +341,7 @@ oc get uiplugin logging
 
 . Create a log-generating workload in your namespace:
 +
-[source,role="execute"]
+[source,role="execute",subs="+attributes"]
 ----
 oc run log-test-{seat_number} \
   --image=registry.access.redhat.com/ubi9/ubi-minimal:9.4 \
@@ -352,14 +352,14 @@ oc run log-test-{seat_number} \
 +
 . Wait for the pod to complete:
 +
-[source,role="execute"]
+[source,role="execute",subs="+attributes"]
 ----
 oc wait pod/log-test-{seat_number} -n student-{seat_number} --for=condition=Ready --timeout=30s 2>/dev/null; sleep 25
 ----
 +
 . Verify the logs were generated:
 +
-[source,role="execute"]
+[source,role="execute",subs="+attributes"]
 ----
 oc logs log-test-{seat_number} -n student-{seat_number}
 ----
@@ -378,23 +378,23 @@ oc logs -n openshift-logging -l app.kubernetes.io/component=distributor --tail=5
 . Open the *OpenShift Console* tab on the right and navigate to *Observe > Logs* (if the COO UIPlugin is active).
 . Enter this LogQL query:
 +
-[source,text]
+[source,text,subs="+attributes"]
 ----
-{kubernetes_namespace_name="student-{seat_number}"} |= "MAS World log test"
+\{kubernetes_namespace_name="student-{seat_number}"} |= "MAS World log test"
 ----
 +
 . Try filtering by seat number:
 +
-[source,text]
+[source,text,subs="+attributes"]
 ----
-{kubernetes_namespace_name="student-{seat_number}"} | json | seat="{seat_number}"
+\{kubernetes_namespace_name="student-{seat_number}"} | json | seat="{seat_number}"
 ----
 
 == Step 10: Clean Up
 
 . Delete your test pod:
 +
-[source,role="execute"]
+[source,role="execute",subs="+attributes"]
 ----
 oc delete pod log-test-{seat_number} -n student-{seat_number}
 ----

@@ -72,7 +72,7 @@ The following are reference guidelines. Actual sizing depends on your workload.
 
 == Additional Resources
 
-* https://www.ibm.com/docs/en/mas-cd/maximo-manage/continuous-delivery[IBM Maximo Manage Documentation]
-* https://docs.openshift.com/container-platform/{ocp_version}/welcome/index.html[OpenShift {ocp_version} Documentation]
-* https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.16[RHACM 2.16 Documentation]
-* https://docs.openshift.com/container-platform/{ocp_version}/observability/logging/logging-6.6/log6x-about.html[OpenShift Logging 6.6 Documentation]
+* https://www.ibm.com/docs/en/mas-cd/maximo-manage/continuous-delivery[IBM Maximo Manage Documentation^]
+* https://docs.openshift.com/container-platform/{ocp_version}/welcome/index.html[OpenShift {ocp_version} Documentation^]
+* https://docs.redhat.com/en/documentation/red_hat_advanced_cluster_management_for_kubernetes/2.16[RHACM 2.16 Documentation^]
+* https://docs.openshift.com/container-platform/{ocp_version}/observability/logging/logging-6.6/log6x-about.html[OpenShift Logging 6.6 Documentation^]

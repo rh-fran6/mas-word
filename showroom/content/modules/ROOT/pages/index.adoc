@@ -60,13 +60,13 @@ You have a dedicated OpenShift {ocp_version} cluster with:
 | Resource | URL
 
 | OpenShift Console
-| {openshift_console_url}
+| {openshift_console_url}[Open Console^]
 
 | Maximo Suite Navigator
-| {mas_url}
+| {mas_url}[Open MAS^]
 
 | Maximo Manage
-| {manage_url}
+| {manage_url}[Open Manage^]
 |===
 
 == Workshop Exercises

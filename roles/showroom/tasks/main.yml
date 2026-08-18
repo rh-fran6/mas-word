@@ -39,6 +39,39 @@
         _masworld_cluster_domain: >-
           {{ _masworld_ingress_cr.resources[0].spec.domain | default('') }}
 
+    # ── Resolve MAS and Manage URLs ───────────────────────────────────
+    - name: Get MAS home route
+      kubernetes.core.k8s_info:
+        api_version: route.openshift.io/v1
+        kind: Route
+        namespace: "mas-{{ masworld_mas_instance_id }}-core"
+        name: "{{ masworld_mas_instance_id }}-{{ masworld_mas_workspace_id | default('masworld') }}-home"
+      register: _masworld_mas_home_route
+      failed_when: false
+
+    - name: Set MAS URL fact
+      ansible.builtin.set_fact:
+        _masworld_mas_url: >-
+          {{ 'https://' ~ _masworld_mas_home_route.resources[0].spec.host
+             if (_masworld_mas_home_route.resources | default([]) | length > 0)
+             else 'https://' ~ (masworld_mas_workspace_id | default('masworld')) ~ '.home.' ~ masworld_mas_instance_id ~ '.' ~ _masworld_cluster_domain }}
+
+    - name: Get Manage route
+      kubernetes.core.k8s_info:
+        api_version: route.openshift.io/v1
+        kind: Route
+        namespace: "mas-{{ masworld_mas_instance_id }}-manage"
+        name: "{{ masworld_mas_instance_id }}-manage-{{ masworld_mas_workspace_id | default('masworld') }}"
+      register: _masworld_manage_route
+      failed_when: false
+
+    - name: Set Manage URL fact
+      ansible.builtin.set_fact:
+        _masworld_manage_url: >-
+          {{ 'https://' ~ _masworld_manage_route.resources[0].spec.host
+             if (_masworld_manage_route.resources | default([]) | length > 0)
+             else 'https://' ~ (masworld_mas_workspace_id | default('masworld')) ~ '.manage.' ~ masworld_mas_instance_id ~ '.' ~ _masworld_cluster_domain }}
+
     # ── Gather Lab Credentials ─────────────────────────────────────────
     - name: Read S3 credentials ConfigMap
       kubernetes.core.k8s_info:
@@ -165,8 +198,9 @@
             user_data: |
               openshift_console_url: {{ _masworld_console_url }}
               openshift_cluster_ingress_domain: {{ _masworld_cluster_domain }}
-              mas_url: {{ mas_url | default('') }}
-              manage_url: {{ manage_url | default('') }}
+              openshift_api_url: {{ masworld_cluster_api_url | default('') }}
+              mas_url: {{ _masworld_mas_url }}
+              manage_url: {{ _masworld_manage_url }}
               seat_number: {{ masworld_seat_number }}
               user: {{ masworld_student_username }}
               student_username: {{ masworld_student_username }}
@@ -175,7 +209,7 @@
               s3_aws_access_key_id: {{ _masworld_s3_access_key | default('') }}
               s3_aws_secret_access_key: {{ _masworld_s3_secret_key | default('') }}
               s3_aws_region: {{ _masworld_s3_region | default('') }}
-              lab_username: {{ masworld_lab_username_prefix | default('lab-seat-') }}{{ masworld_seat_number }}
+              lab_username: {{ masworld_lab_username_prefix | default('lab-seat-') }}{{ '%02d' | format(masworld_seat_number | int) }}
               lab_password: {{ _masworld_lab_password | default('') }}
               s3_region: {{ _masworld_s3_region | default('') }}
               s3_access_key_id: {{ _masworld_s3_access_key | default('') }}

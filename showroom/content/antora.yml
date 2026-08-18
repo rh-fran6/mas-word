@@ -7,5 +7,18 @@ asciidoc:
     ocp_version: "4.21"
     mas_version: "9.1"
     manage_version: "9.1"
+    openshift_console_url: "https://console-openshift-console.apps.example.com"
+    openshift_cluster_ingress_domain: "apps.example.com"
+    openshift_api_url: "https://api.example.com:443"
+    mas_url: "https://admin.mas.apps.example.com"
+    manage_url: "https://manage.mas.apps.example.com"
+    lab_username: "userXX"
+    lab_password: "CHANGE_ME"  # pragma: allowlist secret
+    seat_number: "00"
+    student_username: "userXX"
+    s3_bucket_name: "CHANGE_ME"
+    s3_access_key_id: "CHANGE_ME"
+    s3_secret_access_key: "CHANGE_ME"  # pragma: allowlist secret
+    s3_region: "us-east-2"
 nav:
   - modules/ROOT/nav.adoc

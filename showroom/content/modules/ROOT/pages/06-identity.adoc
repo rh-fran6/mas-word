@@ -157,7 +157,7 @@ OpenLDAP -> Keycloak (User Federation) -> OpenShift OAuth (OIDC) -> MAS (identit
 To trigger the identity sync, log in to the OpenShift Console as one of the LDAP users via the Keycloak provider.
 
 . Open a new browser tab or incognito window.
-. Navigate to `{openshift_console_url}`.
+. Navigate to {openshift_console_url}[the OpenShift Console^].
 . Select *Keycloak* as the identity provider.
 . Log in with:
 +
@@ -173,7 +173,7 @@ oc get identities --no-headers | grep alice
 
 === Step 4: Verify User in Maximo
 
-. Navigate to MAS Suite Administration (`{mas_url}`).
+. Navigate to {mas_url}[MAS Suite Administration^].
 . Go to *Users* section.
 . Search for `alice.engineer`.
 . If MAS user sync is configured, the user should appear. If not, this demonstrates the manual step where an administrator would map the identity.
