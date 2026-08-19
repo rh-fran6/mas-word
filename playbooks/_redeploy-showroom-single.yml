@@ -80,6 +80,7 @@
             masworld_cluster_api_url: "{{ cluster.api_url }}"
             masworld_student_username: "user{{ '%02d' | format(cluster.seat_number | default(1) | int) }}"
             masworld_lab_username_prefix: "lab-seat-"
+            masworld_showroom_skip_stagger: true
       environment:
         KUBECONFIG: "{{ _redeploy_kubeconfig }}"
 

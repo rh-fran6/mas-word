@@ -263,6 +263,7 @@
       ansible.builtin.wait_for:
         timeout: "{{ (masworld_seat_number | default(0) | int) * 15 }}"
       changed_when: false
+      when: not (masworld_showroom_skip_stagger | default(false) | bool)
 
     - name: Write Showroom Helm values file
       ansible.builtin.copy:
