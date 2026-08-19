@@ -182,6 +182,82 @@
         _masworld_mas_admin_password: ""
       when: _masworld_mas_superuser_secret.resources | default([]) | length == 0
 
+    # ── Create embeddable routes (strip X-Frame-Options for iframe tabs) ─
+    - name: Get existing OpenShift Console route
+      kubernetes.core.k8s_info:
+        api_version: route.openshift.io/v1
+        kind: Route
+        name: console
+        namespace: openshift-console
+      register: _masworld_console_route
+      failed_when: false
+
+    - name: Create embeddable Console route
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: route.openshift.io/v1
+          kind: Route
+          metadata:
+            name: console-embed
+            namespace: openshift-console
+            labels:
+              masworld.redhat.com/component: showroom-embed
+          spec:
+            host: "console-embed.{{ _masworld_cluster_domain }}"
+            to:
+              kind: Service
+              name: console
+              weight: 100
+            port:
+              targetPort: https
+            tls:
+              termination: reencrypt
+              insecureEdgeTerminationPolicy: Redirect
+            httpHeaders:
+              actions:
+                response:
+                  - name: X-Frame-Options
+                    action:
+                      type: Delete
+                  - name: Content-Security-Policy
+                    action:
+                      type: Delete
+      when: _masworld_console_route.resources | default([]) | length > 0
+
+    - name: Create embeddable MAS admin route
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: route.openshift.io/v1
+          kind: Route
+          metadata:
+            name: "{{ masworld_mas_instance_id }}-admin-embed"
+            namespace: "mas-{{ masworld_mas_instance_id }}-core"
+            labels:
+              masworld.redhat.com/component: showroom-embed
+          spec:
+            host: "mas-admin-embed.{{ _masworld_cluster_domain }}"
+            to:
+              kind: Service
+              name: "{{ _masworld_mas_admin_route.resources[0].spec.to.name }}"
+              weight: 100
+            port:
+              targetPort: "{{ _masworld_mas_admin_route.resources[0].spec.port.targetPort }}"
+            tls:
+              termination: "{{ _masworld_mas_admin_route.resources[0].spec.tls.termination | default('reencrypt') }}"
+              insecureEdgeTerminationPolicy: Redirect
+            httpHeaders:
+              actions:
+                response:
+                  - name: X-Frame-Options
+                    action:
+                      type: Delete
+                  - name: Content-Security-Policy
+                    action:
+                      type: Delete
+      when: _masworld_mas_admin_route.resources | default([]) | length > 0
+
     # ── Deploy Showroom via local Helm chart ──────────────────────────────
     - name: Create chart copies directory
       ansible.builtin.file:

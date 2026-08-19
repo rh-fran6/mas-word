@@ -32,6 +32,116 @@
       ansible.builtin.set_fact:
         _cluster_token: ""
 
+- name: "{{ cluster.id }} — Get cluster ingress domain"
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: Ingress
+    name: cluster
+    host: "{{ cluster.api_url }}"
+    api_key: "{{ _cluster_token | default('') }}"
+    validate_certs: false
+  register: _ingress_cr
+  failed_when: false
+  when: _cluster_token | default('') | length > 0
+
+- name: "{{ cluster.id }} — Set cluster domain"
+  ansible.builtin.set_fact:
+    _cluster_domain: "{{ _ingress_cr.resources[0].spec.domain | default('') }}"
+  when:
+    - _cluster_token | default('') | length > 0
+    - _ingress_cr.resources | default([]) | length > 0
+
+- name: "{{ cluster.id }} — Create embeddable Console route"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: console-embed
+        namespace: openshift-console
+        labels:
+          masworld.redhat.com/component: showroom-embed
+      spec:
+        host: "console-embed.{{ _cluster_domain }}"
+        to:
+          kind: Service
+          name: console
+          weight: 100
+        port:
+          targetPort: https
+        tls:
+          termination: reencrypt
+          insecureEdgeTerminationPolicy: Redirect
+        httpHeaders:
+          actions:
+            response:
+              - name: X-Frame-Options
+                action:
+                  type: Delete
+              - name: Content-Security-Policy
+                action:
+                  type: Delete
+    host: "{{ cluster.api_url }}"
+    api_key: "{{ _cluster_token | default('') }}"
+    validate_certs: false
+  when:
+    - _cluster_token | default('') | length > 0
+    - _cluster_domain | default('') | length > 0
+  failed_when: false
+
+- name: "{{ cluster.id }} — Get MAS admin route"
+  kubernetes.core.k8s_info:
+    api_version: route.openshift.io/v1
+    kind: Route
+    name: inst1-admin
+    namespace: mas-inst1-core
+    host: "{{ cluster.api_url }}"
+    api_key: "{{ _cluster_token | default('') }}"
+    validate_certs: false
+  register: _mas_admin_route
+  failed_when: false
+  when: _cluster_token | default('') | length > 0
+
+- name: "{{ cluster.id }} — Create embeddable MAS admin route"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: route.openshift.io/v1
+      kind: Route
+      metadata:
+        name: inst1-admin-embed
+        namespace: mas-inst1-core
+        labels:
+          masworld.redhat.com/component: showroom-embed
+      spec:
+        host: "mas-admin-embed.{{ _cluster_domain }}"
+        to:
+          kind: Service
+          name: "{{ _mas_admin_route.resources[0].spec.to.name }}"
+          weight: 100
+        port:
+          targetPort: "{{ _mas_admin_route.resources[0].spec.port.targetPort }}"
+        tls:
+          termination: "{{ _mas_admin_route.resources[0].spec.tls.termination | default('reencrypt') }}"
+          insecureEdgeTerminationPolicy: Redirect
+        httpHeaders:
+          actions:
+            response:
+              - name: X-Frame-Options
+                action:
+                  type: Delete
+              - name: Content-Security-Policy
+                action:
+                  type: Delete
+    host: "{{ cluster.api_url }}"
+    api_key: "{{ _cluster_token | default('') }}"
+    validate_certs: false
+  when:
+    - _cluster_token | default('') | length > 0
+    - _mas_admin_route.resources | default([]) | length > 0
+  failed_when: false
+
 - name: "{{ cluster.id }} — Get Showroom pods"
   kubernetes.core.k8s_info:
     api_version: v1

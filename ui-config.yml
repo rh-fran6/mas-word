@@ -34,8 +34,6 @@ antora:
       solveButton: false
 tabs:
   - name: OpenShift Console
-    url: https://console-openshift-console.${DOMAIN}
-    external: true
+    url: https://console-embed.${DOMAIN}
   - name: Maximo
-    url: https://admin.inst1.${DOMAIN}
-    external: true
+    url: https://mas-admin-embed.${DOMAIN}
