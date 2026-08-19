@@ -32,8 +32,3 @@ antora:
     - name: 99-conclusion
       label: Conclusion
       solveButton: false
-tabs:
-  - name: OpenShift Console
-    url: https://console-embed.${DOMAIN}
-  - name: Maximo
-    url: https://mas-admin-embed.${DOMAIN}
