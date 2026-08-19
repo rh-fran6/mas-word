@@ -55,7 +55,7 @@ OpenShift can synchronize groups from an LDAP directory using the Group Sync Ope
 
 === Step 1: Install the Group Sync Operator
 
-. In the OpenShift Console, navigate to *Operators* > *OperatorHub*.
+. In the OpenShift Console, navigate to *Ecosystem* > *Software Catalog* and select the *Operators* type.
 . In the search field, type `Group Sync`.
 . Click the *Group Sync Operator* tile (provided by Red Hat).
 . Click *Install*.
@@ -78,8 +78,49 @@ OpenShift can synchronize groups from an LDAP directory using the Group Sync Ope
 | Automatic
 |===
 +
+. If the console displays a *Role ARN* field, paste the Operator Role ARN from the xref:index.adoc[Welcome page] information panel. The Install button will remain greyed out until a Role ARN is provided.
 . Click *Install*.
 . Wait for the status to show *Succeeded* on the Installed Operators page.
+
+[NOTE]
+====
+Alternatively, you can create the operator resources by navigating to the *Import YAML* view (click the *+* icon in the console header) and pasting the following YAML blocks one at a time:
+
+[source,yaml]
+----
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: group-sync-operator
+----
+
+[source,yaml]
+----
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: group-sync-operator
+  namespace: group-sync-operator
+spec:
+  targetNamespaces:
+    - group-sync-operator
+----
+
+[source,yaml]
+----
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: group-sync-operator
+  namespace: group-sync-operator
+spec:
+  channel: alpha
+  name: group-sync-operator
+  source: community-operators
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Automatic
+----
+====
 
 === Step 2: Create the LDAP Bind Password Secret
 
@@ -100,6 +141,23 @@ Before creating the GroupSync configuration, you need to provide the LDAP bind p
 |===
 +
 . Click *Create*.
+
+[TIP]
+====
+You can also create this secret using the *Import YAML* view (click the *+* icon in the console header). First, look up the LDAP bind password from the `openldap-admin-secret` in the `masworld-keycloak` namespace (*Workloads > Secrets > openldap-admin-secret*), then paste:
+
+[source,yaml]
+----
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ldap-bind-password
+  namespace: group-sync-operator
+type: Opaque
+stringData:
+  password: "<paste the LDAP bind password here>"
+----
+====
 
 === Step 3: Create the GroupSync Configuration
 
@@ -201,7 +259,7 @@ You have completed this section when:
 * You accessed the Keycloak admin console via *Networking > Routes* in the `masworld-keycloak` namespace
 * You found the LDAP user federation (`ldap-masworld`) in Keycloak and synced users successfully
 * You viewed all 4 demo users (alice.engineer, bob.technician, carol.planner, dave.supervisor) in the Keycloak Users list
-* You installed the Group Sync Operator from OperatorHub
+* You installed the Group Sync Operator from the Software Catalog
 * You created a GroupSync CR that connects to the workshop OpenLDAP
 * You verified that `mas-admins` and `mas-users` groups were created in *User Management > Groups*
 * You understand the full identity chain: LDAP -> Keycloak -> OpenShift OAuth -> MAS

@@ -1,0 +1,68 @@
+---
+# Create IAM roles for STS operator installation across the fleet.
+#
+# On ROSA HCP with STS, the console requires a Role ARN to install operators.
+# This playbook creates a minimal IAM role per cluster (no permissions attached)
+# and stores the ARN in a ConfigMap so Showroom can display it to attendees.
+#
+# Usage:
+#   make prepare-operator-roles
+#   make prepare-operator-roles FORCE_RECREATE_ROLES=true   # recreate existing roles
+#
+- name: Create operator IAM roles across the fleet
+  hosts: localhost
+  gather_facts: false
+  vars:
+    masworld_showroom_namespace: showroom
+    masworld_force_recreate_roles: "{{ lookup('ansible.builtin.env', 'FORCE_RECREATE_ROLES', default='false') | bool }}"
+
+  tasks:
+    - name: Load cluster credentials
+      ansible.builtin.include_vars:
+        file: "../secrets/cluster-credentials.yml"
+      no_log: true
+
+    - name: Build cluster list
+      ansible.builtin.set_fact:
+        _all_clusters: "{{ cluster_credentials | to_cluster_list }}"
+      no_log: true
+
+    - name: Filter to non-hub clusters with API URL and AWS credentials
+      ansible.builtin.set_fact:
+        _target_clusters: >-
+          {{ _all_clusters
+             | rejectattr('purpose', 'equalto', 'hub')
+             | selectattr('api_url', 'defined')
+             | selectattr('aws_access_key_id', 'defined')
+             | list }}
+      no_log: true
+
+    - name: Display provisioning plan
+      ansible.builtin.debug:
+        msg: >-
+          Creating operator IAM roles for {{ _target_clusters | length }} clusters
+          (force_recreate={{ masworld_force_recreate_roles }}).
+
+    - name: Create operator role per cluster
+      ansible.builtin.include_tasks: _prepare-operator-roles-single.yml
+      loop: "{{ _target_clusters }}"
+      loop_control:
+        loop_var: cluster
+        label: "{{ cluster.id }}"
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: |
+          ══════════════════════════════════════════════════
+          Operator IAM Roles — Provisioning Complete
+          ══════════════════════════════════════════════════
+          Processed {{ _target_clusters | length }} clusters.
+          Role ARNs stored in ConfigMap 'masworld-operator-role-arn'
+          in the 'showroom' namespace on each cluster.
+
+          Next steps:
+            1. Run 'make redeploy-showroom' to update Showroom
+               with the new operator_role_arn attribute.
+            2. Attendees will see the Role ARN in the
+               information panel on the Welcome page.
+          ══════════════════════════════════════════════════

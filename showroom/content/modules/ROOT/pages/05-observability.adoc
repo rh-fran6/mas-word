@@ -41,9 +41,14 @@ You will build the following stack:
 | Object storage for Loki log data (pre-created for you)
 |===
 
+[NOTE]
+====
+This cluster uses AWS Security Token Service (STS). When installing operators, the console will display a *Role ARN* field and the Install button will be greyed out until you provide one. Copy the *Operator Role ARN* from the information panel on the xref:index.adoc[Welcome page] and paste it into the Role ARN field for each operator installation below.
+====
+
 == Step 1: Install the OpenShift Logging Operator
 
-. In the OpenShift web console, navigate to *Operators > OperatorHub*.
+. In the OpenShift web console, navigate to *Ecosystem > Software Catalog* and select the *Operators* type.
 . In the search field, type `Red Hat OpenShift Logging`.
 . Click the *Red Hat OpenShift Logging* tile.
 . Click *Install*.
@@ -66,12 +71,13 @@ You will build the following stack:
 | Automatic
 |===
 +
+. If the console displays a *Role ARN* field, paste the Operator Role ARN from the xref:index.adoc[Welcome page] information panel. The Install button will remain greyed out until a Role ARN is provided.
 . Click *Install*.
 . Wait for the status to show *Succeeded* on the Installed Operators page. This may take 1-2 minutes.
 
 == Step 2: Install the Loki Operator
 
-. Navigate to *Operators > OperatorHub*.
+. Navigate to *Ecosystem > Software Catalog* and select the *Operators* type.
 . In the search field, type `Loki Operator`.
 . Click the *Loki Operator* tile (the one provided by Red Hat).
 . Click *Install*.
@@ -94,6 +100,7 @@ You will build the following stack:
 | Automatic
 |===
 +
+. If the console displays a *Role ARN* field, paste the Operator Role ARN from the xref:index.adoc[Welcome page] information panel.
 . Click *Install*.
 . Wait for the status to show *Succeeded*.
 . Navigate to *Operators > Installed Operators* and select the *openshift-logging* project from the namespace dropdown. Confirm that both *Red Hat OpenShift Logging* and *Loki Operator* show a status of *Succeeded*.
@@ -102,7 +109,7 @@ You will build the following stack:
 
 The Cluster Observability Operator (COO) enables integrated log viewing directly in the OpenShift Console.
 
-. Navigate to *Operators > OperatorHub*.
+. Navigate to *Ecosystem > Software Catalog* and select the *Operators* type.
 . In the search field, type `Cluster Observability Operator`.
 . Click the *Cluster Observability Operator* tile.
 . Click *Install*.
@@ -125,6 +132,7 @@ The Cluster Observability Operator (COO) enables integrated log viewing directly
 | Automatic
 |===
 +
+. If the console displays a *Role ARN* field, paste the Operator Role ARN from the xref:index.adoc[Welcome page] information panel.
 . Click *Install*.
 . Wait for the status to show *Succeeded*.
 

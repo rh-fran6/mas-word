@@ -26,3 +26,6 @@ rules:
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: [roles, rolebindings]
     verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["redhatcop.redhat.io"]
+    resources: [groupsyncs]
+    verbs: [get, list, watch, create, update, patch, delete]

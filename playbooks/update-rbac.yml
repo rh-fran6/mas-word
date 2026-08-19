@@ -1,0 +1,52 @@
+---
+- name: Update RBAC policies across the fleet
+  hosts: localhost
+  gather_facts: false
+  vars:
+    masworld_lab_clusterrole_name: masworld-lab-operator
+    masworld_lab_username_prefix: "lab-seat-"
+    masworld_mas_instance_id: inst1
+    masworld_keycloak_namespace: masworld-keycloak
+
+  tasks:
+    - name: Load cluster credentials
+      ansible.builtin.include_vars:
+        file: "../secrets/cluster-credentials.yml"
+      no_log: true
+
+    - name: Build cluster list
+      ansible.builtin.set_fact:
+        _all_clusters: "{{ cluster_credentials | to_cluster_list }}"
+      no_log: true
+
+    - name: Filter to attendee clusters (non-hub, with API URL)
+      ansible.builtin.set_fact:
+        _target_clusters: >-
+          {{ _all_clusters
+             | rejectattr('purpose', 'equalto', 'hub')
+             | selectattr('api_url', 'defined')
+             | list }}
+      no_log: true
+
+    - name: Display update plan
+      ansible.builtin.debug:
+        msg: >-
+          Updating RBAC on {{ _target_clusters | length }} clusters.
+
+    - name: Update RBAC per cluster
+      ansible.builtin.include_tasks: _update-rbac-single.yml
+      loop: "{{ _target_clusters }}"
+      loop_control:
+        loop_var: cluster
+        label: "{{ cluster.id }}"
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: |
+          ══════════════════════════════════════════════════
+          RBAC Update Complete
+          ══════════════════════════════════════════════════
+          Processed {{ _target_clusters | length }} clusters.
+          Updated ClusterRoles, ClusterRoleBindings, and
+          namespace RoleBindings for lab and student users.
+          ══════════════════════════════════════════════════

@@ -1,0 +1,49 @@
+---
+- name: Redeploy Showroom across the fleet
+  hosts: localhost
+  gather_facts: false
+  vars:
+    masworld_showroom_namespace: showroom
+
+  tasks:
+    - name: Load cluster credentials
+      ansible.builtin.include_vars:
+        file: "../secrets/cluster-credentials.yml"
+      no_log: true
+
+    - name: Build cluster list
+      ansible.builtin.set_fact:
+        _all_clusters: "{{ cluster_credentials | to_cluster_list }}"
+      no_log: true
+
+    - name: Filter to clusters with Showroom (non-hub, enabled)
+      ansible.builtin.set_fact:
+        _showroom_clusters: >-
+          {{ _all_clusters
+             | rejectattr('purpose', 'equalto', 'hub')
+             | selectattr('api_url', 'defined')
+             | list }}
+      no_log: true
+
+    - name: Display redeploy plan
+      ansible.builtin.debug:
+        msg: >-
+          Redeploying Showroom on {{ _showroom_clusters | length }} clusters.
+
+    - name: Redeploy Showroom per cluster
+      ansible.builtin.include_tasks: _redeploy-showroom-single.yml
+      loop: "{{ _showroom_clusters }}"
+      loop_control:
+        loop_var: cluster
+        label: "{{ cluster.id }}"
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: |
+          ══════════════════════════════════════════════════
+          Showroom Redeploy Complete
+          ══════════════════════════════════════════════════
+          Processed {{ _showroom_clusters | length }} clusters.
+          Each cluster got a fresh Helm upgrade with
+          corrected user_data attributes.
+          ══════════════════════════════════════════════════

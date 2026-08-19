@@ -311,10 +311,19 @@ teardown: ## [e2e] Full teardown: decommission -> destroy clusters -> destroy in
 # Maintenance
 # ═══════════════════════════════════════════════════════════════════════
 
-.PHONY: cleanup-community-keycloak lab-reset lab-reset-fleet restart-showroom
+.PHONY: cleanup-community-keycloak lab-reset lab-reset-fleet restart-showroom redeploy-showroom update-rbac prepare-operator-roles
 
 restart-showroom: ## [maintenance] Restart Showroom pods across fleet to pick up content changes
 	$(ANSIBLE_PLAYBOOK) $(PLAYBOOK_DIR)/restart-showroom.yml $(VAULT_ARGS)
+
+redeploy-showroom: ## [maintenance] Redeploy Showroom (Helm upgrade) across fleet — fixes user_data attributes
+	$(ANSIBLE_PLAYBOOK) $(PLAYBOOK_DIR)/redeploy-showroom.yml $(VAULT_ARGS)
+
+update-rbac: ## [maintenance] Update RBAC policies (ClusterRoles + bindings) across all clusters
+	$(ANSIBLE_PLAYBOOK) $(PLAYBOOK_DIR)/update-rbac.yml $(VAULT_ARGS)
+
+prepare-operator-roles: ## [maintenance] Create IAM roles for STS operator installation and store ARNs for Showroom
+	$(ANSIBLE_PLAYBOOK) $(PLAYBOOK_DIR)/prepare-operator-roles.yml $(VAULT_ARGS)
 
 cleanup-community-keycloak: ## [maintenance] Remove all community Keycloak from fleet (one-time, run before RHBK deploy)
 	$(ANSIBLE_PLAYBOOK) $(PLAYBOOK_DIR)/cleanup-community-keycloak.yml $(VAULT_ARGS)
@@ -341,7 +350,10 @@ lab-reset-fleet: ## [maintenance] Reset lab for all seats (SEAT_START, SEAT_END 
 # Quality
 # ═══════════════════════════════════════════════════════════════════════
 
-.PHONY: lint test test-cov lab-test lab-test-fleet lab-test-ansible encrypt-secrets decrypt-secrets clean validate-roles
+.PHONY: lint test test-cov lab-test lab-test-fleet lab-test-ansible encrypt-secrets decrypt-secrets clean validate-roles check-operatorhub
+
+check-operatorhub: ## [quality] Check OperatorHub health and available operators across fleet
+	$(ANSIBLE_PLAYBOOK) $(PLAYBOOK_DIR)/check-operatorhub.yml $(VAULT_ARGS)
 
 validate-roles: ## [quality] Verify all include_role/import_role references resolve to installed roles
 	@echo "Validating role references..."

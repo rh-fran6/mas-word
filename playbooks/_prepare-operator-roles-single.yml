@@ -1,0 +1,179 @@
+---
+# Per-cluster operator IAM role creation (included by prepare-operator-roles.yml)
+#
+# On ROSA HCP with STS, the console requires a role ARN to install operators.
+# This creates a minimal IAM role per cluster and stores the ARN in a ConfigMap
+# so the Showroom info panel can display it for attendees.
+
+- name: "{{ cluster.id }} — Obtain API token"
+  block:
+    - name: "{{ cluster.id }} — Discover OAuth endpoint"
+      ansible.builtin.uri:
+        url: "{{ cluster.api_url }}/.well-known/oauth-authorization-server"
+        validate_certs: false
+        return_content: true
+      register: _oauth_metadata
+
+    - name: "{{ cluster.id }} — Request OAuth token"
+      ansible.builtin.uri:
+        url: "{{ _oauth_metadata.json.authorization_endpoint }}?response_type=token&client_id=openshift-challenging-client"
+        validate_certs: false
+        force_basic_auth: true
+        url_username: cluster-admin
+        url_password: "{{ cluster.admin_password | default('cluster-admin') }}"
+        status_code: [302]
+        follow_redirects: none
+      register: _oauth_response
+      no_log: true
+
+    - name: "{{ cluster.id }} — Extract bearer token"
+      ansible.builtin.set_fact:
+        _cluster_token: "{{ _oauth_response.location | regex_search('access_token=([^&]+)', '\\1') | first }}"
+      when:
+        - _oauth_response.location is defined
+        - "'access_token=' in _oauth_response.location"
+      no_log: true
+  rescue:
+    - name: "{{ cluster.id }} — Auth failed"
+      ansible.builtin.set_fact:
+        _cluster_token: ""
+
+- name: "{{ cluster.id }} — Skip if no token"
+  when: _cluster_token | default('') | length == 0
+  ansible.builtin.debug:
+    msg: "{{ cluster.id }}: SKIPPED — could not obtain API token"
+
+- name: "{{ cluster.id }} — Create operator IAM role and store ARN"
+  when: _cluster_token | default('') | length > 0
+  block:
+    # ── Check if role ARN ConfigMap already exists ────────────────────
+    - name: "{{ cluster.id }} — Check for existing role ARN ConfigMap"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        name: masworld-operator-role-arn
+        namespace: "{{ masworld_showroom_namespace }}"
+        host: "{{ cluster.api_url }}"
+        api_key: "{{ _cluster_token }}"
+        validate_certs: false
+      register: _existing_role_cm
+      failed_when: false
+
+    - name: "{{ cluster.id }} — Skip if role ARN already provisioned"
+      ansible.builtin.debug:
+        msg: >-
+          {{ cluster.id }}: Role ARN already exists —
+          {{ _existing_role_cm.resources[0].data.role_arn }}
+      when:
+        - _existing_role_cm.resources | default([]) | length > 0
+        - _existing_role_cm.resources[0].data.role_arn | default('') | length > 0
+        - not (masworld_force_recreate_roles | default(false) | bool)
+
+    - name: "{{ cluster.id }} — Provision IAM role"
+      when: >-
+        (_existing_role_cm.resources | default([]) | length == 0)
+        or (_existing_role_cm.resources[0].data.role_arn | default('') | length == 0)
+        or (masworld_force_recreate_roles | default(false) | bool)
+      block:
+        # ── Get OIDC issuer URL from the cluster ───────────────────────
+        - name: "{{ cluster.id }} — Get Authentication CR"
+          kubernetes.core.k8s_info:
+            api_version: config.openshift.io/v1
+            kind: Authentication
+            name: cluster
+            host: "{{ cluster.api_url }}"
+            api_key: "{{ _cluster_token }}"
+            validate_certs: false
+          register: _auth_cr
+
+        - name: "{{ cluster.id }} — Extract OIDC issuer URL"
+          ansible.builtin.set_fact:
+            _oidc_issuer_url: "{{ _auth_cr.resources[0].spec.serviceAccountIssuer | default('') }}"
+
+        - name: "{{ cluster.id }} — Fail if no OIDC issuer"
+          ansible.builtin.fail:
+            msg: "{{ cluster.id }}: Could not determine OIDC issuer URL from Authentication CR"
+          when: _oidc_issuer_url | length == 0
+
+        - name: "{{ cluster.id }} — Derive OIDC provider name"
+          ansible.builtin.set_fact:
+            _oidc_provider: "{{ _oidc_issuer_url | regex_replace('^https://', '') }}"
+
+        # ── Get AWS account ID ─────────────────────────────────────────
+        - name: "{{ cluster.id }} — Get AWS caller identity"
+          amazon.aws.aws_caller_info:
+            access_key: "{{ cluster.aws_access_key_id }}"
+            secret_key: "{{ cluster.aws_secret_access_key }}"
+            region: "{{ cluster.aws_region | default('us-east-2') }}"
+          register: _aws_identity
+          no_log: true
+
+        - name: "{{ cluster.id }} — Set AWS account ID"
+          ansible.builtin.set_fact:
+            _aws_account_id: "{{ _aws_identity.account }}"
+
+        # ── Create IAM role ────────────────────────────────────────────
+        - name: "{{ cluster.id }} — Build trust policy"
+          ansible.builtin.set_fact:
+            _trust_policy:
+              Version: "2012-10-17"
+              Statement:
+                - Effect: Allow
+                  Principal:
+                    Federated: "arn:aws:iam::{{ _aws_account_id }}:oidc-provider/{{ _oidc_provider }}"
+                  Action: "sts:AssumeRoleWithWebIdentity"
+
+        - name: "{{ cluster.id }} — Create operator IAM role"
+          amazon.aws.iam_role:
+            name: "masworld-operator-{{ cluster.id }}"
+            assume_role_policy_document: "{{ _trust_policy | to_json }}"
+            description: "MAS World workshop - operator installation role for {{ cluster.id }}"
+            state: present
+            access_key: "{{ cluster.aws_access_key_id }}"
+            secret_key: "{{ cluster.aws_secret_access_key }}"
+            region: "{{ cluster.aws_region | default('us-east-2') }}"
+          register: _iam_role
+          no_log: true
+
+        - name: "{{ cluster.id }} — Set role ARN fact"
+          ansible.builtin.set_fact:
+            _operator_role_arn: "{{ _iam_role.iam_role.arn }}"
+
+        # ── Store role ARN in ConfigMap on the cluster ─────────────────
+        - name: "{{ cluster.id }} — Ensure showroom namespace exists"
+          kubernetes.core.k8s:
+            state: present
+            host: "{{ cluster.api_url }}"
+            api_key: "{{ _cluster_token }}"
+            validate_certs: false
+            definition:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: "{{ masworld_showroom_namespace }}"
+          failed_when: false
+
+        - name: "{{ cluster.id }} — Store operator role ARN in ConfigMap"
+          kubernetes.core.k8s:
+            state: present
+            host: "{{ cluster.api_url }}"
+            api_key: "{{ _cluster_token }}"
+            validate_certs: false
+            definition:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: masworld-operator-role-arn
+                namespace: "{{ masworld_showroom_namespace }}"
+                labels:
+                  masworld.redhat.com/component: operator-roles
+              data:
+                role_arn: "{{ _operator_role_arn }}"
+
+        - name: "{{ cluster.id }} — Report success"
+          ansible.builtin.debug:
+            msg: "{{ cluster.id }}: Operator IAM role created — {{ _operator_role_arn }}"
+
+- name: "{{ cluster.id }} — Clear token"
+  ansible.builtin.set_fact:
+    _cluster_token: ""

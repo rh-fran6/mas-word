@@ -1,0 +1,107 @@
+---
+# Per-cluster Showroom redeploy (included by redeploy-showroom.yml)
+- name: "{{ cluster.id }} — Obtain API token"
+  block:
+    - name: "{{ cluster.id }} — Discover OAuth endpoint"
+      ansible.builtin.uri:
+        url: "{{ cluster.api_url }}/.well-known/oauth-authorization-server"
+        validate_certs: false
+        return_content: true
+      register: _oauth_metadata
+
+    - name: "{{ cluster.id }} — Request OAuth token"
+      ansible.builtin.uri:
+        url: "{{ _oauth_metadata.json.authorization_endpoint }}?response_type=token&client_id=openshift-challenging-client"
+        validate_certs: false
+        force_basic_auth: true
+        url_username: cluster-admin
+        url_password: "{{ cluster.admin_password | default('cluster-admin') }}"
+        status_code: [302]
+        follow_redirects: none
+      register: _oauth_response
+      no_log: true
+
+    - name: "{{ cluster.id }} — Extract bearer token"
+      ansible.builtin.set_fact:
+        _cluster_token: "{{ _oauth_response.location | regex_search('access_token=([^&]+)', '\\1') | first }}"
+      when:
+        - _oauth_response.location is defined
+        - "'access_token=' in _oauth_response.location"
+      no_log: true
+  rescue:
+    - name: "{{ cluster.id }} — Auth failed"
+      ansible.builtin.set_fact:
+        _cluster_token: ""
+
+- name: "{{ cluster.id }} — Skip if no token"
+  ansible.builtin.debug:
+    msg: "{{ cluster.id }}: SKIPPED — could not obtain API token"
+  when: _cluster_token | default('') | length == 0
+
+- name: "{{ cluster.id }} — Redeploy Showroom"
+  when: _cluster_token | default('') | length > 0
+  block:
+    - name: "{{ cluster.id }} — Write temporary kubeconfig"
+      ansible.builtin.copy:
+        content: |
+          apiVersion: v1
+          kind: Config
+          clusters:
+            - cluster:
+                server: {{ cluster.api_url }}
+                insecure-skip-tls-verify: true
+              name: cluster
+          contexts:
+            - context:
+                cluster: cluster
+                user: admin
+              name: admin
+          current-context: admin
+          users:
+            - name: admin
+              user:
+                token: {{ _cluster_token }}
+        dest: "/tmp/kubeconfig-{{ cluster.id }}"
+        mode: "0600"
+      no_log: true
+
+    - name: "{{ cluster.id }} — Set KUBECONFIG for showroom role"
+      ansible.builtin.set_fact:
+        _redeploy_kubeconfig: "/tmp/kubeconfig-{{ cluster.id }}"
+
+    - name: "{{ cluster.id }} — Run showroom role"
+      block:
+        - name: "{{ cluster.id }} — Include showroom role"
+          ansible.builtin.include_role:
+            name: showroom
+          vars:
+            masworld_seat_number: "{{ cluster.seat_number | default(1) }}"
+            masworld_cluster_id: "{{ cluster.id }}"
+            masworld_cluster_api_url: "{{ cluster.api_url }}"
+            masworld_student_username: "user{{ '%02d' | format(cluster.seat_number | default(1) | int) }}"
+            masworld_lab_username_prefix: "lab-seat-"
+      environment:
+        KUBECONFIG: "{{ _redeploy_kubeconfig }}"
+
+    - name: "{{ cluster.id }} — Report success"
+      ansible.builtin.debug:
+        msg: >-
+          {{ cluster.id }}: Showroom redeployed (seat {{ cluster.seat_number | default('?') }},
+          URL: {{ showroom_url | default('unknown') }})
+
+  rescue:
+    - name: "{{ cluster.id }} — Report failure"
+      ansible.builtin.debug:
+        msg: >-
+          {{ cluster.id }}: Showroom redeploy FAILED —
+          {{ ansible_failed_result.msg | default('unknown error') }}
+
+  always:
+    - name: "{{ cluster.id }} — Remove temporary kubeconfig"
+      ansible.builtin.file:
+        path: "/tmp/kubeconfig-{{ cluster.id }}"
+        state: absent
+
+- name: "{{ cluster.id }} — Clear token"
+  ansible.builtin.set_fact:
+    _cluster_token: ""

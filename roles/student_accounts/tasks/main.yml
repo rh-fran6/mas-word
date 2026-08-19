@@ -279,6 +279,54 @@
               kind: User
               name: "{{ _masworld_student_username }}"
 
+    # ── Exercise RBAC: match lab user permissions ─────────────────────
+    - name: Create ClusterRoleBinding for lab operator ClusterRole
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: "{{ _masworld_student_username }}-{{ masworld_lab_clusterrole_name | default('masworld-lab-operator') }}"
+            labels:
+              masworld.redhat.com/component: student-accounts
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: "{{ masworld_lab_clusterrole_name | default('masworld-lab-operator') }}"
+          subjects:
+            - apiGroup: rbac.authorization.k8s.io
+              kind: User
+              name: "{{ _masworld_student_username }}"
+
+    - name: Create RoleBindings for student in operator namespaces
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          metadata:
+            name: "{{ _masworld_student_username }}-ns-admin"
+            namespace: "{{ item }}"
+            labels:
+              masworld.redhat.com/component: student-accounts
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: "{{ masworld_lab_clusterrole_name | default('masworld-lab-operator') }}-ns-admin"
+          subjects:
+            - apiGroup: rbac.authorization.k8s.io
+              kind: User
+              name: "{{ _masworld_student_username }}"
+      loop:
+        - openshift-logging
+        - openshift-operators
+        - openshift-operators-redhat
+        - group-sync-operator
+        - "mas-{{ masworld_mas_instance_id | default('inst1') }}-manage"
+        - "{{ masworld_keycloak_namespace | default('masworld-keycloak') }}"
+      failed_when: false
+
     # ── Validate Namespace Isolation ────────────────────────────────────
     - name: Verify student cannot access other namespaces (validation)
       kubernetes.core.k8s_info:

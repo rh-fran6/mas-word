@@ -34,6 +34,18 @@ You will need these when deploying the LokiStack in the Operator Installation ex
 
 [NOTE]
 ====
+*Operator Role ARN (for STS operator installation)*
+
+[cols="1,2"]
+|===
+| Role ARN | `{operator_role_arn}` pass:[<button onclick="navigator.clipboard.writeText(this.closest('td').querySelector('code').textContent).then(function(){var b=this;b.textContent='✓';setTimeout(function(){b.textContent='⧉'},1500)}.bind(this))" style="cursor:pointer;border:none;background:none;font-size:14px;vertical-align:middle;padding:0 0 0 4px;color:#0066cc" title="Copy to clipboard">⧉</button>]
+|===
+
+This cluster uses AWS STS. When installing operators, the console asks for a *Role ARN*. Copy the value above and paste it into the Role ARN field during operator installation.
+====
+
+[NOTE]
+====
 *MAS Admin Credentials*
 
 [cols="1,2"]

@@ -102,7 +102,7 @@ If you encounter problems installing operators in the Operator Installation exer
 . Check if the operator status shows *UpgradePending* or *Installing*.
 . Click on the operator name, then select the *InstallPlan* tab.
 . If an install plan is not approved, click on it and approve it manually.
-. If the operator remains stuck, try uninstalling it and reinstalling from OperatorHub.
+. If the operator remains stuck, try uninstalling it and reinstalling from *Ecosystem > Software Catalog*.
 
 === Operator Not Reaching "Succeeded"
 

@@ -11,7 +11,10 @@ rules:
     resources: [nodes, namespaces, persistentvolumes]
     verbs: [get, list, watch]
   - apiGroups: ["config.openshift.io"]
-    resources: [clusterversions, infrastructures, oauths, ingresses]
+    resources: [clusterversions, clusteroperators, infrastructures, oauths, ingresses, operatorhubs, authentications]
+    verbs: [get, list, watch]
+  - apiGroups: ["operator.openshift.io"]
+    resources: [cloudcredentials]
     verbs: [get, list, watch]
   - apiGroups: ["machineconfiguration.openshift.io"]
     resources: [machineconfigpools]
@@ -25,12 +28,16 @@ rules:
     resources: ["*"]
     verbs: [get, list, watch]
 
-  # Read operators cluster-wide (navigation exercise)
+  # OLM read cluster-wide (navigation exercise)
   - apiGroups: ["operators.coreos.com"]
-    resources: [subscriptions, clusterserviceversions, installplans, operatorgroups]
+    resources: [subscriptions, clusterserviceversions, installplans, operatorgroups, catalogsources, operators, olmconfigs, operatorconditions]
     verbs: [get, list, watch]
+  # OLM write cluster-wide (console checks cluster-scoped create subscriptions to show Software Catalog)
+  - apiGroups: ["operators.coreos.com"]
+    resources: [subscriptions, operatorgroups]
+    verbs: [create, update, patch, delete]
   - apiGroups: ["packages.operators.coreos.com"]
-    resources: [packagemanifests]
+    resources: [packagemanifests, packagemanifests/icon]
     verbs: [get, list, watch]
 
   # Read pods, services, events cluster-wide
@@ -56,6 +63,42 @@ rules:
   - apiGroups: ["observability.openshift.io"]
     resources: [uiplugins]
     verbs: [get, list, watch, create, update, patch, delete]
+
+  # Namespace creation (identity exercise — group-sync-operator)
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [create, update, patch]
+
+  # Pod management (observability exercise — Manage pod delete for persistent logging)
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [delete]
+
+  # ServiceAccount management (observability exercise — collector SA)
+  - apiGroups: [""]
+    resources: [serviceaccounts]
+    verbs: [create, update, patch, delete]
+
+  # ClusterRoleBinding management (observability exercise — collector SA bindings)
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: [clusterrolebindings]
+    verbs: [create, update, patch, delete]
+
+  # Group Sync Operator CRD (identity exercise)
+  - apiGroups: ["redhatcop.redhat.io"]
+    resources: [groupsyncs]
+    verbs: [get, list, watch, create, update, patch, delete]
+
+  # Software Catalog (OCP 4.17+ unified Ecosystem > Software Catalog page)
+  - apiGroups: ["template.openshift.io"]
+    resources: [templates, templateinstances, brokertemplateinstances]
+    verbs: [get, list, watch]
+  - apiGroups: ["helm.openshift.io"]
+    resources: [helmchartrepositories, projecthelmchartrepositories]
+    verbs: [get, list, watch]
+  - apiGroups: ["console.openshift.io"]
+    resources: [consolequickstarts, consolesamples, consoleplugins]
+    verbs: [get, list, watch]
 
   # Self-access for auth checks
   - apiGroups: ["authorization.openshift.io"]

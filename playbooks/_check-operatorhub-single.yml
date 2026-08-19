@@ -1,0 +1,129 @@
+---
+- name: "{{ cluster.id }} — Obtain API token"
+  block:
+    - name: "{{ cluster.id }} — Discover OAuth endpoint"
+      ansible.builtin.uri:
+        url: "{{ cluster.api_url }}/.well-known/oauth-authorization-server"
+        validate_certs: false
+        return_content: true
+      register: _oauth_metadata
+
+    - name: "{{ cluster.id }} — Request OAuth token"
+      ansible.builtin.uri:
+        url: "{{ _oauth_metadata.json.authorization_endpoint }}?response_type=token&client_id=openshift-challenging-client"
+        validate_certs: false
+        force_basic_auth: true
+        url_username: cluster-admin
+        url_password: "{{ cluster.admin_password | default('cluster-admin') }}"
+        status_code: [302]
+        follow_redirects: none
+      register: _oauth_response
+      no_log: true
+
+    - name: "{{ cluster.id }} — Extract bearer token"
+      ansible.builtin.set_fact:
+        _cluster_token: "{{ _oauth_response.location | regex_search('access_token=([^&]+)', '\\1') | first }}"
+      when:
+        - _oauth_response.location is defined
+        - "'access_token=' in _oauth_response.location"
+      no_log: true
+  rescue:
+    - name: "{{ cluster.id }} — Auth failed"
+      ansible.builtin.set_fact:
+        _cluster_token: ""
+
+- name: "{{ cluster.id }} — Check OperatorHub"
+  when: _cluster_token | default('') | length > 0
+  block:
+    # Check OperatorHub config for disabled sources
+    - name: "{{ cluster.id }} — Get OperatorHub config"
+      kubernetes.core.k8s_info:
+        api_version: config.openshift.io/v1
+        kind: OperatorHub
+        name: cluster
+        host: "{{ cluster.api_url }}"
+        api_key: "{{ _cluster_token }}"
+        validate_certs: false
+      register: _operatorhub_config
+      failed_when: false
+
+    - name: "{{ cluster.id }} — Check for disabled sources"
+      ansible.builtin.set_fact:
+        _disabled_sources: >-
+          {{ (_operatorhub_config.resources[0].spec.sources | default([]))
+             | selectattr('disabled', 'defined')
+             | selectattr('disabled', 'equalto', true)
+             | map(attribute='name')
+             | list }}
+      when: _operatorhub_config.resources | default([]) | length > 0
+
+    # Check CatalogSources
+    - name: "{{ cluster.id }} — Get CatalogSources"
+      kubernetes.core.k8s_info:
+        api_version: operators.coreos.com/v1alpha1
+        kind: CatalogSource
+        namespace: openshift-marketplace
+        host: "{{ cluster.api_url }}"
+        api_key: "{{ _cluster_token }}"
+        validate_certs: false
+      register: _catalog_sources
+      failed_when: false
+
+    - name: "{{ cluster.id }} — Get marketplace pods"
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: openshift-marketplace
+        host: "{{ cluster.api_url }}"
+        api_key: "{{ _cluster_token }}"
+        validate_certs: false
+      register: _marketplace_pods
+      failed_when: false
+
+    # Check PackageManifests count (this is what OperatorHub shows)
+    - name: "{{ cluster.id }} — Count available PackageManifests"
+      kubernetes.core.k8s_info:
+        api_version: packages.operators.coreos.com/v1
+        kind: PackageManifest
+        namespace: openshift-marketplace
+        host: "{{ cluster.api_url }}"
+        api_key: "{{ _cluster_token }}"
+        validate_certs: false
+      register: _package_manifests
+      failed_when: false
+
+    # Check for specific operators we need
+    - name: "{{ cluster.id }} — Check for required operators"
+      ansible.builtin.set_fact:
+        _available_packages: "{{ _package_manifests.resources | default([]) | map(attribute='metadata.name') | list }}"
+
+    - name: "{{ cluster.id }} — Report"
+      ansible.builtin.debug:
+        msg: |
+          ═══ {{ cluster.id }} OperatorHub Status ═══
+          Disabled sources: {{ _disabled_sources | default([]) | join(', ') | default('none') }}
+          CatalogSources: {{ _catalog_sources.resources | default([]) | map(attribute='metadata.name') | join(', ') }}
+          CatalogSource status:
+          {% for cs in _catalog_sources.resources | default([]) %}
+            - {{ cs.metadata.name }}: {{ cs.status.connectionState.lastObservedState | default('UNKNOWN') }}
+          {% endfor %}
+          Marketplace pods: {{ _marketplace_pods.resources | default([]) | length }}
+          {% for pod in _marketplace_pods.resources | default([]) %}
+            - {{ pod.metadata.name }}: {{ pod.status.phase | default('Unknown') }}
+          {% endfor %}
+          Total PackageManifests: {{ _package_manifests.resources | default([]) | length }}
+          Required operators present:
+            - cluster-logging: {{ 'YES' if 'cluster-logging' in _available_packages else 'MISSING' }}
+            - loki-operator: {{ 'YES' if 'loki-operator' in _available_packages else 'MISSING' }}
+            - cluster-observability-operator: {{ 'YES' if 'cluster-observability-operator' in _available_packages else 'MISSING' }}
+            - group-sync-operator: {{ 'YES' if 'group-sync-operator' in _available_packages else 'MISSING' }}
+            - rhbk-operator: {{ 'YES' if 'rhbk-operator' in _available_packages else 'MISSING' }}
+
+- name: "{{ cluster.id }} — Skip report"
+  ansible.builtin.debug:
+    msg: "{{ cluster.id }}: SKIPPED — could not obtain API token"
+  when: _cluster_token | default('') | length == 0
+
+- name: "{{ cluster.id }} — Clear token"
+  ansible.builtin.set_fact:
+    _cluster_token: ""

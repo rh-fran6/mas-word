@@ -1,0 +1,35 @@
+---
+- name: Check OperatorHub health across the fleet
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Load cluster credentials
+      ansible.builtin.include_vars:
+        file: "../secrets/cluster-credentials.yml"
+      no_log: true
+
+    - name: Build cluster list
+      ansible.builtin.set_fact:
+        _all_clusters: "{{ cluster_credentials | to_cluster_list }}"
+      no_log: true
+
+    - name: Filter to attendee clusters
+      ansible.builtin.set_fact:
+        _target_clusters: >-
+          {{ _all_clusters
+             | rejectattr('purpose', 'equalto', 'hub')
+             | selectattr('api_url', 'defined')
+             | list }}
+      no_log: true
+
+    - name: Display check plan
+      ansible.builtin.debug:
+        msg: "Checking OperatorHub on {{ _target_clusters | length }} clusters."
+
+    - name: Check OperatorHub per cluster
+      ansible.builtin.include_tasks: _check-operatorhub-single.yml
+      loop: "{{ _target_clusters }}"
+      loop_control:
+        loop_var: cluster
+        label: "{{ cluster.id }}"

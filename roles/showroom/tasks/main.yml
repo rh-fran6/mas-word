@@ -156,6 +156,25 @@
         _masworld_lab_password: ""
       when: _masworld_lab_creds_secret.resources | default([]) | length == 0
 
+    - name: Read operator role ARN ConfigMap
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        name: masworld-operator-role-arn
+        namespace: "{{ masworld_showroom_namespace }}"
+      register: _masworld_operator_role_cm
+      failed_when: false
+
+    - name: Set operator role ARN fact for Showroom
+      ansible.builtin.set_fact:
+        _masworld_operator_role_arn: "{{ _masworld_operator_role_cm.resources[0].data.role_arn | default('') }}"
+      when: _masworld_operator_role_cm.resources | default([]) | length > 0
+
+    - name: Set empty operator role ARN when ConfigMap not found
+      ansible.builtin.set_fact:
+        _masworld_operator_role_arn: ""
+      when: _masworld_operator_role_cm.resources | default([]) | length == 0
+
     - name: Read MAS superuser credentials
       kubernetes.core.k8s_info:
         api_version: v1
@@ -263,7 +282,7 @@
               mas_url: {{ _masworld_mas_url }}
               mas_navigator_url: {{ _masworld_mas_navigator_url }}
               manage_url: {{ _masworld_manage_url }}
-              seat_number: {{ masworld_seat_number }}
+              seat_number: {{ '%02d' | format(masworld_seat_number | int) }}
               user: {{ masworld_student_username }}
               student_username: {{ masworld_student_username }}
               mas_instance_id: {{ masworld_mas_instance_id }}
@@ -278,6 +297,7 @@
               s3_secret_access_key: {{ _masworld_s3_secret_key | default('') }}
               mas_admin_username: {{ _masworld_mas_admin_username | default('') }}
               mas_admin_password: {{ _masworld_mas_admin_password | default('') }}
+              operator_role_arn: {{ _masworld_operator_role_arn | default('') }}
           terminal:
             setup: "false"
             storage:

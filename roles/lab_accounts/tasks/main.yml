@@ -57,12 +57,15 @@
               name: "{{ _lab_username }}"
 
     # ── RoleBindings for namespace-scoped write permissions ───────────
-    - name: Ensure openshift-logging namespace exists
+    - name: Ensure prerequisite namespaces exist
       kubernetes.core.k8s:
         api_version: v1
         kind: Namespace
-        name: openshift-logging
+        name: "{{ item }}"
         state: present
+      loop:
+        - openshift-logging
+        - group-sync-operator
       failed_when: false
 
     - name: Create RoleBindings for operator namespaces
@@ -88,6 +91,9 @@
         - openshift-logging
         - openshift-operators
         - openshift-operators-redhat
+        - group-sync-operator
+        - "mas-{{ masworld_mas_instance_id | default('inst1') }}-manage"
+        - "{{ masworld_keycloak_namespace | default('masworld-keycloak') }}"
 
     # ── RoleBinding for student namespace ──────────────────────────────
     - name: Create RoleBinding for lab user in student namespace

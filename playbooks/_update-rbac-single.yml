@@ -1,0 +1,317 @@
+---
+# Per-cluster RBAC update tasks (included by update-rbac.yml)
+- name: "{{ cluster.id }} — Obtain API token"
+  block:
+    - name: "{{ cluster.id }} — Discover OAuth endpoint"
+      ansible.builtin.uri:
+        url: "{{ cluster.api_url }}/.well-known/oauth-authorization-server"
+        validate_certs: false
+        return_content: true
+      register: _oauth_metadata
+
+    - name: "{{ cluster.id }} — Request OAuth token"
+      ansible.builtin.uri:
+        url: "{{ _oauth_metadata.json.authorization_endpoint }}?response_type=token&client_id=openshift-challenging-client"
+        validate_certs: false
+        force_basic_auth: true
+        url_username: cluster-admin
+        url_password: "{{ cluster.admin_password | default('cluster-admin') }}"
+        status_code: [302]
+        follow_redirects: none
+      register: _oauth_response
+      no_log: true
+
+    - name: "{{ cluster.id }} — Extract bearer token"
+      ansible.builtin.set_fact:
+        _cluster_token: "{{ _oauth_response.location | regex_search('access_token=([^&]+)', '\\1') | first }}"
+      when:
+        - _oauth_response.location is defined
+        - "'access_token=' in _oauth_response.location"
+      no_log: true
+  rescue:
+    - name: "{{ cluster.id }} — Auth failed"
+      ansible.builtin.set_fact:
+        _cluster_token: ""
+
+- name: "{{ cluster.id }} — Skip if no token"
+  when: _cluster_token | default('') | length == 0
+  block:
+    - name: "{{ cluster.id }} — Report auth failure"
+      ansible.builtin.debug:
+        msg: "{{ cluster.id }}: SKIPPED — could not obtain API token"
+
+- name: "{{ cluster.id }} — Apply RBAC updates"
+  when: _cluster_token | default('') | length > 0
+  block:
+    - name: "{{ cluster.id }} — Resolve seat variables"
+      ansible.builtin.set_fact:
+        _seat_number: "{{ cluster.seat_number | default('01') }}"
+
+    - name: "{{ cluster.id }} — Resolve user names"
+      ansible.builtin.set_fact:
+        _lab_username: "{{ masworld_lab_username_prefix }}{{ '%02d' | format(_seat_number | int) }}"
+        _student_username: "user{{ '%02d' | format(_seat_number | int) }}"
+
+    - name: "{{ cluster.id }} — Define target namespaces for RoleBindings"
+      ansible.builtin.set_fact:
+        _rbac_namespaces:
+          - openshift-logging
+          - openshift-operators
+          - openshift-operators-redhat
+          - group-sync-operator
+          - "mas-{{ masworld_mas_instance_id }}-manage"
+          - "{{ masworld_keycloak_namespace }}"
+
+    # ── ClusterRoles (cluster-scoped, same for all seats) ─────────────
+    - name: "{{ cluster.id }} — Apply masworld-lab-operator ClusterRole"
+      kubernetes.core.k8s:
+        state: present
+        host: "{{ cluster.api_url }}"
+        api_key: "{{ _cluster_token }}"
+        validate_certs: false
+        definition:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRole
+          metadata:
+            name: "{{ masworld_lab_clusterrole_name }}"
+            labels:
+              masworld.redhat.com/component: lab-accounts
+          rules:
+            - apiGroups: [""]
+              resources: [nodes, namespaces, persistentvolumes]
+              verbs: [get, list, watch]
+            - apiGroups: [""]
+              resources: [namespaces]
+              verbs: [create, update, patch]
+            - apiGroups: ["config.openshift.io"]
+              resources: [clusterversions, clusteroperators, infrastructures, oauths, ingresses, operatorhubs, authentications]
+              verbs: [get, list, watch]
+            - apiGroups: ["operator.openshift.io"]
+              resources: [cloudcredentials]
+              verbs: [get, list, watch]
+            - apiGroups: ["machineconfiguration.openshift.io"]
+              resources: [machineconfigpools]
+              verbs: [get, list, watch]
+            - apiGroups: ["core.mas.ibm.com"]
+              resources: ["*"]
+              verbs: [get, list, watch]
+            - apiGroups: ["apps.mas.ibm.com"]
+              resources: ["*"]
+              verbs: [get, list, watch]
+            - apiGroups: ["operators.coreos.com"]
+              resources: [subscriptions, clusterserviceversions, installplans, operatorgroups, catalogsources, operators, olmconfigs, operatorconditions]
+              verbs: [get, list, watch]
+            - apiGroups: ["operators.coreos.com"]
+              resources: [subscriptions, operatorgroups]
+              verbs: [create, update, patch, delete]
+            - apiGroups: ["packages.operators.coreos.com"]
+              resources: [packagemanifests, packagemanifests/icon]
+              verbs: [get, list, watch]
+            - apiGroups: [""]
+              resources: [pods, pods/log, services, configmaps, events, secrets, serviceaccounts, persistentvolumeclaims]
+              verbs: [get, list, watch]
+            - apiGroups: [""]
+              resources: [pods]
+              verbs: [delete]
+            - apiGroups: [""]
+              resources: [serviceaccounts]
+              verbs: [create, update, patch, delete]
+            - apiGroups: ["apps"]
+              resources: [deployments, statefulsets, daemonsets, replicasets]
+              verbs: [get, list, watch]
+            - apiGroups: ["route.openshift.io"]
+              resources: [routes]
+              verbs: [get, list, watch]
+            - apiGroups: ["rbac.authorization.k8s.io"]
+              resources: [roles, rolebindings, clusterroles, clusterrolebindings]
+              verbs: [get, list, watch]
+            - apiGroups: ["rbac.authorization.k8s.io"]
+              resources: [clusterrolebindings]
+              verbs: [create, update, patch, delete]
+            - apiGroups: ["user.openshift.io"]
+              resources: [groups, users, identities]
+              verbs: [get, list, watch, create, update, patch, delete]
+            - apiGroups: ["observability.openshift.io"]
+              resources: [uiplugins]
+              verbs: [get, list, watch, create, update, patch, delete]
+            - apiGroups: ["redhatcop.redhat.io"]
+              resources: [groupsyncs]
+              verbs: [get, list, watch, create, update, patch, delete]
+            - apiGroups: ["template.openshift.io"]
+              resources: [templates, templateinstances, brokertemplateinstances]
+              verbs: [get, list, watch]
+            - apiGroups: ["helm.openshift.io"]
+              resources: [helmchartrepositories, projecthelmchartrepositories]
+              verbs: [get, list, watch]
+            - apiGroups: ["console.openshift.io"]
+              resources: [consolequickstarts, consolesamples, consoleplugins]
+              verbs: [get, list, watch]
+            - apiGroups: ["authorization.openshift.io"]
+              resources: [selfsubjectrulesreviews]
+              verbs: [create]
+            - apiGroups: ["authorization.k8s.io"]
+              resources: [selfsubjectaccessreviews, selfsubjectrulesreviews]
+              verbs: [create]
+
+    - name: "{{ cluster.id }} — Apply masworld-lab-operator-ns-admin ClusterRole"
+      kubernetes.core.k8s:
+        state: present
+        host: "{{ cluster.api_url }}"
+        api_key: "{{ _cluster_token }}"
+        validate_certs: false
+        definition:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRole
+          metadata:
+            name: "{{ masworld_lab_clusterrole_name }}-ns-admin"
+            labels:
+              masworld.redhat.com/component: lab-accounts
+          rules:
+            - apiGroups: [""]
+              resources: ["*"]
+              verbs: ["*"]
+            - apiGroups: ["apps"]
+              resources: ["*"]
+              verbs: ["*"]
+            - apiGroups: ["operators.coreos.com"]
+              resources: [subscriptions, operatorgroups, installplans, clusterserviceversions]
+              verbs: [get, list, watch, create, update, patch, delete]
+            - apiGroups: ["loki.grafana.com"]
+              resources: [lokistacks]
+              verbs: [get, list, watch, create, update, patch, delete]
+            - apiGroups: ["observability.openshift.io"]
+              resources: [clusterlogforwarders]
+              verbs: [get, list, watch, create, update, patch, delete]
+            - apiGroups: ["rbac.authorization.k8s.io"]
+              resources: [roles, rolebindings]
+              verbs: [get, list, watch, create, update, patch, delete]
+            - apiGroups: ["redhatcop.redhat.io"]
+              resources: [groupsyncs]
+              verbs: [get, list, watch, create, update, patch, delete]
+
+    # ── Ensure prerequisite namespaces ────────────────────────────────
+    - name: "{{ cluster.id }} — Ensure prerequisite namespaces exist"
+      kubernetes.core.k8s:
+        state: present
+        host: "{{ cluster.api_url }}"
+        api_key: "{{ _cluster_token }}"
+        validate_certs: false
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ item }}"
+      loop:
+        - openshift-logging
+        - group-sync-operator
+      failed_when: false
+
+    # ── Lab user bindings ─────────────────────────────────────────────
+    - name: "{{ cluster.id }} — Create ClusterRoleBinding for lab user"
+      kubernetes.core.k8s:
+        state: present
+        host: "{{ cluster.api_url }}"
+        api_key: "{{ _cluster_token }}"
+        validate_certs: false
+        definition:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: "{{ _lab_username }}-{{ masworld_lab_clusterrole_name }}"
+            labels:
+              masworld.redhat.com/component: lab-accounts
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: "{{ masworld_lab_clusterrole_name }}"
+          subjects:
+            - apiGroup: rbac.authorization.k8s.io
+              kind: User
+              name: "{{ _lab_username }}"
+
+    - name: "{{ cluster.id }} — Create RoleBindings for lab user"
+      kubernetes.core.k8s:
+        state: present
+        host: "{{ cluster.api_url }}"
+        api_key: "{{ _cluster_token }}"
+        validate_certs: false
+        definition:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          metadata:
+            name: "{{ _lab_username }}-ns-admin"
+            namespace: "{{ item }}"
+            labels:
+              masworld.redhat.com/component: lab-accounts
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: "{{ masworld_lab_clusterrole_name }}-ns-admin"
+          subjects:
+            - apiGroup: rbac.authorization.k8s.io
+              kind: User
+              name: "{{ _lab_username }}"
+      loop: "{{ _rbac_namespaces }}"
+      loop_control:
+        label: "{{ item }}"
+      failed_when: false
+
+    # ── Student user bindings ─────────────────────────────────────────
+    - name: "{{ cluster.id }} — Create ClusterRoleBinding for student (lab operator)"
+      kubernetes.core.k8s:
+        state: present
+        host: "{{ cluster.api_url }}"
+        api_key: "{{ _cluster_token }}"
+        validate_certs: false
+        definition:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: "{{ _student_username }}-{{ masworld_lab_clusterrole_name }}"
+            labels:
+              masworld.redhat.com/component: student-accounts
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: "{{ masworld_lab_clusterrole_name }}"
+          subjects:
+            - apiGroup: rbac.authorization.k8s.io
+              kind: User
+              name: "{{ _student_username }}"
+
+    - name: "{{ cluster.id }} — Create RoleBindings for student"
+      kubernetes.core.k8s:
+        state: present
+        host: "{{ cluster.api_url }}"
+        api_key: "{{ _cluster_token }}"
+        validate_certs: false
+        definition:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          metadata:
+            name: "{{ _student_username }}-ns-admin"
+            namespace: "{{ item }}"
+            labels:
+              masworld.redhat.com/component: student-accounts
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: "{{ masworld_lab_clusterrole_name }}-ns-admin"
+          subjects:
+            - apiGroup: rbac.authorization.k8s.io
+              kind: User
+              name: "{{ _student_username }}"
+      loop: "{{ _rbac_namespaces }}"
+      loop_control:
+        label: "{{ item }}"
+      failed_when: false
+
+    - name: "{{ cluster.id }} — Report success"
+      ansible.builtin.debug:
+        msg: >-
+          {{ cluster.id }}: RBAC updated for {{ _lab_username }} and {{ _student_username }}
+          (ClusterRoles + {{ _rbac_namespaces | length }} namespace RoleBindings each)
+
+- name: "{{ cluster.id }} — Clear token"
+  ansible.builtin.set_fact:
+    _cluster_token: ""
