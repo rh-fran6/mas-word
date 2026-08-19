@@ -6,6 +6,7 @@ content:
   sources:
     - url: ./
       start_path: showroom/content
+      edit_url: false
 
 asciidoc:
   attributes:
@@ -35,3 +36,6 @@ ui:
   bundle:
     url: https://gitlab.com/antora/antora-ui-default/-/jobs/artifacts/HEAD/raw/build/ui-bundle.zip?job=bundle-stable
     snapshot: true
+  supplemental_files:
+    - path: partials/header-content.hbs
+      contents: ''
